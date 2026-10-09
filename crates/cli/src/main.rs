@@ -81,6 +81,11 @@ enum Command {
         #[usage(subcommand)]
         command: ChatsCommand,
     },
+    /// Durable work: inspect tasks, or create/update/run with a JSON object or - for stdin.
+    Tasks {
+        #[usage(subcommand)]
+        command: TasksCommand,
+    },
     /// Update this computer's lorca to the latest release. `lorca serve` checks once a day and
     /// installs what it finds, then restarts into it once no bot is at work.
     Update {
@@ -100,6 +105,19 @@ enum Command {
     Status,
     /// Check the local setup.
     Doctor,
+}
+
+#[derive(Subcommands, Debug)]
+enum TasksCommand {
+    /// List tasks; filters refer to canonical ids.
+    List { #[usage(long)] chat_id: Option<String>, #[usage(long)] owner_bot_id: Option<String>, #[usage(long)] state: Option<String> },
+    Get { id: String },
+    /// JSON uses owner_bot_id, goal, acceptance_criteria, next_action, chat_ids, request_id.
+    Create { json: String },
+    /// JSON uses id, expected_revision, request_id and the fields to change.
+    Update { json: String },
+    /// JSON uses id, expected_revision, request_id and optional chat_id.
+    Run { json: String },
 }
 
 #[derive(Subcommands, Debug)]
@@ -133,16 +151,18 @@ enum ProviderCommand {
         base_url: Option<String>,
     },
     /// Add a custom provider: any server that speaks OpenAI's Chat Completions or Responses, or
-    /// Anthropic's Messages, such as a gateway or a model server on your network.
+    /// Anthropic's Messages, such as a gateway or a model server on your network, or a decision
+    /// API (System One, OpenAI's Decisions) whose models Auto-review can run.
     Add {
         /// The name the apps show.
         name: String,
-        /// The API root, such as https://openrouter.ai/api/v1 or http://localhost:11434/v1.
+        /// The API root, such as https://openrouter.ai/api/v1 or http://localhost:11434/v1; for a
+        /// decision API, its endpoint, such as https://openrouter.ai/api/alpha/decisions.
         base_url: String,
         /// The wire protocol it speaks.
-        #[usage(long, choices("chat-completions", "responses", "messages"), default = "chat-completions")]
+        #[usage(long, choices("chat-completions", "responses", "messages", "system-one", "decisions"), default = "chat-completions")]
         api: String,
-        /// A model id bots can pick; repeat for more. Omit to take every model the server lists.
+        /// A model id it offers; repeat for more. Omit to take every model the server lists.
         #[usage(long)]
         model: Vec<String>,
         /// Read an API key from stdin. Without it the server is called with no key.
@@ -274,7 +294,7 @@ async fn main() -> anyhow::Result<()> {
     };
     // `lorca mcp` and `lorca chats` say how each step went in their own words; the log keeps to
     // warnings.
-    let quiet = matches!(command, Command::Mcp { .. } | Command::Marketplace { .. } | Command::Models { .. } | Command::Chats { .. });
+    let quiet = matches!(command, Command::Mcp { .. } | Command::Marketplace { .. } | Command::Models { .. } | Command::Chats { .. } | Command::Tasks { .. });
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| if quiet { "lorca=warn,lorca_agent=warn".into() } else { "lorca=info,lorca_agent=info".into() }))
         .with_target(false)
@@ -296,6 +316,7 @@ async fn main() -> anyhow::Result<()> {
             lorca::service::trim_log();
             lorca::update::start(&app);
             runtime::resume_sent_jobs(&app);
+            lorca::tasks::start(&app);
             // A command a Lorca that quit left waiting went with it; its row says so now.
             {
                 let app = app.clone();
@@ -319,6 +340,7 @@ async fn main() -> anyhow::Result<()> {
             tokio::spawn(lorca_agent::login_shell::environment());
             tokio::spawn(sync::run(app.clone()));
             tokio::spawn(routines::run(app.clone()));
+            tokio::spawn(lorca::review_execution::run(app.clone()));
             ws::serve(app, ready_stdout).await
         }
         Command::Identity { command } => match command {
@@ -390,6 +412,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Marketplace { command: MarketplaceCommand::Reload } => reload(&app, "marketplace.reload", lorca::marketplace::enable, "marketplace").await,
         Command::Models { command: ModelsCommand::Reload } => reload(&app, "models.reload", lorca::catalog::enable, "model catalog").await,
         Command::Chats { command } => chats(&app, command).await,
+        Command::Tasks { command } => tasks(&app, command).await,
         Command::Update { check, auto } => update(&app, check, auto).await,
         Command::Service { .. } => unreachable!(),
         Command::Status => {
@@ -440,7 +463,7 @@ async fn provider(app: &std::sync::Arc<App>, command: ProviderCommand) -> anyhow
             return Ok(());
         }
     };
-    let result = match serve_call(app.config.port, &method, &params).await? {
+    let result = match serve_call(&app.config, &method, &params).await? {
         Some(result) => result,
         None => {
             let result = Box::pin(lorca::api::dispatch(app, &method, params)).await;
@@ -453,8 +476,37 @@ async fn provider(app: &std::sync::Arc<App>, command: ProviderCommand) -> anyhow
     Ok(())
 }
 
-/// Names groups and bots as the apps show them. A change goes through the running `lorca serve`
-/// when there is one, so the apps see it at once; otherwise here, followed by one sync pass.
+/// Task reads can use the local replica; mutations use the service's live authority routing.
+async fn tasks(app: &std::sync::Arc<App>, command: TasksCommand) -> anyhow::Result<()> {
+    use serde_json::{json, Value};
+    let parse = |input: String| -> anyhow::Result<Value> {
+        let input = if input == "-" { std::io::read_to_string(std::io::stdin())? } else { input };
+        let value: Value = serde_json::from_str(&input)?;
+        anyhow::ensure!(value.is_object(), "Task parameters must be a JSON object.");
+        Ok(value)
+    };
+    let (method, params) = match command {
+        TasksCommand::List { chat_id, owner_bot_id, state } => ("tasks.list", json!({"chat_id":chat_id,"owner_bot_id":owner_bot_id,"state":state})),
+        TasksCommand::Get { id } => ("tasks.get", json!({"id":id,"refresh":true})),
+        TasksCommand::Create { json } => ("tasks.create", parse(json)?),
+        TasksCommand::Update { json } => ("tasks.update", parse(json)?),
+        TasksCommand::Run { json } => ("tasks.run", parse(json)?),
+    };
+    let result = match serve_call(&app.config, method, &params).await? {
+        Some(result) => result.map_err(anyhow::Error::msg)?,
+        None if matches!(method, "tasks.list" | "tasks.get") => {
+            let mut params = params;
+            params["refresh"] = serde_json::json!(false);
+            lorca::tasks::dispatch(app, method, params).await.map_err(anyhow::Error::msg)?
+        },
+        None => anyhow::bail!("Start lorca serve to edit or run durable tasks."),
+    };
+    println!("{}", serde_json::to_string_pretty(&result)?);
+    Ok(())
+}
+
+/// Names groups and bots as the apps show them. A change goes through the running service
+/// when there is one, or updates the local state and syncs once.
 async fn chats(app: &std::sync::Arc<App>, command: ChatsCommand) -> anyhow::Result<()> {
     match command {
         ChatsCommand::List => {
@@ -470,7 +522,7 @@ async fn chats(app: &std::sync::Arc<App>, command: ChatsCommand) -> anyhow::Resu
                 return Ok(());
             }
             let params = serde_json::json!({ "chat_id": chat.meta.id, "bot_id": bot.id });
-            let result = match serve_call(app.config.port, "chats.set_owner", &params).await? {
+            let result = match serve_call(&app.config, "chats.set_owner", &params).await? {
                 Some(result) => result,
                 None => {
                     let result = Box::pin(lorca::api::dispatch(app, "chats.set_owner", params)).await;
@@ -546,7 +598,7 @@ fn print_providers(providers: &serde_json::Value) {
 /// An `mcp.*` request to the running `lorca serve` when there is one, so the app sees the change
 /// at once and the server runs there; else here. Says which it was.
 async fn mcp_call(app: &std::sync::Arc<App>, method: &str, params: serde_json::Value) -> anyhow::Result<(serde_json::Value, bool)> {
-    let (result, live) = match serve_call(app.config.port, method, &params).await? {
+    let (result, live) = match serve_call(&app.config, method, &params).await? {
         Some(result) => (result, true),
         // Boxed, as `main`'s future lives on the main thread's stack, a megabyte on Windows.
         None => (Box::pin(lorca::api::dispatch(app, method, params)).await, false),
@@ -948,7 +1000,7 @@ fn print_mcp_server(server: &serde_json::Value) {
 /// `lorca models reload` and `lorca marketplace reload`: checks lorca.app for a newer `what` now,
 /// through the running `lorca serve`, or with none, here into its cache for the next start.
 async fn reload(app: &std::sync::Arc<App>, method: &str, enable: fn(&App), what: &str) -> anyhow::Result<()> {
-    let (reply, live) = match serve_call(app.config.port, method, &serde_json::json!({})).await? {
+    let (reply, live) = match serve_call(&app.config, method, &serde_json::json!({})).await? {
         Some(reply) => (reply, true),
         None => {
             enable(app);
@@ -980,7 +1032,7 @@ async fn update(app: &std::sync::Arc<App>, check: bool, auto: Option<String>) ->
     }
     if let Some(auto) = auto {
         let on = auto == "on";
-        match serve_call(app.config.port, "device.auto_update", &serde_json::json!({ "on": on })).await? {
+        match serve_call(&app.config, "device.auto_update", &serde_json::json!({ "on": on })).await? {
             Some(reply) => {
                 reply.map_err(|message| anyhow::anyhow!(message))?;
             }
@@ -1002,7 +1054,7 @@ async fn update(app: &std::sync::Arc<App>, check: bool, auto: Option<String>) ->
         }
         return Ok(());
     }
-    match serve_call(app.config.port, "device.update", &serde_json::json!({})).await? {
+    match serve_call(&app.config, "device.update", &serde_json::json!({})).await? {
         Some(reply) => {
             let reply = reply.map_err(|message| anyhow::anyhow!(message))?;
             match (reply["installed"].as_str(), reply["latest"].as_str()) {
@@ -1025,7 +1077,7 @@ async fn service(config: &Config, command: ServiceCommand) -> anyhow::Result<()>
     match command {
         ServiceCommand::Install => {
             // Another lorca serve on the port would keep the service's from starting.
-            if !service::status(config).running.is_some() && serve_call(config.port, "hello", &serde_json::json!({})).await?.is_some() {
+            if !service::status(config).running.is_some() && serve_call(config, "hello", &serde_json::json!({})).await?.is_some() {
                 anyhow::bail!(
                     "A lorca serve already answers on port {}. Stop it first; on a computer with the Lorca app, the app runs lorca serve itself.",
                     config.port
@@ -1072,11 +1124,26 @@ async fn service(config: &Config, command: ServiceCommand) -> anyhow::Result<()>
     Ok(())
 }
 
-/// One request to the `lorca serve` on `port`; `None` when nothing listens there.
-async fn serve_call(port: u16, method: &str, params: &serde_json::Value) -> anyhow::Result<Option<Result<serde_json::Value, String>>> {
+/// One request to the `lorca serve` on the configured port, with the token in the data
+/// directory; `None` when nothing listens there.
+async fn serve_call(config: &Config, method: &str, params: &serde_json::Value) -> anyhow::Result<Option<Result<serde_json::Value, String>>> {
     use futures::{SinkExt, StreamExt};
-    use tokio_tungstenite::tungstenite::Message;
-    let Ok((mut socket, _)) = tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/ws")).await else { return Ok(None) };
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    use tokio_tungstenite::tungstenite::{Error, Message};
+    let port = config.port;
+    let mut request = format!("ws://127.0.0.1:{port}/ws").into_client_request()?;
+    if let Some(token) = config.serve_token() {
+        request.headers_mut().insert("Authorization", format!("Bearer {token}").parse()?);
+    }
+    let mut socket = match tokio_tungstenite::connect_async(request).await {
+        Ok((socket, _)) => socket,
+        Err(Error::Http(response)) => anyhow::bail!(
+            "The lorca serve on port {port} refused this command ({}): it keeps its data in another folder than {}.",
+            response.status(),
+            config.home.display()
+        ),
+        Err(_) => return Ok(None),
+    };
     socket.send(Message::Text(serde_json::json!({ "id": 1, "method": method, "params": params }).to_string().into())).await?;
     // Events share the socket; the reply is the message with our id.
     while let Some(message) = socket.next().await {
@@ -1100,6 +1167,7 @@ async fn watch_parent(app: std::sync::Arc<App>, pid: u32) {
         if !process_alive(pid) {
             tracing::info!(pid, "parent exited; stopping");
             app.shell_sessions.shutdown(&app);
+            app.browser_sessions.shutdown(&app).await;
             std::process::exit(0);
         }
     }
@@ -1120,6 +1188,7 @@ async fn stop_on_signal(app: std::sync::Arc<App>) {
         _ = hangup.recv() => libc::SIGHUP,
     };
     app.shell_sessions.shutdown(&app);
+    app.browser_sessions.shutdown(&app).await;
     unsafe {
         libc::signal(number, libc::SIG_DFL);
         libc::raise(number);

@@ -45,10 +45,10 @@ func levelIDs(levels []Choice) []string {
 }
 
 func TestCustomProviderModels(t *testing.T) {
-	catalog := WithCustomModels([]ProviderModel{{"grok", "grok-4.7", "Grok 4.7", []string{"low", "medium", "high", "xhigh"}}}, []ProviderCredential{ollama})
+	catalog := WithCustomModels([]ProviderModel{{"grok", "grok-4.7", "Grok 4.7", []string{"low", "medium", "high", "xhigh"}, false}}, []ProviderCredential{ollama})
 	expect(t, ProviderModels(catalog, "custom:ollama"), []ProviderModel{
-		{"custom:ollama", "qwen3:8b", "qwen3:8b", []string{"low", "medium", "high"}},
-		{"custom:ollama", "anthropic/claude-sonnet-5", "Anthropic: Claude Sonnet 5", []string{"off", "low", "medium", "high", "xhigh", "max"}},
+		{"custom:ollama", "qwen3:8b", "qwen3:8b", []string{"low", "medium", "high"}, false},
+		{"custom:ollama", "anthropic/claude-sonnet-5", "Anthropic: Claude Sonnet 5", []string{"off", "low", "medium", "high", "xhigh", "max"}, false},
 	})
 	expect(t, len(ProviderModels(catalog, "custom:gone")), 0)
 	expect(t, ProviderModels(catalog, "grok")[0].Label, "Grok 4.7")
@@ -82,10 +82,51 @@ func TestCustomEndpoint(t *testing.T) {
 		expect(t, CustomEndpoint(test.api, test.base), test.url)
 	}
 	expect(t, CustomEndpointNote(APIChatCompletions, ""), "Lorca adds /chat/completions to it.")
-	expect(t, CustomEndpointNote(APIMessages, "   "), "Lorca adds /v1/messages to it.")
+	expect(t, CustomEndpointNote(APIMessages, "   "), "Lorca adds /messages to it.")
 	expect(t, CustomEndpointNote(APIResponses, "https://openrouter.ai/api/v1/"), "Requests go to https://openrouter.ai/api/v1/responses.")
-	expect(t, CustomBaseURLPlaceholder(APIMessages), "https://api.example.com")
+	expect(t, CustomBaseURLPlaceholder(APIMessages), "https://api.example.com/v1")
 	expect(t, CustomBaseURLPlaceholder(APIResponses), "https://api.example.com/v1")
+	// A decision API's root, as the note says Lorca adds the path to it.
+	expect(t, CustomBaseURLPlaceholder(APISystemOne), "https://api.example.com/v1")
+	expect(t, CustomBaseURLPlaceholder(APIDecisions), "https://api.example.com/v1")
+}
+
+// A decision API's URL is its endpoint: one that ends in a decision path is called as it is, and
+// any other gets the API's path.
+func TestDecisionEndpoint(t *testing.T) {
+	cases := []struct {
+		api       CustomAPI
+		base, url string
+	}{
+		{APISystemOne, "https://api.typesafe.ai/v1", "https://api.typesafe.ai/v1/systemone"},
+		{APISystemOne, "https://api.typesafe.ai/v1/systemone/", "https://api.typesafe.ai/v1/systemone"},
+		{APISystemOne, "https://openrouter.ai/api/alpha/decisions", "https://openrouter.ai/api/alpha/decisions"},
+		{APIDecisions, "https://api.openai.com/v1", "https://api.openai.com/v1/decisions"},
+		{APIDecisions, " https://ai-gateway.vercel.sh/v1/decisions ", "https://ai-gateway.vercel.sh/v1/decisions"},
+	}
+	for _, test := range cases {
+		expect(t, CustomEndpoint(test.api, test.base), test.url)
+	}
+	expect(t, CustomEndpointNote(APISystemOne, ""), "Lorca adds /systemone to it.")
+	expect(t, []bool{APISystemOne.Decides(), APIDecisions.Decides(), APIResponses.Decides()}, []bool{true, true, false})
+	expect(t, []string{APISystemOne.Title(), APIDecisions.Title()}, []string{"System One", "OpenAI Decisions"})
+}
+
+// Decision models are Auto-review's: no bot's Model picker offers one, and a provider's default
+// is the first that does not decide.
+func TestDecisionModels(t *testing.T) {
+	decider := ProviderCredential{Kind: "custom:typesafe", IsConnected: true, Name: "TypeSafe", API: APISystemOne, Models: []CustomModel{{ID: "jev-1.13"}}}
+	catalog := WithCustomModels([]ProviderModel{
+		{"opencode", "jev-1.13", "Jev 1.13", nil, true},
+		{"opencode", "deepseek-v4.1-flash", "DeepSeek V4.1 Flash", []string{"low", "high"}, false},
+	}, []ProviderCredential{ollama, decider})
+	expect(t, len(ProviderModels(catalog, "opencode")), 1)
+	expect(t, ProviderModels(catalog, "opencode")[0].ID, "deepseek-v4.1-flash")
+	expect(t, levelIDs(ThinkingLevels(catalog, "opencode", "")), []string{"low", "high"})
+	expect(t, len(ProviderModels(catalog, "custom:typesafe")), 0)
+	expect(t, []int{len(ReviewModels(catalog, "opencode")), len(ReviewModels(catalog, "custom:typesafe"))}, []int{2, 1})
+	expect(t, ReviewModels(catalog, "custom:typesafe")[0].Decides, true)
+	expect(t, []bool{decider.Decides(), ollama.Decides()}, []bool{true, false})
 }
 
 func TestPresets(t *testing.T) {
@@ -108,6 +149,17 @@ func TestPresets(t *testing.T) {
 		"sk-… from platform.openai.com", "sk-or-… from openrouter.ai/keys", "Key from aistudio.google.com", "gsk_… from console.groq.com",
 		"Key from api.together.ai", "Optional for a server on your network", "Optional for a server on your network",
 	})
+	got, placeholders = nil, nil
+	for _, preset := range DecisionPresets {
+		got = append(got, []any{preset.Name, preset.API, preset.BaseURL, preset.Local})
+		placeholders = append(placeholders, preset.KeyPlaceholder())
+	}
+	expect(t, got, [][]any{
+		{"OpenRouter Decisions", APISystemOne, "https://openrouter.ai/api/alpha/decisions", false},
+		{"OpenAI Decisions", APIDecisions, "https://api.openai.com/v1/decisions", false},
+		{"TypeSafe", APISystemOne, "https://api.typesafe.ai/v1/systemone", false},
+	})
+	expect(t, placeholders, []string{"sk-or-… from openrouter.ai/keys", "sk-… from platform.openai.com", "Key from typesafe.ai"})
 }
 
 func TestPresetProviderAndBaseURLs(t *testing.T) {
@@ -120,14 +172,21 @@ func TestPresetProviderAndBaseURLs(t *testing.T) {
 	expect(t, PresetProvider(preset("Ollama"), []ProviderCredential{ollama}).Kind, "custom:ollama")
 	expect(t, PresetProvider(preset("OpenRouter"), []ProviderCredential{ollama}) == nil, true)
 
-	expect(t, MatchingPreset("http://localhost:11434/v1").Name, "Ollama")
-	expect(t, MatchingPreset(" http://localhost:1234 ").Name, "LM Studio")
-	expect(t, MatchingPreset("https://openrouter.ai/api/v1/chat/completions").Name, "OpenRouter")
-	expect(t, MatchingPreset("http://localhost:8080/v1") == nil, true)
-	expect(t, MatchingPreset("api.openai.com") == nil, true)
-	expect(t, SuggestedProviderName("http://localhost:11434/v1"), "Ollama")
-	expect(t, SuggestedProviderName("https://llm.example.com:8443/v1"), "llm.example.com")
-	expect(t, SuggestedProviderName(""), "")
+	expect(t, MatchingPreset("http://localhost:11434/v1", "").Name, "Ollama")
+	expect(t, MatchingPreset(" http://localhost:1234 ", APIChatCompletions).Name, "LM Studio")
+	expect(t, MatchingPreset("https://openrouter.ai/api/v1/chat/completions", "").Name, "OpenRouter")
+	expect(t, MatchingPreset("http://localhost:8080/v1", "") == nil, true)
+	expect(t, MatchingPreset("api.openai.com", "") == nil, true)
+	// A server with presets for chat and for decisions goes by the API picked.
+	expect(t, MatchingPreset("https://openrouter.ai/api/alpha/decisions", APISystemOne).Name, "OpenRouter Decisions")
+	expect(t, MatchingPreset("https://openrouter.ai/api/alpha/decisions", APIChatCompletions).Name, "OpenRouter")
+	expect(t, MatchingPreset("https://api.openai.com/v1", APIDecisions).Name, "OpenAI Decisions")
+	expect(t, MatchingPreset("https://api.openai.com/v1", APIChatCompletions).Name, "OpenAI")
+	expect(t, MatchingPreset("https://api.typesafe.ai/v1", APIChatCompletions).Name, "TypeSafe")
+	expect(t, SuggestedProviderName("http://localhost:11434/v1", APIChatCompletions), "Ollama")
+	expect(t, SuggestedProviderName("https://openrouter.ai/api/v1", APISystemOne), "OpenRouter Decisions")
+	expect(t, SuggestedProviderName("https://llm.example.com:8443/v1", APIChatCompletions), "llm.example.com")
+	expect(t, SuggestedProviderName("", ""), "")
 	expect(t, CustomHost("https://api.example.com/v1"), "api.example.com")
 	expect(t, CustomHost("not a url"), "")
 	for url, want := range map[string]bool{"http://localhost:11434/v1": true, " https://api.example.com ": true, "http://": false, "ftp://example.com": false, "localhost:11434": false, "": false} {

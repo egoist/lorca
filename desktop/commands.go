@@ -50,6 +50,7 @@ func selectedChatIsGroup() bool {
 var commandTable = []command{
 	{id: "newBot", title: func() string { return L("New Bot…") }, accelerator: "CmdOrCtrl+N", opensMain: true},
 	{id: "newGroupChat", title: func() string { return L("New Group Chat…") }, accelerator: "CmdOrCtrl+Shift+N", opensMain: true},
+	{id: "newTask", title: func() string { return L("New Task…") }, enabled: chatSelected},
 	{id: "marketplace", title: func() string { return L("Marketplace…") }, accelerator: "CmdOrCtrl+Shift+M", opensMain: true},
 	{id: "pairDevice", title: func() string { return L("Pair a Device…") }, accelerator: "CmdOrCtrl+Shift+P", opensMain: true},
 	{id: "settings", title: func() string { return L("Settings…") }, accelerator: "CmdOrCtrl+,"},
@@ -286,7 +287,7 @@ func windowMenuBar(kind windowKind) *mygo.Menu {
 	}
 	help = append(help, sep(), at("about"))
 	return mygo.NewMenu([]*mygo.MenuItem{
-		submenu(L("File"), at("newBot"), at("newGroupChat"), sep(), at("marketplace"), sep(), at("pairDevice"), sep(), at("settings"), sep(), at("closeWindow"), at("quit")),
+		submenu(L("File"), at("newBot"), at("newGroupChat"), at("newTask"), sep(), at("marketplace"), sep(), at("pairDevice"), sep(), at("settings"), sep(), at("closeWindow"), at("quit")),
 		submenu(L("Edit"),
 			&mygo.MenuItem{Role: mygo.RoleUndo, Label: L("Undo")},
 			&mygo.MenuItem{Role: mygo.RoleRedo, Label: L("Redo")},

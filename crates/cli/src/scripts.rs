@@ -54,6 +54,7 @@ const MAX_TOKENS: u64 = 4096;
 /// uses, one question at a time, to rate, sort, or summarize many items without the items
 /// reaching the bot's own context. Each call's cost counts in the chat's spending.
 pub struct ModelsAsk {
+    budget: Option<crate::budgets::BudgetContext>,
     app: Arc<App>,
     chat_id: String,
     provider: String,
@@ -64,8 +65,8 @@ pub struct ModelsAsk {
 impl ModelsAsk {
     /// `None` for a provider with no small model to ask.
     pub fn new(app: &Arc<App>, chat_id: &str, provider: &str) -> Option<Self> {
-        let (model, _) = crate::providers::review_model(app, provider);
-        (!model.is_empty()).then(|| ModelsAsk { app: app.clone(), chat_id: chat_id.to_string(), provider: provider.to_string(), in_flight: tokio::sync::Semaphore::new(IN_FLIGHT), calls: AtomicUsize::new(0) })
+        let (model, _) = crate::providers::small_model(app, provider);
+        (!model.is_empty()).then(|| ModelsAsk { budget: crate::budgets::current(), app: app.clone(), chat_id: chat_id.to_string(), provider: provider.to_string(), in_flight: tokio::sync::Semaphore::new(IN_FLIGHT), calls: AtomicUsize::new(0) })
     }
 }
 
@@ -86,6 +87,15 @@ impl HostFunction for ModelsAsk {
     }
 
     async fn call(&self, args: Vec<Value>, cancel: &CancellationToken) -> Result<Value, String> {
+        match &self.budget {
+            Some(budget) => budget.scope(self.answer(args, cancel)).await,
+            None => self.answer(args, cancel).await,
+        }
+    }
+}
+
+impl ModelsAsk {
+    async fn answer(&self, args: Vec<Value>, cancel: &CancellationToken) -> Result<Value, String> {
         let prompt = args.first().and_then(Value::as_str).filter(|prompt| !prompt.trim().is_empty()).ok_or("models.ask() expects a prompt string")?;
         let options = args.get(1).cloned().unwrap_or(Value::Null);
         let system = match options.get("system") {
@@ -108,7 +118,7 @@ impl HostFunction for ModelsAsk {
             _ = cancel.cancelled() => return Err("Stopped".into()),
         };
 
-        let (model, thinking) = crate::providers::review_model(&self.app, &self.provider);
+        let (model, thinking) = crate::providers::small_model(&self.app, &self.provider);
         let provider = crate::providers::provider_for(&self.app, &self.provider, Some(&model), thinking)?;
         let request = ModelRequest {
             system_prompt: system,

@@ -17,7 +17,7 @@ export const en = {
     title: 'AI teammates<br/>for <accent>real</accent> work.',
     body: 'Chat with one teammate, or put several in a group chat. They can read and edit your files, run commands, and remember what you tell them. Give them a job and they coordinate the work among themselves.',
     how: 'See how it works',
-    platforms: 'For Mac, Windows, and Linux. iPhone and iPad in beta.',
+    platforms: 'For Mac, Windows, Linux, and Android. iPhone and iPad in beta.',
   },
   turns: {
     eyebrow: 'Group chats',
@@ -62,7 +62,7 @@ export const en = {
     title: 'Questions',
     items: [
       { q: 'Do I need an account or a server?', a: 'No. Lorca runs on your own computer, with no sign-up and nothing to host. Your backup phrase is your account.' },
-      { q: 'What does it run on?', a: 'Mac, Windows, and Linux, with the app or only the command line. iPhone and iPad are in beta, for chatting with your bots. A bot on any of your computers can join the same group chats.' },
+      { q: 'What does it run on?', a: 'Mac, Windows, and Linux, with the app or only the command line. Android, and iPhone and iPad in beta, for chatting with your bots. A bot on any of your computers can join the same group chats.' },
       { q: 'Which AI does it use?', a: 'Your own account or API key. Sign in with ChatGPT or Grok, or add a DeepSeek API key. Each bot can use a different provider, and you can change it any time.' },
       { q: 'What can a bot do on my computer?', a: 'Read, edit, and create files and run commands in the folder you give it. It runs with your user permissions on that computer and shows you what it ran.' },
       { q: 'Can anyone read my chats?', a: 'No. Chats are encrypted on your computer before they sync. The relay stores only encrypted data and has no key, so it cannot read bot names, chat titles, or messages.' },
@@ -70,14 +70,14 @@ export const en = {
   },
   cta: {
     title: 'Get started.',
-    body: 'Download for Mac, Windows, or Linux.',
+    body: 'Download for Mac, Windows, Linux, or Android.',
   },
   docs: {
     title: 'Lorca Docs',
   },
   download: {
     title: 'Download Lorca',
-    description: 'Download Lorca for Mac, Windows, and Linux, join the iPhone and iPad beta on TestFlight, or install the Lorca CLI on any computer.',
+    description: 'Download Lorca for Mac, Windows, Linux, and Android, join the iPhone and iPad beta on TestFlight, or install the Lorca CLI on any computer.',
     version: 'Version {{version}}',
     unavailable: "Couldn't load the latest version. Reload the page to try again.",
     mac: {
@@ -107,7 +107,9 @@ export const en = {
     },
     android: {
       title: 'Android',
-      body: 'Chat with your bots from your Android phone.',
+      body: 'Chat with your bots while they keep running on your computer. Scan the QR code in the desktop app to pair. Lorca keeps itself up to date.',
+      action: 'Download for Android',
+      system: 'Android 7.0 or later',
     },
     soon: 'Coming soon',
     cli: {

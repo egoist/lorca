@@ -1,8 +1,9 @@
 // Colors and type. Each platform uses its own semantic system colors: UIKit colors on iOS and
 // Material 3 dynamic colors on Android, including the user's wallpaper palette on Android 12+.
 
+import { getMaterialColors, type MaterialColors } from "@expo/ui/jetpack-compose";
 import { Color } from "expo-router";
-import { Platform, PlatformColor, useColorScheme, type ColorValue } from "react-native";
+import { AppState, Platform, PlatformColor, useColorScheme, type ColorValue } from "react-native";
 import type { Accent } from "../core/model";
 
 export interface Palette {
@@ -32,9 +33,37 @@ export interface Palette {
 
 const ios = (name: string) => (Platform.OS === "ios" ? PlatformColor(name) : undefined);
 
+/// One palette per appearance, built on first use. Every component asks for it as it renders, and
+/// each Material dynamic color is a synchronous call into the native side; the same object each
+/// time also keeps memoized work that depends on it from running again.
+const palettes: { light?: Palette; dark?: Palette } = {};
+const materials: { light?: MaterialColors; dark?: MaterialColors } = {};
+// The wallpaper, and with it the dynamic colors, can change while the app is in the background.
+if (Platform.OS === "android")
+  AppState.addEventListener("change", (state) => {
+    if (state === "active") {
+      palettes.light = undefined;
+      palettes.dark = undefined;
+      materials.light = undefined;
+      materials.dark = undefined;
+    }
+  });
+
 export function usePalette(): Palette {
-  const scheme = useColorScheme();
-  const dark = scheme === "dark";
+  const dark = useColorScheme() === "dark";
+  return (palettes[dark ? "dark" : "light"] ??= makePalette(dark));
+}
+
+/// Android's Material 3 palette for the Compose views (`@expo/ui`), given to them once from the
+/// root: without it each menu asks the native side for the whole palette as it renders.
+export function useMaterialPalette(): MaterialColors | null {
+  const dark = useColorScheme() === "dark";
+  if (Platform.OS !== "android") return null;
+  const scheme = dark ? "dark" : "light";
+  return (materials[scheme] ??= getMaterialColors({ scheme }));
+}
+
+function makePalette(dark: boolean): Palette {
   if (Platform.OS === "ios") {
     return {
       label: ios("label")!,
@@ -82,6 +111,12 @@ export function usePalette(): Palette {
     link: material.primary,
     dark,
   };
+}
+
+/// A `#rrggbb` color (what Android's Material colors are) at an opacity.
+export function withAlpha(hex: string, alpha: number): string {
+  const value = parseInt(hex.slice(1, 7), 16);
+  return `rgba(${(value >> 16) & 255},${(value >> 8) & 255},${value & 255},${alpha})`;
 }
 
 /// The eight bot accents, as the Mac app's system colors, with a lifted twin for gradients.

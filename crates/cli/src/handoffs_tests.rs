@@ -27,6 +27,8 @@ impl Drop for Fixture {
     }
 }
 
+const TASK: &str = "task-12345678-1234-1234-1234-123456789abc";
+
 fn fixture(remote: bool) -> Fixture {
     let homes: Vec<_> = (0..2)
         .map(|_| std::env::temp_dir().join(format!("lorca-handoffs-{}", uuid::Uuid::new_v4())))
@@ -70,6 +72,32 @@ fn fixture(remote: bool) -> Fixture {
     let (specialist, dm) = source.create_bot_with_dm(specialist, None).unwrap();
     *target.state.lock().unwrap() = source.state.lock().unwrap().clone();
     target.save_state_now();
+    // The parent task the requesting chat works on; its authority is the requesting Runner.
+    crate::tasks::apply(
+        &source,
+        crate::tasks::Task {
+            id: TASK.into(),
+            revision: 1,
+            authority_runner_id: chef.runner_id.clone(),
+            owner_bot_id: chef.id.clone(),
+            runner_id: chef.runner_id.clone(),
+            goal: "Ship the parser fix".into(),
+            acceptance_criteria: vec!["Empty fields parse".into()],
+            dependencies: Vec::new(),
+            next_action: "Review the parser".into(),
+            chat_ids: vec![source_chat.clone()],
+            links: Vec::new(),
+            state: crate::tasks::TaskState::Queued,
+            reason: None,
+            result: None,
+            evidence: Vec::new(),
+            active_run: None,
+            history: Vec::new(),
+            created_at: now_secs(),
+            updated_at: now_secs(),
+        },
+    )
+    .unwrap();
     Fixture {
         source,
         target,
@@ -93,7 +121,7 @@ fn delegate_work(f: &Fixture) -> HandoffRequest {
             context: "The input is an offline export".into(),
             expected_output: "An annotated report".into(),
             acceptance_criteria: vec!["Include a failing input".into(), "Explain the fix".into()],
-            task_id: Some("task-12345678-1234-1234-1234-123456789abc".into()),
+            task_id: Some(TASK.into()),
         },
     )
     .unwrap();
@@ -822,4 +850,74 @@ async fn contracts_and_reports_reload_into_their_turns_prompts() {
     assert!(continuation.contains(&request.trigger_message_id));
     assert!(continuation.contains("An annotated report"));
     settle(&f.source).await;
+}
+
+#[tokio::test]
+async fn delegating_for_a_task_checks_it_and_records_the_report_on_it() {
+    let f = fixture(true);
+    assert!(delegate(
+        &f.source,
+        &f.chef.id,
+        &f.source_chat,
+        0,
+        DelegateInput {
+            bot_id: f.specialist.id.clone(),
+            message: "Review".into(),
+            task_id: Some("task-00000000-0000-4000-8000-000000000000".into()),
+            ..Default::default()
+        }
+    )
+    .unwrap_err()
+    .contains("Unknown task"));
+    let request = delegate_work(&f);
+    apply_update(
+        &f.source,
+        HandoffUpdate::Report {
+            request: request.clone(),
+            report: HandoffReport {
+                status: HandoffStatus::Completed,
+                summary: "Empty fields parse now.\nThe fix checks the field count.".into(),
+                result_links: vec![request_link(&request)],
+                evidence: Vec::new(),
+                created_at: now_secs(),
+                started_after: None,
+            },
+        },
+    )
+    .unwrap();
+    let report = format!("report-{}", request.job_id);
+    let recorded = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let task = crate::tasks::get(&f.source, TASK).unwrap();
+            if let Some(evidence) = task.evidence.iter().find(|e| e.message_id.as_deref() == Some(report.as_str())) {
+                return evidence.clone();
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(recorded.label, "Specialist: Empty fields parse now.");
+    assert_eq!(recorded.chat_id.as_deref(), Some(f.source_chat.as_str()));
+    settle(&f.source).await;
+}
+
+#[tokio::test]
+async fn resuming_a_stopped_delegated_turn_sends_the_next_attempt() {
+    let f = fixture(true);
+    let request = delegate_work(&f);
+    let job = request_job(&request);
+    stage_job(&f.target, &job).unwrap();
+    assert!(begin_job(&f.target, &job).unwrap());
+    finish_job(&f.target, &job, TurnOutcome::Skipped, false).unwrap();
+    resume_stopped(&f.target, job.clone()).unwrap();
+    let record = get(&f.target, &request.handoff_id).unwrap();
+    let next = &record.current().request;
+    assert_eq!((record.attempts.len(), next.attempt), (2, 2));
+    assert_ne!(next.job_id, request.job_id);
+    // The same request: no second marker in the recipient's DM.
+    assert_eq!(next.trigger_message_id, request.trigger_message_id);
+    assert_eq!((&next.message, &next.expected_output), (&request.message, &request.expected_output));
+    assert!(resume_stopped(&f.target, job).unwrap_err().contains("nothing to resume"));
+    settle(&f.target).await;
 }

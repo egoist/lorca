@@ -7,16 +7,22 @@ import * as WebBrowser from "expo-web-browser";
 import { AppState, Platform, type AppStateStatus } from "react-native";
 import * as core from "../../modules/lorca-core";
 import { t } from "../i18n";
+import { exactAnswer, ExactNumber, ExactObject, stringifyExact } from "./exactJson";
+import { reviewEditParams } from "./reviewEdit";
 import { hostFacts } from "./host";
-import { providerConnectMethod, type Attachment, type AutoReview, type Bot, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type Message, type ProviderKind, type ProviderStatus } from "./model";
+import { providerConnectMethod, withReviewModel, type Attachment, type AutoReview, type Bot, type BrowserProfile, type BudgetLimits, type BudgetState, type CallLimits, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type DurableTask, type Message, type ReviewItem, type PluginDetail, type PluginStatus, type ProviderKind, type ProviderStatus } from "./model";
 import { coreHome, loadPrefs, pathOf, wipePrefs } from "./prefs";
 import { clearPushes, installPushHandlers, registerForPushes } from "./push";
 import {
+  acceptDurableTask,
+  setBudgets,
+  acceptReview,
   applyRoster,
   botById,
   chatById,
   endActivity,
   markFile,
+  markFileError,
   markRead,
   patchRoutine,
   removeChat,
@@ -70,12 +76,20 @@ class Engine {
     const active = AppState.currentState === "active";
     useStore.setState({ dictation_lang: loadPrefs().dictation_lang, appActive: active, activeSince: active ? Date.now() : 0 });
     core.onEvent((frame) => this.receive(frame));
-    core.start(coreHome(), hostFacts());
-    AppState.addEventListener("change", (status) => this.onAppState(status));
-    // Read after every store update, including the roster's unread count that follows a
-    // message event, a backlog snapshot, and returning to a chat already mounted on screen.
-    useStore.subscribe(() => this.readVisibleChat());
-    await this.bootstrap();
+    // The core starts off the JS thread and emits as soon as it runs: what it says before the
+    // first snapshot waits for it, as during any snapshot.
+    this.bootstraps += 1;
+    try {
+      await core.start(coreHome(), hostFacts());
+      AppState.addEventListener("change", (status) => this.onAppState(status));
+      // Read after every store update, including the roster's unread count that follows a
+      // message event, a backlog snapshot, and returning to a chat already mounted on screen.
+      useStore.subscribe(() => this.readVisibleChat());
+      await this.bootstrap();
+    } finally {
+      this.bootstraps -= 1;
+      if (!this.bootstraps) this.applyHeld();
+    }
     installPushHandlers();
     if (useStore.getState().paired) void registerForPushes();
   }
@@ -144,6 +158,15 @@ class Engine {
     switch (event) {
       case "snapshot":
         replaceSnapshot(data as Snapshot);
+        break;
+      case "tasks.changed":
+        acceptDurableTask((data as { task: DurableTask }).task);
+        break;
+      case "budgets.changed":
+        setBudgets((data as { budgets: BudgetState[] }).budgets);
+        break;
+      case "reviews.changed":
+        acceptReview((data as { item: ReviewItem }).item);
         break;
       case "roster.changed": {
         const { removed } = applyRoster(data);
@@ -259,17 +282,86 @@ class Engine {
     return core.request<ChatSearchResults>("chats.search", { query: value, limit: 24 });
   }
 
-  /// The attachment's bytes, from this phone's copy or the relay, as a file URI in the store.
+  /// The attachment's bytes, from this phone's copy or the relay, as a file URI in the store. A
+  /// fetch that failed is not asked again until `retryFile`.
   async fetchFile(attachment: Attachment): Promise<void> {
-    if (useStore.getState().files[attachment.id] || this.fetchingFiles.has(attachment.id)) return;
+    const { files, fileErrors } = useStore.getState();
+    if (files[attachment.id] || fileErrors[attachment.id] || this.fetchingFiles.has(attachment.id)) return;
     this.fetchingFiles.add(attachment.id);
     try {
       const { path } = await core.request<{ path: string }>("files.path", { attachment });
       markFile(attachment.id, `file://${path}`);
     } catch (error) {
-      console.warn("fetching attachment", error instanceof Error ? error.message : error);
+      markFileError(attachment.id, error instanceof Error ? error.message : String(error));
     } finally {
       this.fetchingFiles.delete(attachment.id);
+    }
+  }
+
+  retryFile(attachment: Attachment) {
+    markFileError(attachment.id, null);
+    void this.fetchFile(attachment);
+  }
+
+  /// The path of the attachment as a file named for what it is, for Quick Look or another app:
+  /// the bytes under their attachment id carry no extension, so the core keeps a private named
+  /// copy.
+  async namedFile(attachment: Attachment): Promise<string> {
+    const { path } = await core.request<{ path: string }>("files.path", { attachment, named: true });
+    return path;
+  }
+
+  /// A durable task method (`tasks.create`, `tasks.update`, `tasks.run`, `tasks.get`); the core
+  /// sends a write to the task's authority Runner. The task it answers with is kept unless a
+  /// newer revision arrived first.
+  async taskRequest(method: string, params: Record<string, unknown>): Promise<DurableTask> {
+    const task = await core.request<DurableTask>(method, params);
+    acceptDurableTask(task);
+    return task;
+  }
+
+  /// A review item as its Runner keeps it, with its numbers spelled as they were: the review
+  /// screen shows and edits a call's arguments from it, since `JSON.parse` rounds an id past 2^53.
+  async exactReview(id: string): Promise<ExactObject> {
+    const item = exactAnswer(await core.requestText("reviews.get", JSON.stringify({ id })));
+    if (!(item instanceof ExactObject)) throw new Error("No such review");
+    return item;
+  }
+
+  /// Approves the version the user saw. `edited`, the field's text when the user changed it, is
+  /// saved first as the next version, and that version is approved: what runs is what the field
+  /// showed. A command's other arguments and a call's server and tool stay as they were.
+  async approveReview(item: ReviewItem, edited?: string): Promise<ReviewItem> {
+    let shown = item;
+    if (edited !== undefined) {
+      // The edit names the version the user saw; one changed elsewhere is refused.
+      const exact = (await this.exactReview(item.id)).with("version", new ExactNumber(String(item.version)));
+      const params = reviewEditParams(exact, edited, t("The arguments need to be a JSON object."));
+      shown = JSON.parse(stringifyExact(exactAnswer(await core.requestText("reviews.edit", params)))) as ReviewItem;
+      acceptReview(shown);
+    }
+    return this.reviewRequest("reviews.approve", { id: shown.id, expected_version: shown.version });
+  }
+
+  rejectReview(item: ReviewItem): Promise<ReviewItem> {
+    return this.reviewRequest("reviews.reject", { id: item.id, expected_version: item.version });
+  }
+
+  /// A decision goes to the item's Runner through the core; the item it answers with is kept
+  /// unless a newer revision arrived first.
+  private async reviewRequest(method: string, params: { id: string; expected_version: number }): Promise<ReviewItem> {
+    const item = await core.request<ReviewItem>(method, params);
+    acceptReview(item);
+    return item;
+  }
+
+  /// Every output version this phone has synced for the chat, for its details.
+  async listOutputs(chatId: string): Promise<void> {
+    try {
+      const { outputs } = await core.request<{ outputs: Message[] }>("outputs.list", { chat_id: chatId });
+      useStore.setState((s) => ({ outputs: { ...s.outputs, [chatId]: outputs } }));
+    } catch (error) {
+      console.warn("listing outputs", error instanceof Error ? error.message : error);
     }
   }
 
@@ -360,6 +452,27 @@ class Engine {
   setAutoReview(value: AutoReview) {
     useStore.setState({ auto_review: value });
     void core.request("auto_review.set", { is_enabled: value.is_enabled, rules: value.rules });
+  }
+
+  /// Picks the provider whose review model Auto-review runs, or none for the bot's own. Only
+  /// `provider` goes, so the switch, the rules, and the review models stay.
+  setReviewProvider(provider: string | undefined) {
+    const held = useStore.getState().auto_review.provider;
+    useStore.setState((s) => ({ auto_review: { ...s.auto_review, provider } }));
+    core.request("auto_review.set", { provider: provider ?? null }).catch(() => {
+      // The provider disconnected meanwhile: the core kept what it had.
+      useStore.setState((s) => ({ auto_review: { ...s.auto_review, provider: held } }));
+    });
+  }
+
+  /// Picks the model Auto-review runs on a provider, or puts its default back (`undefined`). The
+  /// patch names this provider alone, so the others' review models stay.
+  setReviewModel(kind: string, model: string | undefined) {
+    const held = useStore.getState().auto_review.models?.[kind];
+    useStore.setState((s) => ({ auto_review: withReviewModel(s.auto_review, kind, model) }));
+    core.request("auto_review.set", { models: { [kind]: model ?? null } }).catch(() => {
+      useStore.setState((s) => ({ auto_review: withReviewModel(s.auto_review, kind, held) }));
+    });
   }
 
   // MARK: - Providers
@@ -477,6 +590,66 @@ class Engine {
       replace(shown, asked);
       throw error;
     }
+  }
+
+  /// A plugin on its Runner, with how each of its servers signs in; sealed to another Runner.
+  /// The bot's browser profiles, oldest first, from its Runner through the relay.
+  async browserProfiles(botId: string): Promise<BrowserProfile[]> {
+    const { sessions } = await core.request<{ sessions: BrowserProfile[] }>("browser.sessions", { bot_id: botId });
+    return sessions;
+  }
+
+  /// `browser.create` (`name`), `browser.takeover`, `browser.resume` (`revision`), `browser.stop`,
+  /// `browser.delete`, or `browser.screenshot` (`chat_id`) for one of the bot's profiles
+  /// (`session_id`), on its Runner. Windows open only there, so the phone never sends `browser.open`.
+  async browserAction(method: string, botId: string, params: Record<string, string | number>): Promise<void> {
+    await core.request(method, { ...params, bot_id: botId });
+  }
+
+  /// Sets limits on the bot's Runner; what the work used stays. `kind` is `chat` for each new turn
+  /// in the DM, `job` for one turn, `task`, or `routine`.
+  async setBudget(kind: BudgetState["kind"], id: string, limits: BudgetLimits, bot: Bot, chatId: string) {
+    await core.request("budgets.set", { kind, id, limits, bot_id: bot.id, chat_id: chatId, runner_id: bot.runner_id });
+  }
+
+  /// Resumes a stopped turn, task, or routine where it left off; `fresh` grants the limits again
+  /// in full. The request id makes a repeated delivery a no-op on the Runner.
+  async resumeBudget(kind: BudgetState["kind"], id: string, runnerId: string, fresh: boolean) {
+    await core.request("budgets.resume", { kind, id, runner_id: runnerId, renew: fresh, run: true, request_id: `budget-${Date.now()}-${Math.random().toString(36).slice(2)}` });
+  }
+
+  /// A plugin account's call limit on its Runner.
+  callLimits(runnerId: string, pluginId: string): Promise<CallLimits> {
+    return core.request<CallLimits>("connector_limits.get", { runner_id: runnerId, plugin_id: pluginId, scope: "account" });
+  }
+
+  async setCallLimits(runnerId: string, pluginId: string, limits: CallLimits["limits"]): Promise<CallLimits> {
+    return core.request<CallLimits>("connector_limits.set", { runner_id: runnerId, plugin_id: pluginId, scope: "account", limits });
+  }
+
+  pluginDetail(runnerId: string, pluginId: string): Promise<PluginDetail> {
+    return core.request<PluginDetail>("plugins.detail", { runner_id: runnerId, plugin_id: pluginId });
+  }
+
+  /// Signs a plugin in on its Runner. The page opens here (`plugin.auth`) and the Runner keeps the
+  /// tokens; resolves once the sign-in has finished or failed.
+  async connectPlugin(runnerId: string, pluginId: string) {
+    await core.request("plugins.connect", { runner_id: runnerId, plugin_id: pluginId });
+  }
+
+  /// Forgets a plugin's sign-in on its Runner; its next use asks again.
+  async signOutPlugin(runnerId: string, pluginId: string) {
+    await core.request("plugins.sign_out", { runner_id: runnerId, plugin_id: pluginId });
+  }
+
+  /// Renames a named account (Gmail · Work). Its id, sign-in, and tools stay; the answer stands in
+  /// the Runner's list until its next machine blob lists the new name.
+  async renamePluginAccount(runnerId: string, pluginId: string, accountName: string) {
+    const { status } = await core.request<{ status: PluginStatus }>("plugins.rename", { runner_id: runnerId, plugin_id: pluginId, account_name: accountName });
+    useStore.setState((s) => ({
+      devices: s.devices.map((d) => (d.id === runnerId ? { ...d, plugins: (d.plugins ?? []).map((plugin) => (plugin.id === status.id ? status : plugin)) } : d)),
+    }));
+    return status;
   }
 
   // MARK: - Commands

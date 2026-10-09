@@ -6,7 +6,7 @@ export default ({ command }: { command: string }) => ({
   identifier: "app.lorca",
   // The app's own version, apart from the Mac app's (the root package.json's). `bun run
   // release-desktop` and the Release desktop workflow read it here.
-  version: "0.1.3",
+  version: "0.1.6",
   icon: command === "dev" ? "assets/icon-dev.png" : "assets/icon.png",
   out: "build",
   // Release builds update themselves from this repository's newest release tagged

@@ -431,6 +431,9 @@ pub fn delegate(
                 .into(),
         );
     }
+    if let Some(task) = &input.task_id {
+        crate::tasks::get(app, task)?;
+    }
     if input.message.trim().is_empty() {
         return Err("message is required".into());
     }
@@ -484,6 +487,7 @@ fn request_job(request: &HandoffRequest) -> Job {
         kind: "message".into(),
         trigger_message_id: request.trigger_message_id.clone(),
         task_id: request.task_id.clone(),
+        task_context: None,
         handoff: Some(HandoffJob::Request {
             request: request.clone(),
         }),
@@ -709,9 +713,13 @@ pub fn finish_job(
             }
             let (links, evidence, said, failure) = turn_evidence(app, attempt);
             // A turn that failed ends Skipped (`turns::run_job`); a notice it posted on the way,
-            // such as a compaction, is no failure by itself.
+            // such as a compaction, is no failure by itself. One its limits stopped waits on the
+            // user, who can resume it in Limits (`resume_stopped`).
+            let limited = outcome == TurnOutcome::Skipped && stopped_at_limits(app, job);
             let status = if cancelled {
                 HandoffStatus::Cancelled
+            } else if limited {
+                HandoffStatus::Blocked
             } else if outcome == TurnOutcome::Skipped {
                 HandoffStatus::Failed
             } else if outcome == TurnOutcome::Sent {
@@ -723,6 +731,7 @@ pub fn finish_job(
             let summary = match status {
                 HandoffStatus::Cancelled => "Stopped before finishing.".into(),
                 HandoffStatus::Failed => failure.unwrap_or_else(|| "Couldn't finish.".into()),
+                HandoffStatus::Blocked if limited => failure.unwrap_or_else(|| "Stopped at its limits.".into()),
                 HandoffStatus::Blocked => "Ended the turn without a reply.".into(),
                 _ => said.unwrap_or_else(|| "Done.".into()),
             };
@@ -757,6 +766,45 @@ pub fn finish_job(
         }
         None => Ok(()),
     }
+}
+
+/// The turn's own limits, or its task's, stopped it on this Runner.
+fn stopped_at_limits(app: &App, job: &Job) -> bool {
+    app.budgets.local_snapshots(app).iter().any(|budget| {
+        matches!(budget.state.as_str(), "budget_exhausted" | "interrupted")
+            && ((budget.kind == "job" && budget.id == job.id)
+                || (budget.kind == "task" && job.task_id.as_ref() == Some(&budget.id)))
+    })
+}
+
+/// Resuming a delegated turn in Limits after its limits stopped it. That attempt already
+/// reported back as blocked, and a report never changes, so the work goes on as the handoff's
+/// next attempt, with the same request and no new marker in the recipient's DM; its result
+/// reaches the requesting bot like any other. Any other turn goes on as it is.
+pub fn resume_stopped(app: &Arc<App>, job: Job) -> Result<(), String> {
+    let Some(HandoffJob::Request { request }) = &job.handoff else {
+        crate::runtime::start_turn(app, job);
+        return Ok(());
+    };
+    let next = {
+        let _guard = app.handoff_lock.lock().unwrap();
+        let record = get(app, &request.handoff_id)?;
+        let attempt = record.current();
+        if attempt.request.job_id != job.id || attempt.cancellation.is_some() {
+            return Err("This handoff was cancelled or sent again since, so there is nothing to resume.".into());
+        }
+        if !attempt.report.as_ref().is_some_and(|r| r.status.terminal()) {
+            drop(_guard);
+            crate::runtime::start_turn(app, job);
+            return Ok(());
+        }
+        let mut next = attempt.request.clone();
+        next.attempt = next.attempt.checked_add(1).ok_or("Too many handoff attempts")?;
+        next.job_id = format!("job-{}", uuid::Uuid::new_v4());
+        next.created_at = now_secs();
+        next
+    };
+    admit(app, next, Some(&job.id)).map(|_| ())
 }
 
 fn turn_evidence(
@@ -811,23 +859,13 @@ fn turn_evidence(
             }
             _ => {}
         }
-        // #80's additive Message.output metadata supplies immutable version references once
-        // that module is present. Reading its wire shape keeps this module independently usable.
-        if let Ok(value) = serde_json::to_value(&message) {
-            if let Some(output) = value.get("output").filter(|o| o.is_object()) {
-                let mut link = ResultLink::message(
-                    &message,
-                    output["name"].as_str().unwrap_or("Output").into(),
-                );
-                link.kind = "output".into();
-                link.output_id = output["id"].as_str().map(str::to_string);
-                link.version = output["version"]
-                    .as_u64()
-                    .and_then(|n| u32::try_from(n).ok());
-                if link.validate().is_ok() {
-                    links.push(link);
-                }
-            }
+        // A published output version is its own message; the report names that version.
+        if let Some(output) = &message.output {
+            let mut link = ResultLink::message(&message, output.name.clone());
+            link.kind = "output".into();
+            link.output_id = Some(output.id.clone());
+            link.version = Some(output.version);
+            links.push(link);
         }
     }
     if links.is_empty() {
@@ -985,7 +1023,8 @@ fn route_report(app: &Arc<App>, id: &str) -> Result<(), String> {
     if app.chat(&request.source_chat_id).is_none() {
         return Ok(());
     }
-    app.upsert_message(result_message(request, report), true);
+    let message = result_message(request, report);
+    app.upsert_message(message.clone(), true);
     if attempt.result_delivery == ResultDelivery::Pending
         && app
             .bot(&request.from_bot_id)
@@ -993,10 +1032,46 @@ fn route_report(app: &Arc<App>, id: &str) -> Result<(), String> {
     {
         let job = result_job(request);
         if !app.running_jobs.lock().unwrap().contains_key(&job.id) {
+            if let Some(task) = request.task_id.clone() {
+                let (app, name) = (app.clone(), crate::runtime::name_of(app, &request.target_bot_id));
+                tokio::spawn(async move { record_on_task(&app, &task, &message, &name).await });
+            }
             crate::runtime::spawn_local_job(app.clone(), job, None);
         }
     }
     Ok(())
+}
+
+/// A report for a task's handoff joins the task's evidence as the report message, through the
+/// task's own revision check, as a review's outcome does. Retried once when the task moved
+/// meanwhile; a task whose linked chats leave out the requesting chat, or that refuses the
+/// change, keeps the report in the chat only.
+async fn record_on_task(app: &Arc<App>, task_id: &str, report: &Message, name: &str) {
+    let Body::Handoff { reason, .. } = &report.body else { return };
+    let first = reason.lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or_default();
+    let label: String = format!("{name}: {first}").chars().take(200).collect();
+    for _ in 0..2 {
+        let Ok(task) = crate::tasks::get(app, task_id) else { return };
+        if !task.chat_ids.contains(&report.chat_id)
+            || task.evidence.iter().any(|e| e.message_id.as_deref() == Some(report.id.as_str()))
+        {
+            return;
+        }
+        let mut evidence = serde_json::to_value(&task.evidence).unwrap_or_else(|_| json!([]));
+        if let Some(list) = evidence.as_array_mut() {
+            list.push(json!({ "kind": "message", "label": label, "chat_id": report.chat_id, "message_id": report.id }));
+        }
+        let update = json!({ "id": task_id, "expected_revision": task.revision,
+            "request_id": format!("{}-task-{}", report.id, task.revision), "evidence": evidence });
+        match Box::pin(crate::tasks::dispatch(app, "tasks.update", update)).await {
+            Ok(_) => return,
+            Err(error) if error.contains("revision conflict") => continue,
+            Err(error) => {
+                tracing::warn!(%error, message_id = %report.id, "recording a handoff report on its task");
+                return;
+            }
+        }
+    }
 }
 
 pub fn follow_up(

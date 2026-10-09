@@ -116,8 +116,9 @@ fn user_turn_job(app: &Arc<App>, chat_id: &str, bot_id: &str, trigger_message_id
         chat_id: chat_id.to_string(),
         bot_id: bot_id.to_string(),
         kind: "turn".into(),
-        trigger_message_id: trigger_message_id.to_string(),
         task_id: None,
+        task_context: None,
+        trigger_message_id: trigger_message_id.to_string(),
         handoff: None,
         requested_by: app.this_device_id().unwrap_or_default(),
         routine_id: None,
@@ -139,8 +140,9 @@ pub fn command_job(app: &App, chat_id: &str, bot_id: &str, card_id: &str) -> Job
         chat_id: chat_id.to_string(),
         bot_id: bot_id.to_string(),
         kind: "command".into(),
-        trigger_message_id: card_id.to_string(),
         task_id: None,
+        task_context: None,
+        trigger_message_id: card_id.to_string(),
         handoff: None,
         requested_by: app.this_device_id().unwrap_or_default(),
         check: None,
@@ -212,7 +214,7 @@ pub enum TurnOutcome {
 }
 
 impl TurnOutcome {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             TurnOutcome::Sent => "sent",
             TurnOutcome::Pass => "pass",
@@ -346,8 +348,9 @@ async fn run_room(
                 bot_id: bot.id.clone(),
                 kind: "room_turn".into(),
                 check: None,
-                trigger_message_id: trigger.clone(),
                 task_id: None,
+                task_context: None,
+                trigger_message_id: trigger.clone(),
                 handoff: None,
                 routine_id: None,
                 requested_by: app.this_device_id().unwrap_or_default(),
@@ -581,6 +584,16 @@ pub fn dispatch_job(app: &Arc<App>, job: Job) -> Dispatch {
 /// outcome goes back to the requesting Device when the job came from another one. It registers
 /// before taking the lock, so hard Stop also cancels jobs waiting behind another turn.
 pub fn spawn_local_job(app: Arc<App>, job: Job, remote_blob_id: Option<String>) {
+    if job.kind == "task" {
+        match crate::tasks::claim(&app, &job) {
+            Ok(true) => {},
+            result => {
+                if let Err(error) = result { app.notice(&job.chat_id, format!("Task run did not start: {error}")); }
+                if let Some(id) = remote_blob_id { tokio::spawn(async move { crate::sync::delete_remote_blob(&app, &id).await; }); }
+                return;
+            }
+        }
+    }
     if let Err(error) = crate::handoffs::stage_job(&app, &job) {
         tracing::error!(%error, job_id = %job.id, "persisting handoff admission");
         return;
@@ -603,7 +616,20 @@ pub fn spawn_local_job(app: Arc<App>, job: Job, remote_blob_id: Option<String>) 
     tokio::spawn(async move {
         let lock = app.chat_lock(&job.chat_id);
         let _guard = lock.lock().await;
-        let outcome = run_job_started(&app, job.clone(), cancel).await;
+        if job.kind == "task" {
+            match crate::tasks::admit(&app, &job).await {
+                Ok(true) => {},
+                result => {
+                    if let Err(error) = result { app.notice(&job.chat_id, format!("Task run did not start: {error}")); }
+                    finish_job(&app, &job.id);
+                    crate::tasks::finished(&app, &job, TurnOutcome::Skipped).await;
+                    if let Some(id) = remote_blob_id { crate::sync::delete_remote_blob(&app, &id).await; }
+                    return;
+                }
+            }
+        }
+        let outcome = run_job_started(&app, job.clone(), cancel.clone()).await;
+        if job.kind == "task" { crate::tasks::finished(&app, &job, if cancel.is_cancelled() { TurnOutcome::Skipped } else { outcome }).await; }
         if let Some(id) = &job.routine_id {
             crate::routines::finished(&app, id, outcome);
         }
@@ -742,6 +768,7 @@ mod tests {
             thinking: None,
             legacy_instructions: String::new(),
             workdir: None,
+            permissions: None,
             created_at: 0.0,
         }
     }
@@ -1018,7 +1045,7 @@ mod tests {
             kind: "machine".into(),
             recipient_machine_pubkey: None,
             seq,
-            ciphertext: crate::keys::b64(&crate::crypto::encrypt_json(&dek, "machine", &MachineBlob { device, turns }).unwrap()),
+            ciphertext: crate::keys::b64(&crate::crypto::encrypt_json(&dek, "machine", &MachineBlob { device, turns, budgets: Vec::new() }).unwrap()),
             created_at: 0,
         };
         let mut events = app.events.subscribe();
@@ -1048,8 +1075,9 @@ mod tests {
             bot_id: "bot".into(),
             check: None,
             kind: "turn".into(),
-            trigger_message_id: "message".into(),
             task_id: None,
+            task_context: None,
+            trigger_message_id: "message".into(),
             handoff: None,
             routine_id: None,
             requested_by: String::new(),

@@ -128,6 +128,34 @@ fn find_program(name: &OsStr, path: Option<&OsStr>, pathext: Option<&OsStr>, exi
     std::env::split_paths(path?).filter(|folder| folder.is_absolute()).flat_map(|folder| names.iter().map(move |file| folder.join(file))).find(|file| exists(file))
 }
 
+/// Appends one argument to a Windows command line as the standard library does for `Command`:
+/// in quotes when it is empty or holds a space or a tab, a quote escaped, and the backslashes
+/// before a quote or the closing quote doubled. A program that parses its command line as the C
+/// runtime does, Git Bash's among them, gets the argument back as written.
+#[cfg(any(windows, test))]
+pub(crate) fn append_arg(line: &mut Vec<u16>, arg: impl Iterator<Item = u16> + Clone) {
+    let quote = arg.clone().next().is_none() || arg.clone().any(|c| c == b' ' as u16 || c == b'\t' as u16);
+    if quote {
+        line.push(b'"' as u16);
+    }
+    let mut backslashes = 0;
+    for c in arg {
+        if c == b'\\' as u16 {
+            backslashes += 1;
+        } else {
+            if c == b'"' as u16 {
+                line.extend(std::iter::repeat_n(b'\\' as u16, backslashes + 1));
+            }
+            backslashes = 0;
+        }
+        line.push(c);
+    }
+    if quote {
+        line.extend(std::iter::repeat_n(b'\\' as u16, backslashes));
+        line.push(b'"' as u16);
+    }
+}
+
 #[cfg(unix)]
 async fn load() -> Environment {
     let started = std::time::Instant::now();
@@ -493,5 +521,24 @@ mod tests {
         assert_eq!(find("missing", pathext), None);
         assert_eq!(find("node_modules/.bin/npx", pathext), None, "a path goes to Command as it is");
         assert_eq!(find_program(OsStr::new("npx"), None, None, |_| true), None);
+    }
+
+    /// Arguments as `Command` writes them on Windows, so a command reaches a terminal's shell as
+    /// it reaches one on pipes.
+    #[test]
+    fn arguments_are_quoted_as_the_standard_library_quotes_them() {
+        let quoted = |arg: &str| {
+            let mut line = Vec::new();
+            append_arg(&mut line, arg.encode_utf16());
+            String::from_utf16(&line).unwrap()
+        };
+        assert_eq!(quoted("-c"), "-c");
+        assert_eq!(quoted(""), "\"\"");
+        assert_eq!(quoted("echo hi"), "\"echo hi\"");
+        assert_eq!(quoted("say \"hi\""), r#""say \"hi\"""#);
+        assert_eq!(quoted(r#"a\"b"#), r#"a\\\"b"#, "a quote is escaped outside quotes too");
+        assert_eq!(quoted(r"C:\dir\ x\"), r#""C:\dir\ x\\""#, "the backslashes before the closing quote double");
+        assert_eq!(quoted(r"grep -rn 'a\|b' ."), r#""grep -rn 'a\|b' .""#, "others stay as written");
+        assert_eq!(quoted("line one\nline\ttwo"), "\"line one\nline\ttwo\"");
     }
 }

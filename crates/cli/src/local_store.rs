@@ -12,7 +12,7 @@ use crate::app::{OutboxItem, SentJob, Slot, State};
 use crate::model::{Author, Body, LiveTurn, Message};
 
 pub struct LocalStore {
-    connection: Mutex<Connection>,
+    pub(crate) connection: Mutex<Connection>,
 }
 
 pub struct Upsert {
@@ -41,6 +41,10 @@ impl LocalStore {
              PRAGMA foreign_keys = ON;
              PRAGMA busy_timeout = 5000;
              PRAGMA journal_size_limit = 16777216;
+             CREATE TABLE IF NOT EXISTS runner_limits (
+                 purpose TEXT PRIMARY KEY NOT NULL,
+                 ciphertext BLOB NOT NULL
+             );
              CREATE TABLE IF NOT EXISTS metadata (
                  id                       INTEGER PRIMARY KEY CHECK (id = 1),
                  auto_review_json         TEXT NOT NULL,
@@ -143,8 +147,13 @@ impl LocalStore {
                  id         TEXT PRIMARY KEY NOT NULL,
                  ciphertext BLOB NOT NULL
              );
+             CREATE TABLE IF NOT EXISTS review_items (
+                 id         TEXT PRIMARY KEY NOT NULL,
+                 ciphertext BLOB NOT NULL
+             );
              PRAGMA user_version = 1;",
         )?;
+        crate::tasks::storage::initialize(&connection)?;
         crate::config::set_private(path)?;
         Ok(Self {
             connection: Mutex::new(connection),
@@ -381,6 +390,19 @@ impl LocalStore {
         let mut statement = connection
             .prepare("SELECT message_json FROM messages WHERE chat_id = ?1 ORDER BY position")?;
         let rows = statement.query_map([chat_id], |row| row.get::<_, String>(0))?;
+        collect_messages(rows)
+    }
+
+    /// Immutable output-version rows, without materializing unrelated tool transcripts.
+    pub fn outputs(&self, chat_id: &str, task_id: Option<&str>) -> anyhow::Result<Vec<Message>> {
+        let connection = self.connection.lock().unwrap();
+        let mut statement = connection.prepare(
+            "SELECT message_json FROM messages WHERE chat_id = ?1
+             AND json_type(message_json, '$.output') = 'object'
+             AND (?2 IS NULL OR json_extract(message_json, '$.output.task_id') = ?2)
+             ORDER BY position",
+        )?;
+        let rows = statement.query_map(params![chat_id, task_id], |row| row.get::<_, String>(0))?;
         collect_messages(rows)
     }
 
@@ -1038,10 +1060,39 @@ impl LocalStore {
         rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
     }
 
+    /// Review contents and state are encrypted. Comparing the previous ciphertext makes a
+    /// claim atomic even when another CLI process has opened the same database.
+    pub fn save_review(&self, id: &str, previous: Option<&[u8]>, ciphertext: &[u8], upload: Option<&OutboxItem>) -> anyhow::Result<()> {
+        let mut connection = self.connection.lock().unwrap();
+        let tx = connection.transaction()?;
+        let changed = match previous {
+            Some(previous) => tx.execute("UPDATE review_items SET ciphertext = ?1 WHERE id = ?2 AND ciphertext = ?3", params![ciphertext, id, previous])?,
+            None => tx.execute("INSERT OR IGNORE INTO review_items (id, ciphertext) VALUES (?1, ?2)", params![id, ciphertext])?,
+        };
+        anyhow::ensure!(changed == 1, "This changed on another Device. Review it again.");
+        if let Some(item) = upload {
+            queue_outbox_tx(&tx, item)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn review(&self, id: &str) -> anyhow::Result<Option<Vec<u8>>> {
+        self.connection.lock().unwrap().query_row("SELECT ciphertext FROM review_items WHERE id = ?1", [id], |row| row.get(0)).optional().map_err(Into::into)
+    }
+
+    pub fn reviews(&self) -> anyhow::Result<Vec<Vec<u8>>> {
+        let connection = self.connection.lock().unwrap();
+        let mut statement = connection.prepare("SELECT ciphertext FROM review_items ORDER BY id")?;
+        let rows = statement.query_map([], |row| row.get(0))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(Into::into)
+    }
+
     pub fn clear(&self) -> anyhow::Result<()> {
         let mut connection = self.connection.lock().unwrap();
         let tx = connection.transaction()?;
         for table in [
+            "runner_limits",
             "metadata",
             "devices",
             "bots",
@@ -1057,6 +1108,10 @@ impl LocalStore {
             "sent_jobs",
             "device_turns",
             "handoffs",
+            "review_items",
+            "durable_tasks",
+            "task_receipts",
+            "task_runs",
         ] {
             tx.execute(&format!("DELETE FROM {table}"), [])?;
         }
@@ -1064,9 +1119,25 @@ impl LocalStore {
         connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
         Ok(())
     }
+
+    /// Runner accounting/configuration is authenticated account ciphertext, including its
+    /// resumable Job payloads. The purpose is bound as AEAD associated data by the caller.
+    pub fn runner_limits(&self, purpose: &str) -> anyhow::Result<Option<Vec<u8>>> {
+        Ok(self.connection.lock().unwrap().query_row(
+            "SELECT ciphertext FROM runner_limits WHERE purpose = ?1", [purpose], |row| row.get(0),
+        ).optional()?)
+    }
+
+    pub fn set_runner_limits(&self, purpose: &str, ciphertext: &[u8]) -> anyhow::Result<()> {
+        self.connection.lock().unwrap().execute(
+            "INSERT INTO runner_limits (purpose, ciphertext) VALUES (?1, ?2) ON CONFLICT(purpose) DO UPDATE SET ciphertext = excluded.ciphertext",
+            params![purpose, ciphertext],
+        )?;
+        Ok(())
+    }
 }
 
-fn queue_outbox_tx(tx: &Transaction<'_>, item: &OutboxItem) -> anyhow::Result<()> {
+pub(crate) fn queue_outbox_tx(tx: &Transaction<'_>, item: &OutboxItem) -> anyhow::Result<()> {
     let waiting: Option<i64> = match item.slot.as_ref() {
         Some(slot) => tx
             .query_row(

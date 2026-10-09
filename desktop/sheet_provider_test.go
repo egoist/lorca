@@ -117,7 +117,7 @@ func TestAddProviderMenu(t *testing.T) {
 		t.Fatal(err)
 	}
 	items := tt.Menu()
-	want := []string{"OpenAI", "OpenRouter", "Gemini", "Groq", "Together AI", "", "Ollama", "LM Studio", "", "Other Server…"}
+	want := []string{"OpenAI", "OpenRouter", "Gemini", "Groq", "Together AI", "", "Ollama", "LM Studio", "", "OpenRouter Decisions", "OpenAI Decisions", "TypeSafe", "", "Other Server…"}
 	if len(items) != len(want) {
 		t.Fatalf("menu %q", items)
 	}
@@ -134,6 +134,41 @@ func TestAddProviderMenu(t *testing.T) {
 	sheetASettle(tt)
 	if !tt.HasText("Ollama") || !tt.HasText("Delete") {
 		t.Errorf("Ollama: %q", tt.Texts())
+	}
+}
+
+// A decision preset fills in its API and endpoint, and lists the server's decision models.
+func TestRenderDecisionProviderSheet(t *testing.T) {
+	var preset *model.CustomPreset
+	for i := range model.DecisionPresets {
+		if model.DecisionPresets[i].Name == "OpenRouter Decisions" {
+			preset = &model.DecisionPresets[i]
+		}
+	}
+	m, tt := sheetATester(t, func(m *mainWindow) { m.presentCustomProvider("", preset, nil) })
+	sheetAWait(tt, 400*time.Millisecond)
+	for _, text := range []string{"Add OpenRouter Decisions", "System One", "Requests go to https://openrouter.ai/api/alpha/decisions.", "TypeSafe: Jev 1.13",
+		L("Any server that speaks OpenAI’s or Anthropic’s API, such as a gateway or a model server on your network, or a decision API for Auto-review. Encrypted and shared with your paired Devices.")} {
+		if !tt.HasText(text) {
+			t.Errorf("no %q in %q", text, tt.Texts())
+		}
+	}
+	sheetARender(t, tt, "custom-openrouter-decisions")
+	// The API picker offers the decision APIs after the chat ones.
+	if err := tt.Click("System One"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"OpenAI Chat Completions", "OpenAI Responses", "Anthropic Messages", "System One", "OpenAI Decisions"}
+	if got := tt.Menu(); len(got) != len(want) || got[3] != want[3] || got[4] != want[4] {
+		t.Errorf("APIs %q", got)
+	}
+	if err := tt.ChooseMenuItem("OpenAI Chat Completions"); err != nil {
+		t.Fatal(err)
+	}
+	sheetASettle(tt)
+	// The same server for chat is OpenRouter, and the pasted endpoint is cut back to its root.
+	if !tt.HasText("Requests go to https://openrouter.ai/api/alpha/decisions/chat/completions.") || !m.hasSheet() {
+		t.Errorf("after Chat Completions: %q", tt.Texts())
 	}
 }
 
