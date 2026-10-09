@@ -874,7 +874,7 @@ class Engine {
 
   /// Pauses or resumes a routine; a resumed schedule counts from now.
   setRoutineEnabled(id: string, enabled: boolean) {
-    patchRoutine(id, (r) => ({ ...r, is_enabled: enabled, paused_reason: undefined, next_run_at: enabled ? r.next_run_at : null }));
+    patchRoutine(id, (r) => ({ ...r, is_enabled: enabled, paused_reason: undefined, state: enabled ? "on" : "paused", next_run_at: enabled ? r.next_run_at : null }));
     void core.request("routines.update", { id, enabled });
   }
 
@@ -937,6 +937,11 @@ class Engine {
     if (!answer.installing || !answer.latest) return;
     const latest = answer.latest;
     useStore.setState((s) => ({ devices: s.devices.map((d) => (d.id === id && d.update ? { ...d, update: { ...d.update, latest, state: "installing", error: undefined } } : d)) }));
+  }
+
+  /// Whether `lorca service` keeps a Runner's CLI running, asked of the Runner through the core.
+  serviceStatus(id: string) {
+    return core.request<{ installed: boolean; running: boolean }>("device.service_status", { id });
   }
 
   /// Forgets the identity: keys, account key, and everything synced.
