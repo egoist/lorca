@@ -1,7 +1,7 @@
 // The chat info sheet's own stack: Details first, with Look, the bot's or group's Description
 // editors, a group's project context entries, the chat's outputs, its durable tasks, what its
-// bots left for review, a plugin's named account, the bot's browser profiles, and the limits of
-// its turns, tasks, and routines, its skills (a skill, one of its files, and Save as Skill),
+// bots left for review, a plugin's named account, the bot's browser profiles, a routine, and the
+// limits of its turns, tasks, and routines, its skills (a skill, one of its files, and Save as Skill),
 // its workflow feedback (the list, a suggestion or change, and Give Feedback), and Share as
 // Template sliding in inside the one form sheet the root presents.
 
@@ -35,6 +35,7 @@ export default function ChatInfoLayout() {
       <Stack.Screen name="account/[id]" />
       <Stack.Screen name="browser/[id]" />
       <Stack.Screen name="limits" />
+      <Stack.Screen name="routine/[id]" />
       <Stack.Screen name="skill/[id]" />
       <Stack.Screen name="skill-file" />
       <Stack.Screen name="save-skill/[id]" />

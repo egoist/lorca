@@ -12,7 +12,8 @@ import { CheckRow, FieldRow, MenuRow, Row, Section, ToggleRow } from "../../src/
 import { projectKindTitle, projectProblem, projectRowDetail } from "../../src/ui/project";
 import * as DocumentPicker from "expo-document-picker";
 import { pluginStateWord } from "../../src/ui/plugins";
-import { lastRunSummary, lastSeen, routineDetail } from "../../src/ui/format";
+import { lastSeen, scheduleText } from "../../src/ui/format";
+import { problemNeedsUser, routineDetail, routineProblem } from "../../src/ui/routines";
 import { Symbol } from "../../src/ui/Symbol";
 import { usePalette } from "../../src/ui/theme";
 import { deviceSymbol } from "../../src/ui/devices";
@@ -24,7 +25,7 @@ import { taskStateTitle, useTaskTint } from "../../src/ui/durableTasks";
 import { reviewHeadline, reviewStateWord, reviewSymbol } from "../../src/ui/reviews";
 import { loadFeedback, useFeedback } from "../../src/core/feedback";
 import { countsLine, isEmpty, targetName } from "../../src/ui/feedback";
-import { isStopped, limitsSummary, stoppedDetail, stoppedLabel } from "../../src/ui/limits";
+import { isStopped, limitsSummary, stoppedLabel } from "../../src/ui/limits";
 import { accentColor, Font } from "../../src/ui/theme";
 import { sharedLinkFor } from "../../src/core/templates";
 
@@ -85,27 +86,12 @@ export default function ChatInfoScreen() {
 
   /// A routine stopped at its limits, which runs again only once the user resumes it in Limits.
   const stoppedRoutine = (routine: Routine) => budgets.find((b) => b.kind === "routine" && b.id === routine.id && b.runner_id === bot?.runner_id && isStopped(b));
+  /// A routine stopped at its limits or with something the user has to fix leads with an orange mark.
+  const routineNeedsUser = (routine: Routine) => {
+    const problem = routineProblem(routine);
+    return !!stoppedRoutine(routine) || (!!problem && problemNeedsUser(problem));
+  };
 
-  /// A routine's actions, as a sheet: run it now, its limits, or delete it. The bot edits it on
-  /// request. A routine stopped at its limits says why, and resumes in Limits instead.
-  function showRoutine(routine: Routine) {
-    const stopped = stoppedRoutine(routine);
-    const state = stopped ? `${stoppedLabel(stopped)}: ${stoppedDetail(stopped)}` : routineDetail(routine);
-    alert(routine.name, `${state}\n${t("Last run: {summary}", { summary: lastRunSummary(routine) })}\n\n${routine.prompt}`, [
-      ...(stopped ? [] : [{ text: t("Run Now"), onPress: () => engine.runRoutine(routine.id) }]),
-      { text: t("Limits"), onPress: () => router.push({ pathname: "/chat-info/limits", params: { kind: "routine", id: routine.id, bot: routine.bot_id } }) },
-      {
-        text: t("Delete"),
-        style: "destructive",
-        onPress: () =>
-          alert(t("Delete “{name}”?", { name: routine.name }), t("This deletes the routine and stops its future runs. This can't be undone."), [
-            { text: t("Cancel"), style: "cancel" },
-            { text: t("Delete routine"), style: "destructive", onPress: () => engine.deleteRoutine(routine.id) },
-          ]),
-      },
-      { text: t("Done"), style: "cancel" },
-    ]);
-  }
   const runner = bot ? devices.find((d) => d.id === bot.runner_id) : undefined;
   const offered = bot ? providerModels(catalog, bot.provider) : [];
   const levels = bot ? thinkingLevels(catalog, bot.provider, bot.model) : [];
@@ -393,9 +379,9 @@ export default function ChatInfoScreen() {
             <Row
               key={routine.id}
               title={routine.name}
-              subtitle={stoppedRoutine(routine) ? `${stoppedLabel(stoppedRoutine(routine)!)} · ${routine.schedule_text}` : routineDetail(routine)}
-              icon={stoppedRoutine(routine) ? undefined : routine.is_running ? "arrow.triangle.2.circlepath" : routine.is_enabled ? "clock" : "pause.circle"}
-              leading={stoppedRoutine(routine) ? <Symbol name="exclamationmark.circle.fill" size={20} color={orange} /> : undefined}
+              subtitle={stoppedRoutine(routine) ? `${stoppedLabel(stoppedRoutine(routine)!)} · ${scheduleText(routine.schedule_text)}` : routineDetail(routine)}
+              icon={routine.is_running ? "arrow.triangle.2.circlepath" : routine.is_enabled ? "clock" : "pause.circle"}
+              leading={routineNeedsUser(routine) ? <Symbol name="exclamationmark.circle.fill" size={20} color={orange} /> : undefined}
               accessory={
                 <Switch
                   value={routine.is_enabled}
@@ -404,7 +390,7 @@ export default function ChatInfoScreen() {
                   thumbColor={Platform.OS === "android" ? p.tint : undefined}
                 />
               }
-              onPress={() => showRoutine(routine)}
+              onPress={() => router.push({ pathname: "/chat-info/routine/[id]", params: { id: routine.id, bot: routine.bot_id } })}
             />
           ))}
         </Section>

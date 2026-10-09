@@ -166,12 +166,19 @@ export interface Routine {
   name: string;
   /** The task, written to the bot, handed to it on every run. */
   prompt: string;
-  /** `every 30m`, `every 2h`, `every 1d`, or five cron fields in the Runner's local time. */
+  /** `every 30m`, `every 2h`, `every 1d`, or five cron fields in `timezone`. */
   schedule: string;
+  /** The IANA timezone a cron schedule reads in. */
+  timezone?: string;
+  /** After due times its Runner missed: "coalesce" runs once when it is back, "skip" waits for the next one. */
+  missed_run_policy?: "coalesce" | "skip";
+  /** How it stands, from the core: "on", "running", "paused", "blocked", "failed", or "waiting_for_runner". */
+  state?: string;
+  health?: RoutineHealth;
   /** "Weekdays at 9:00 AM" */
   schedule_text: string;
   is_enabled: boolean;
-  /** Why Lorca paused it, when it did: "away". */
+  /** Why Lorca paused it, when it did: "away", or "authentication" after three failed sign-ins in a row. */
   paused_reason?: string;
   last_run_at?: number;
   /** "sent", "pass", or "error". */
@@ -181,6 +188,18 @@ export interface Routine {
   /** The script the Runner runs at each due time before the bot does; `next_run_at` is then the next check. */
   check?: string | null;
   created_at: number;
+}
+
+/// How a routine's checks and runs have gone, as its Runner records them.
+export interface RoutineHealth {
+  last_check_at?: number | null;
+  last_success_at?: number | null;
+  /** How the last check went: "quiet", "ready", "failed", or "blocked". */
+  status?: string | null;
+  connection_failures?: number;
+  authentication_failures?: number;
+  /** The runs' own streak with the model provider, which checks do not clear. */
+  model?: { status?: string | null; authentication_failures?: number };
 }
 
 export type Author = { kind: "you" } | { kind: "bot"; bot_id: string } | { kind: "system" };

@@ -112,18 +112,6 @@ export function scheduleText(text: string): string {
   return text;
 }
 
-/// The line under a routine's name: the schedule, then what is going on.
-export function routineDetail(routine: Routine): string {
-  const schedule = scheduleText(routine.schedule_text);
-  if (routine.is_running) return `${schedule} · ${t("Running…")}`;
-  if (!routine.is_enabled) return `${schedule} · ${routine.paused_reason === "away" ? t("Paused while you were away") : t("Paused")}`;
-  if (routine.next_run_at) {
-    const when = upcoming(routine.next_run_at);
-    return `${schedule} · ${routine.check ? t("Next check {when}", { when }) : t("Next {when}", { when })}`;
-  }
-  return schedule;
-}
-
 /// "Today 9:00 AM · replied", "Never", "Yesterday 6:00 PM · nothing to report".
 export function lastRunSummary(routine: Routine): string {
   if (!routine.last_run_at) return t("Never");
