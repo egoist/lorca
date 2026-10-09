@@ -342,6 +342,58 @@ pub enum Body {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         code: Option<String>,
     },
+    /// An email or Slack message the bot wrote in the chat, waiting for the user to send it: the
+    /// chat's view of its review item (`review-status-<review id>`), rewritten as it changes.
+    Draft {
+        review_id: String,
+        /// The item's version, which an edit, Send, and Discard name.
+        version: u64,
+        /// The item's state: `pending`, `approved`, `executing`, `succeeded`, `failed`,
+        /// `rejected`, `cancelled`, or `uncertain`.
+        state: String,
+        plugin_id: String,
+        /// The account it goes out from: "Gmail · Work".
+        account: String,
+        draft: MessageDraft,
+        /// Why it was not sent, or why it needs another look.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+        /// Whether, with drafts off, the bot sends such a message itself: false for a mail
+        /// server that only makes drafts, which keeps them in the account's Drafts.
+        #[serde(default)]
+        direct: bool,
+    },
+}
+
+/// A message a bot wrote to people, as its draft card shows and edits it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct MessageDraft {
+    /// `email` or `slack`.
+    pub kind: String,
+    /// Email addresses, or the Slack channel or person's id.
+    #[serde(default)]
+    pub to: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cc: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bcc: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub subject: String,
+    #[serde(default)]
+    pub body: String,
+    /// The files it carries, by name; an edit keeps the ones it still names.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<DraftAttachment>,
+    /// What it answers: the email's id, or the Slack thread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct DraftAttachment {
+    pub name: String,
+    #[serde(default)]
+    pub size: u64,
 }
 
 /// A message quoted by the user's reply: who wrote it and how it opens, kept with the reply, so

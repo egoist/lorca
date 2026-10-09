@@ -785,6 +785,29 @@ async fn restore_manager(app: &Arc<App>, url: &str, stored: &Value, metadata_url
     state.into_authorization_manager().ok_or_else(|| "Restoring the sign-in".to_string())
 }
 
+/// A native sign-in's access token for the service's own API, refreshed and saved first when it
+/// is about to expire, as a connection refreshes it: what a Gmail draft card's Send sends with.
+pub async fn service_token(app: &Arc<App>, plugin_id: &str, server: &str) -> Result<String, String> {
+    let generation = app.mcp.generation(plugin_id);
+    let (stored, token_endpoint) = {
+        let store = app.plugins.lock().unwrap();
+        let plugin = store.get(plugin_id).ok_or("The account was removed.")?;
+        let Some(ServerSpec::Http { auth: Some(AuthSpec::Oauth { token_endpoint: Some(endpoint), .. }), .. }) = plugin.manifest.servers.get(server) else {
+            return Err("The account has no sign-in to send with.".into());
+        };
+        (store.sign_in_secret(plugin_id, "oauth", server).ok_or("Sign in to the account again.")?, endpoint.clone())
+    };
+    if stored["native_flow"].as_bool() != Some(true) {
+        return Err("Sign in to the account again.".into());
+    }
+    let refreshed = super::oauth::refresh(&app.http, &token_endpoint, &stored).await?;
+    if let Some(refreshed) = &refreshed {
+        super::set_oauth_at_generation(app, plugin_id, server, refreshed.clone(), generation)?;
+    }
+    let saved = refreshed.as_ref().unwrap_or(&stored);
+    saved["tokens"]["access_token"].as_str().map(String::from).ok_or_else(|| "The saved sign-in has no access token".into())
+}
+
 #[derive(Debug)]
 struct DeviceBearer {
     access_token: String,
@@ -2150,6 +2173,15 @@ pub async fn review_call(
         return Some(crate::permissions::refuse(app, chat_id, bot, denied));
     }
     if capability == crate::permissions::Capability::Read { return None; }
+    // An email or Slack message the bot writes in a chat waits as a draft for the user to send,
+    // who reviews it on its card, so Auto-review does not judge it.
+    if !unattended && crate::permissions::drafts_messages(bot) {
+        let message = app.plugins.lock().unwrap().get(&tool.plugin_id).and_then(|plugin| plugin.manifest.tools.message(&name).cloned());
+        if let Some(message) = message {
+            let names = (tool.plugin_id.as_str(), tool.server_name.as_str(), tool.plugin_name.as_str());
+            return Some(crate::drafts::stage(app, bot, chat_id, trigger, &ctx.tool_call.id, names, &name, &message, ctx.args).await);
+        }
+    }
     // The script the call comes from says what the whole batch is for.
     let script = ctx.parent.filter(|parent| parent.name == codemode::CODEMODE_TOOL_NAME).and_then(|parent| parent.arguments["code"].as_str());
     let outcome = super::review::decide(app, bot, chat_id, trigger, &tool.plugin_id, &tool.plugin_name, &name, &review_description, ctx.args, script, ctx.cancel).await;

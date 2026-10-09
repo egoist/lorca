@@ -66,7 +66,11 @@ pub fn authorize_execution(app: &Arc<App>, item: &ReviewItem) -> Result<crate::m
 }
 
 fn authorization_hash(app: &Arc<App>, item: &ReviewItem) -> Result<String, String> {
-    let bot = authorize_execution(app, item)?;
+    let mut bot = authorize_execution(app, item)?;
+    // Turning drafts off decides how the bot's next messages go, not whether this one may.
+    if let Some(permissions) = &mut bot.permissions {
+        permissions.drafts = true;
+    }
     let routine = item.origin.routine_id.as_deref().and_then(|id| app.routine(id)).map(|routine| json!({
         "bot_id": routine.bot_id, "prompt": routine.prompt, "schedule": routine.schedule, "check": routine.check, "enabled": routine.is_enabled
     }));
@@ -197,6 +201,14 @@ fn apply_fields(app: &App, item: &mut ReviewItem, params: &Value) -> Result<(), 
     if let Some(payload) = params.get("payload") {
         item.payload =
             serde_json::from_value(payload.clone()).map_err(|error| error.to_string())?;
+    }
+    // A draft card's edit, as its fields: the Runner puts them onto the call's arguments.
+    if let Some(message) = params.get("message") {
+        let message: crate::model::MessageDraft = serde_json::from_value(message.clone()).map_err(|error| error.to_string())?;
+        let (tool, _) = crate::drafts::tool_of(app, &item.payload).ok_or("This is not a message draft.")?;
+        let ReviewPayload::Plugin { arguments, .. } = &mut item.payload else { unreachable!() };
+        crate::drafts::write(&tool, arguments, &message)?;
+        item.target.resource = crate::drafts::summary(&crate::drafts::read(&tool, arguments));
     }
     if let Some(target) = params.get("target") {
         item.target = serde_json::from_value(target.clone()).map_err(|error| error.to_string())?;
@@ -488,6 +500,7 @@ pub async fn execute_approved(app: &Arc<App>, id: &str) -> Result<(), String> {
         authorize_execution(app, &claimed)?;
     }
     let prepared = verified?;
+    let message = crate::drafts::tool_of(app, &item.payload).map(|(tool, _)| tool);
     let result = match prepared.tool {
         // The accepted text goes back to the chat, where the bot's later turns read it.
         None => Ok(ToolResult::text(match &item.payload {
@@ -495,22 +508,36 @@ pub async fn execute_approved(app: &Arc<App>, id: &str) -> Result<(), String> {
             _ => String::new(),
         })),
         Some(tool) => {
-            let arguments = match &item.payload {
+            let mut arguments = match &item.payload {
                 ReviewPayload::Shell { arguments } | ReviewPayload::Plugin { arguments, .. } => {
                     arguments.clone()
                 }
                 _ => unreachable!(),
             };
-            tokio::time::timeout(
-                std::time::Duration::from_secs(10 * 60),
-                tool.execute(id, arguments, cancel.clone(), Arc::new(|_| {})),
-            )
-            .await
-            .unwrap_or_else(|_| {
-                cancel.cancel();
-                Err(ToolError("timed out after 10 minutes".into()))
-            })
+            match message.as_ref().map(|message| crate::drafts::restore(app, message, &mut arguments)) {
+                Some(Err(error)) => Ok(ToolResult { is_error: true, ..ToolResult::text(error) }),
+                _ => tokio::time::timeout(
+                    std::time::Duration::from_secs(10 * 60),
+                    tool.execute(id, arguments, cancel.clone(), Arc::new(|_| {})),
+                )
+                .await
+                .unwrap_or_else(|_| {
+                    cancel.cancel();
+                    Err(ToolError("timed out after 10 minutes".into()))
+                }),
+            }
         }
+    };
+    // A server that only makes drafts sends the one it made now.
+    let result = match (result, &message, &item.payload) {
+        (Ok(made), Some(message), ReviewPayload::Plugin { plugin_id, server_name, .. }) if !made.is_error && message.send.is_some() => {
+            match crate::drafts::deliver(app, plugin_id, server_name, message, made.structured.as_ref().unwrap_or(&Value::Null)).await {
+                Ok(()) => Ok(made),
+                Err(crate::drafts::Undelivered::Refused(why)) => Ok(ToolResult { is_error: true, ..ToolResult::text(why) }),
+                Err(crate::drafts::Undelivered::Unknown(why)) => Err(ToolError(why)),
+            }
+        }
+        (result, ..) => result,
     };
     let (state, summary, output) = match result {
         Ok(result) => {
@@ -536,12 +563,23 @@ pub async fn execute_approved(app: &Arc<App>, id: &str) -> Result<(), String> {
                     "Failed".into()
                 } else if matches!(item.payload, ReviewPayload::Draft { .. }) {
                     "Accepted".into()
+                } else if message.is_some() {
+                    "Sent".into()
                 } else {
                     "Done".into()
                 },
                 Some(output),
             )
         }
+        Err(error) if message.is_some() => (
+            ReviewState::Uncertain,
+            format!(
+                "The send was cut off ({}), so it may have gone out. Check {} before sending it again.",
+                error.0.chars().take(200).collect::<String>(),
+                crate::drafts::tool_of(app, &item.payload).map(|(_, account)| account).unwrap_or_default()
+            ),
+            None,
+        ),
         Err(error) => (
             ReviewState::Uncertain,
             format!(

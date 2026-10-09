@@ -16,6 +16,7 @@ pub mod credentials;
 pub mod crypto;
 #[cfg(feature = "runner")]
 pub mod decisions;
+pub mod drafts;
 pub mod events;
 pub mod event_triggers;
 pub mod files;

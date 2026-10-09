@@ -1383,6 +1383,7 @@ fn message_search_text(message: &Message) -> Option<String> {
         Body::Handoff { reason, .. } => reason.clone(),
         Body::Notice { text, .. } => text.clone(),
         Body::Permission { summary, .. } => summary.clone(),
+        Body::Draft { draft, .. } => format!("{} {} {}", draft.to.join(" "), draft.subject, draft.body),
         Body::Tool { .. } => return None,
     };
     let text = text.trim().to_string();
@@ -1604,6 +1605,7 @@ fn body_kind(body: &Body) -> &'static str {
         Body::Handoff { .. } => "handoff",
         Body::Notice { .. } => "notice",
         Body::Permission { .. } => "permission",
+        Body::Draft { .. } => "draft",
     }
 }
 

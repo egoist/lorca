@@ -2050,6 +2050,11 @@ fn transcript_bounded(app: &App, chat: &Chat, bot: &Bot, workdir: &std::path::Pa
                 };
                 out.push(user(&task, timestamp));
             }
+            // A message the bot drafted, as it stands now: sent, discarded, or still waiting,
+            // maybe with the user's changes.
+            (Author::Bot { bot_id }, Body::Draft { state, draft, .. }) if bot_id == &bot.id => {
+                out.push(user(&crate::drafts::history_line(state, draft), timestamp));
+            }
             (Author::Bot { bot_id }, Body::Handoff { to, reason, .. }) if bot_id != &bot.id => {
                 let from = name_of(app, bot_id);
                 if to == &bot.id {

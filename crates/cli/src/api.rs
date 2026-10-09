@@ -291,6 +291,10 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                 if let Some(v) = opt_string(&params, "runner_id") { bot.runner_id = v; }
                 if let Some(v) = params["workdir"].as_str() { bot.workdir = Some(v.to_string()).filter(|w| !w.trim().is_empty()); }
                 if let Some(v) = permissions { bot.permissions = Some(v); }
+                // A draft card's Send Directly changes only this, whatever else the policy says.
+                if let Some(v) = params["drafts"].as_bool() {
+                    bot.permissions.get_or_insert_with(Default::default).drafts = v;
+                }
             })
             .map_err(|e| e.to_string())?;
             if access_changed { crate::permissions::dismiss_requests(app, &id); }

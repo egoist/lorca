@@ -209,6 +209,40 @@ pub struct ToolHints {
     /// `toolExposure`: an exact name decides first, then the first pattern that matches.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exposure: Vec<ToolRule>,
+    /// Tools that write a message to people, and which of their arguments hold its parts: in a
+    /// chat, a bot's call to one waits as a draft card for the user to send ([`crate::drafts`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub messages: Vec<MessageTool>,
+}
+
+/// A tool that writes an email or a chat message, as a draft card reads and edits it: the
+/// argument that holds each part. A part the tool lacks is None.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct MessageTool {
+    /// The tool's name or a pattern ending in `*`.
+    pub tool: String,
+    /// `email` or `slack`, which decides the card's fields and words.
+    pub kind: String,
+    /// The recipients: an array of addresses, or one channel id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cc: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bcc: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+    pub body: String,
+    /// An array of `{ filename, mimeType, content }`, the content base64.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachments: Option<String>,
+    /// The message or thread it answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply: Option<String>,
+    /// How a draft the tool made is sent, for a server that only drafts: `gmail` sends it with
+    /// Gmail's API. None when the tool sends the message itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub send: Option<String>,
 }
 
 /// One `toolExposure` entry: a tool's name or a pattern ending in `*`, and whether it is hidden.
@@ -220,7 +254,12 @@ pub struct ToolRule {
 
 impl ToolHints {
     fn is_empty(&self) -> bool {
-        self.readonly.is_empty() && self.draft.is_empty() && self.hide.is_empty() && self.exposure.is_empty()
+        self.readonly.is_empty() && self.draft.is_empty() && self.hide.is_empty() && self.exposure.is_empty() && self.messages.is_empty()
+    }
+
+    /// The message tool `tool` is, when it writes to people.
+    pub fn message(&self, tool: &str) -> Option<&MessageTool> {
+        self.messages.iter().find(|message| pattern_matches(&message.tool, tool))
     }
 
     /// Whether `tool` is kept from bots: by its `exposure` rule (its exact name first, then the
