@@ -167,12 +167,16 @@ export function quoteAuthorName(author: Author, bots: Map<string, Bot>): string 
   return "Lorca";
 }
 
-/// A message that follows a swipe to the right, as in Messages and Google Messages, with a reply
-/// arrow fading in behind it; let go past `REPLY_SWIPE` and the draft answers it. Vertical drags
-/// stay with the transcript, and a leftward one with the system (Android's back gesture). The drag
-/// runs on the UI thread, so the bubble follows the finger while JS is busy with a streaming reply.
-function SwipeToReply({ onReply, children }: { onReply?: () => void; children: React.ReactNode }) {
-  const p = usePalette();
+/// How far from the screen's left edge a drag stays the system's back gesture.
+const BACK_EDGE = 28;
+
+/// Swipe to reply, as in Messages and Google Messages: the bubble, dragged to the right, takes its
+/// row along with a reply arrow fading in behind it; let go past `REPLY_SWIPE` and the draft
+/// answers it. Only a drag that starts on the bubble, away from the left edge, is a reply: one
+/// anywhere else stays the system's back gesture (iOS 26 takes it from the whole content), as does
+/// a leftward one, and vertical ones stay with the transcript. The drag runs on the UI thread, so
+/// the bubble follows the finger while JS is busy with a streaming reply.
+function useSwipeToReply(onReply?: () => void) {
   const offset = useSharedValue(0);
   const armed = useSharedValue(false);
   const pan = useMemo(() => {
@@ -183,6 +187,9 @@ function SwipeToReply({ onReply, children }: { onReply?: () => void; children: R
       .activeOffsetX(14)
       .failOffsetX(-10)
       .failOffsetY([-10, 10])
+      .onTouchesDown((event, manager) => {
+        if ((event.allTouches[0]?.absoluteX ?? 0) < BACK_EDGE) manager.fail();
+      })
       .onUpdate((event) => {
         offset.value = Math.max(0, Math.min(REPLY_SWIPE * 1.4, event.translationX));
         const past = offset.value >= REPLY_SWIPE;
@@ -204,16 +211,7 @@ function SwipeToReply({ onReply, children }: { onReply?: () => void; children: R
     const progress = Math.min(1, offset.value / REPLY_SWIPE);
     return { opacity: progress, transform: [{ scale: 0.6 + 0.4 * progress }] };
   });
-  return (
-    <GestureDetector gesture={pan}>
-      <View>
-        <Animated.View style={[styles.replyArrow, arrow]} pointerEvents="none">
-          <Symbol name="arrowshape.turn.up.left.fill" size={16} color={p.secondaryLabel} />
-        </Animated.View>
-        <Animated.View style={follow}>{children}</Animated.View>
-      </View>
-    </GestureDetector>
-  );
+  return { pan, follow, arrow };
 }
 
 /// `onReply` makes the draft a reply to this message (a swipe to the left), when it can be quoted;
@@ -260,8 +258,13 @@ export const MessageRow = memo(function MessageRow({
   const columnWidth = Math.min(Math.floor(paneWidth * 0.8), BUBBLE_COLUMN_MAX);
   const attachmentWidth = columnWidth - 26 - (showsAvatar ? AVATAR + GUTTER : 0);
   const quoteName = quote ? quoteAuthorName(quote.author, bots) : "";
+  const swipe = useSwipeToReply(reply);
   return (
-    <SwipeToReply onReply={reply}>
+    <View>
+    <Animated.View style={[styles.replyArrow, swipe.arrow]} pointerEvents="none">
+      <Symbol name="arrowshape.turn.up.left.fill" size={16} color={p.secondaryLabel} />
+    </Animated.View>
+    <Animated.View style={swipe.follow}>
     <View style={[styles.messageRow, { paddingTop: groupStart ? 14 : 3 }, isYou ? styles.messageRowYou : styles.messageRowBot]}>
       {showsAvatar && <View style={{ width: AVATAR + GUTTER, alignSelf: "flex-end" }}>{groupEnd && <BotAvatar bot={bot} size={AVATAR} />}</View>}
       <View style={[styles.bubbleColumn, { maxWidth: columnWidth }, isYou && styles.bubbleColumnYou]}>
@@ -284,6 +287,7 @@ export const MessageRow = memo(function MessageRow({
             </Text>
           </Pressable>
         )}
+        <GestureDetector gesture={swipe.pan}>
         <Animated.View
           style={[
             styles.bubble,
@@ -300,6 +304,7 @@ export const MessageRow = memo(function MessageRow({
             </View>
           )}
         </Animated.View>
+        </GestureDetector>
         {held && (
           <Pressable
             onPress={() => engine.sendNow(message.chat_id, message.id).catch((error) => alert(t("Could not send now"), error instanceof Error ? error.message : String(error)))}
@@ -313,7 +318,8 @@ export const MessageRow = memo(function MessageRow({
         )}
       </View>
     </View>
-    </SwipeToReply>
+    </Animated.View>
+    </View>
   );
 }, (a, b) =>
   a.row.message === b.row.message &&
