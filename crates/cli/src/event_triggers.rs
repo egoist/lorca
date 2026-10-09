@@ -25,9 +25,7 @@ const INBOX_KIND: &str = "event_inbox";
 // Why a subscription's work is held, in its health. Each clears when its cause does.
 const AUTH_PROBLEM: &str = "Gateway authentication failed; reconnect and export a fresh route";
 const FAILED_PROBLEM: &str = "Event turn stopped or failed; inspect the chat before retrying";
-#[cfg(feature = "runner")]
 const AWAY_PROBLEM: &str = "Waiting for the user: nobody has written in seven days";
-#[cfg(feature = "runner")]
 const TARGET_PROBLEM: &str = "Target bot or routine is unavailable on this Runner";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -560,14 +558,15 @@ pub fn channel_views(app: &App) -> anyhow::Result<Vec<ChannelView>> {
     Ok(views)
 }
 
-/// The channels of an account by id, or every channel with an empty `account_id`.
-pub fn channel_configs(app: &App, account_id: &str) -> anyhow::Result<Vec<(String, SubscriptionConfig)>> {
+/// The channels of an account by id, or every channel with an empty `account_id`, each with
+/// when it last started listening (created or resumed), in Unix seconds.
+pub fn channel_configs(app: &App, account_id: &str) -> anyhow::Result<Vec<(String, SubscriptionConfig, i64)>> {
     let Some(key) = app.dek() else { return Ok(Vec::new()) };
     let db = app.store.connection.lock().unwrap();
     Ok(subscriptions(&db, &key)?
         .into_iter()
         .filter(|sub| sub.config.channel.as_ref().is_some_and(|spec| account_id.is_empty() || spec.account_id == account_id))
-        .map(|sub| (sub.id, sub.config))
+        .map(|sub| (sub.id, sub.config, sub.enabled_at))
         .collect())
 }
 
@@ -1055,20 +1054,17 @@ pub fn tick(app: &Arc<App>) -> anyhow::Result<()> {
                 continue;
             }
         }
-        // A channel's message runs in its conversation, resolved for the next pending delivery
-        // before the store lock, since roster state is taken first; other events in the bot's DM.
+        // A channel's message runs in its conversation, found among the channel's conversations
+        // as the roster has them before the store lock, since roster state is taken first; other
+        // events run in the bot's DM.
         let dm = if sub.config.is_channel() { None } else { Some(app.dm_with(&sub.config.bot_id, None)?) };
-        let conversation = if dm.is_none() {
-            let next = {
-                let db = app.store.connection.lock().unwrap();
-                deliveries_of(&db, &key, &sub.id)?.into_iter().find(|d| d.state == DeliveryState::Pending)
-            };
-            match next {
-                Some(next) => Some((next.id.clone(), conversation_of(app, &sub, &next.envelope))),
-                None => continue,
-            }
+        let conversations: Vec<String> = if dm.is_none() {
+            app.state.lock().unwrap().chats.iter()
+                .filter(|chat| chat.meta.channel.as_ref().is_some_and(|c| c.channel_id == sub.id) && chat.meta.bot_ids.contains(&sub.config.bot_id))
+                .map(|chat| chat.meta.id.clone())
+                .collect()
         } else {
-            None
+            Vec::new()
         };
         let requested_by = app.this_device_id().unwrap_or_default();
         let mut db = app.store.connection.lock().unwrap();
@@ -1095,12 +1091,9 @@ pub fn tick(app: &Arc<App>) -> anyhow::Result<()> {
         else {
             continue;
         };
-        let (chat_id, message_id, data) = match (&dm, conversation) {
-            (Some(dm), _) => (dm.meta.id.clone(), None, event_cue(&item.envelope)),
-            // Another delivery came first after all: the next tick resolves it.
-            (None, Some((resolved, _))) if resolved != item.id => continue,
-            (None, None) => continue,
-            (None, Some((_, found))) => match found {
+        let (chat_id, message_id, data) = match &dm {
+            Some(dm) => (dm.meta.id.clone(), None, event_cue(&item.envelope)),
+            None => match conversation_of(&conversations, &item.envelope) {
                 Some((chat_id, message_id, data)) => (chat_id, Some(message_id), data),
                 // The user deleted the conversation: the message goes with it.
                 None => {
@@ -1147,18 +1140,13 @@ pub fn tick(app: &Arc<App>) -> anyhow::Result<()> {
 }
 
 /// A channel's delivery: its conversation, the contact's message there, and the turn's closing
-/// note. The conversation must still be the channel's, with the channel's bot in it.
+/// note. The conversation must still be one of the channel's with its bot in it, `conversations`.
 #[cfg(feature = "runner")]
-fn conversation_of(app: &App, sub: &Subscription, event: &Envelope) -> Option<(String, String, String)> {
+fn conversation_of(conversations: &[String], event: &Envelope) -> Option<(String, String, String)> {
     let payload: Value = serde_json::from_str(&event.payload).ok()?;
-    let chat = app.chat(payload["chat_id"].as_str()?)?;
-    let channel = chat.meta.channel.as_ref()?;
-    if channel.channel_id != sub.id || !chat.meta.bot_ids.contains(&sub.config.bot_id) {
-        return None;
-    }
+    let chat_id = conversations.iter().find(|id| Some(id.as_str()) == payload["chat_id"].as_str())?;
     let message_id = payload["message_id"].as_str()?.to_string();
-    let place = chat.meta.title.clone().unwrap_or_else(|| sub.config.name.clone());
-    Some((chat.meta.id, message_id, crate::channels::cue(payload["sender"].as_str().unwrap_or("Someone"), &place)))
+    Some((chat_id.clone(), message_id, crate::channels::cue(payload["external_id"].as_str().unwrap_or_default())))
 }
 
 pub fn event_cue(event: &Envelope) -> String {

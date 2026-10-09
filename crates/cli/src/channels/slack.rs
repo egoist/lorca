@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use tokio_tungstenite::tungstenite::Message as Frame;
 use tokio_util::sync::CancellationToken;
 
-use super::{ingest, pause, set_identity, set_problem, Identity, Incoming, SLACK};
+use super::{clean, ingest, pause, set_identity, set_problem, Identity, Incoming, SLACK};
 use crate::app::App;
 use crate::plugins::builtin::{structured_result, text_result};
 
@@ -179,6 +179,7 @@ pub fn incoming(account_id: &str, me: &Identity, event: &Value) -> Option<Incomi
         // In a channel every exchange is a thread: a new message starts one, which the bot's
         // reply joins. A direct message is one conversation.
         thread_id: if private { None } else { Some(thread_ts.clone().unwrap_or_else(|| ts.clone())) },
+        date: ts.split('.').next().and_then(|seconds| seconds.parse().ok()).unwrap_or(0),
         message_id: ts,
         reply_to: None,
         sender: user.to_string(),
@@ -204,7 +205,7 @@ impl Names {
                 let profile = &found["user"]["profile"];
                 let name = [profile["display_name"].as_str(), profile["real_name"].as_str(), found["user"]["name"].as_str()].into_iter().flatten().find(|name| !name.trim().is_empty());
                 if let Some(name) = name {
-                    self.users.insert(message.sender.clone(), name.to_string());
+                    self.users.insert(message.sender.clone(), clean(name, 64));
                 }
             }
         }
@@ -219,7 +220,7 @@ impl Names {
             let found = tokio::time::timeout(Duration::from_millis(1500), call(app, token, "conversations.info", json!({ "channel": message.chat_id }))).await;
             if let Ok(Ok(found)) = found {
                 if let Some(name) = found["channel"]["name"].as_str() {
-                    self.channels.insert(message.chat_id.clone(), format!("#{name}"));
+                    self.channels.insert(message.chat_id.clone(), format!("#{}", clean(name, 80)));
                 }
             }
         }

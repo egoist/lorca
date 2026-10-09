@@ -483,23 +483,40 @@ pub async fn handle(app: &Arc<App>, method: &str, params: &Value) -> Result<Valu
 /// when it is still there with the same bot and account, else the Runner's channel of that bot,
 /// account, and name (a lost reply), else a new one. One whose account changed is replaced.
 async fn turn_on_channels(app: &Arc<App>, setup: &mut Setup) -> Result<(), String> {
+    if setup.pack.channels.is_empty() {
+        return Ok(());
+    }
+    // The Runner's own list, not what it last advertised, so turning the workflow on again
+    // finds the channel it made even before that reached this Device.
+    let listed = crate::event_triggers::dispatch(app, "events.list", json!({ "runner_id": setup.runner_id })).await?;
+    let channels: Vec<(String, crate::event_triggers::SubscriptionConfig)> = listed["subscriptions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|s| Some((s["id"].as_str()?.to_string(), serde_json::from_value(s["config"].clone()).ok()?)))
+        .filter(|(_, config): &(String, crate::event_triggers::SubscriptionConfig)| config.is_channel())
+        .collect();
     for spec in setup.pack.channels.clone() {
         let bot_id = setup.bot_ids.get(&spec.specialist_id).cloned().ok_or("Set up the workflow's bot first.")?;
         let account_id = setup.connection_ids.get(&spec.service_id).cloned().ok_or("Choose the workflow's account first.")?;
-        let channel = crate::channels::ChannelSpec { account_id: account_id.clone(), chats: Vec::new(), listen: spec.listen.clone().normalized() };
-        let config = crate::channels::config_for(&bot_id, &spec.service_id, &spec.name, &spec.task, channel);
-        let advertised = app.device(&setup.runner_id).map(|runner| runner.channels).unwrap_or_default();
-        let recorded = setup.channel_ids.get(&spec.id).and_then(|id| advertised.iter().find(|c| &c.id == id));
+        let same = |config: &crate::event_triggers::SubscriptionConfig| {
+            config.bot_id == bot_id && config.channel.as_ref().is_some_and(|c| c.account_id == account_id)
+        };
+        let recorded = setup.channel_ids.get(&spec.id).and_then(|id| channels.iter().find(|(c, _)| c == id));
         let existing = recorded
-            .filter(|c| c.bot_id == bot_id && c.account_id == account_id)
-            .or_else(|| advertised.iter().find(|c| c.bot_id == bot_id && c.account_id == account_id && c.name == config.name));
-        if let Some(stale) = recorded.filter(|c| existing.is_none_or(|e| e.id != c.id)) {
-            let _ = crate::event_triggers::dispatch(app, "events.delete", json!({ "runner_id": setup.runner_id, "id": stale.id })).await;
+            .filter(|(_, config)| same(config))
+            .or_else(|| channels.iter().find(|(_, config)| same(config) && config.name == spec.name));
+        if let Some((stale, _)) = recorded.filter(|(id, _)| existing.is_none_or(|(e, _)| e != id)) {
+            let _ = crate::event_triggers::dispatch(app, "events.delete", json!({ "runner_id": setup.runner_id, "id": stale })).await;
         }
+        // Chats the user narrowed the channel to stay narrowed.
+        let chats = existing.and_then(|(_, config)| config.channel.as_ref()).map(|c| c.chats.clone()).unwrap_or_default();
+        let channel = crate::channels::ChannelSpec { account_id: account_id.clone(), chats, listen: spec.listen.clone().normalized() };
+        let config = crate::channels::config_for(&bot_id, &spec.service_id, &spec.name, &spec.task, channel);
         let id = match existing {
-            Some(existing) => {
-                crate::event_triggers::dispatch(app, "events.update", json!({ "runner_id": setup.runner_id, "id": existing.id, "config": config })).await?;
-                existing.id.clone()
+            Some((id, _)) => {
+                crate::event_triggers::dispatch(app, "events.update", json!({ "runner_id": setup.runner_id, "id": id, "config": config })).await?;
+                id.clone()
             }
             None => {
                 let created = crate::event_triggers::dispatch(app, "events.create", json!({ "runner_id": setup.runner_id, "config": config })).await?;
@@ -1281,6 +1298,16 @@ mod tests {
         assert_eq!(get(app, &setup.id).unwrap().channel_ids["community"], channel.id);
         let viewed = handle(app, "workflows.get", &json!({"id":setup.id})).await.unwrap();
         assert_eq!(viewed["channels"][0]["channel"]["id"], channel.id);
+        // The user narrowed it to one chat. Turning it on again, even without the record of
+        // its id, finds it on the Runner and keeps the chat.
+        let chats = vec![crate::channels::ChannelChat { id: "-1001".into(), title: "Acme Community".into() }];
+        let narrowed = crate::channels::config_for(&channel.bot_id, "telegram", &channel.name, &channel.task, crate::channels::ChannelSpec { account_id: telegram.id.clone(), chats, listen: channel.listen.clone() });
+        crate::event_triggers::serve(app, "events.update", &json!({"id":channel.id,"config":narrowed})).unwrap();
+        let mut again = get(app, &setup.id).unwrap();
+        again.channel_ids.clear();
+        turn_on_channels(app, &mut again).await.unwrap();
+        let statuses = app.channels.statuses();
+        assert_eq!((statuses.len(), statuses[0].id.as_str(), statuses[0].chats.len()), (1, channel.id.as_str(), 1));
         handle(app, "workflows.cancel", &json!({"id":setup.id})).await.unwrap();
         assert_eq!(app.channels.statuses()[0].state, "paused", "turning it off pauses the channel and keeps it");
     }

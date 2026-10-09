@@ -9,7 +9,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
-use super::{ingest, load_account, pause, save_account, set_identity, set_problem, Identity, Incoming, TELEGRAM};
+use super::{clean, ingest, load_account, mentions, pause, save_account, set_identity, set_problem, Identity, Incoming, TELEGRAM};
 use crate::app::App;
 use crate::plugins::builtin::{structured_result, text_result};
 
@@ -120,10 +120,9 @@ pub async fn read(app: Arc<App>, account_id: String, token: String, cancel: Canc
                 continue;
             }
         };
-        if failures > 0 {
-            failures = 0;
-            set_problem(&app, &account_id, None);
-        }
+        // A poll that went through clears whatever the last one ran into.
+        failures = 0;
+        set_problem(&app, &account_id, None);
         let mut stuck = false;
         for update in updates.as_array().into_iter().flatten() {
             let Some(update_id) = update["update_id"].as_i64() else { continue };
@@ -193,17 +192,16 @@ pub fn incoming(account_id: &str, me: &Identity, update: &Value) -> Option<Incom
     let text = message["text"].as_str().or_else(|| message["caption"].as_str())?.to_string();
     let chat = &message["chat"];
     let private = chat["type"] == "private";
-    let sender = person(from);
+    let sender = clean(&person(from), 64);
     let reply = &message["reply_to_message"];
     // In a forum, a message that answers nobody points at its topic's opening message.
     let opens_topic = reply.get("forum_topic_created").is_some();
     let thread_id = (message["is_topic_message"] == true).then(|| id_text(&message["message_thread_id"])).flatten();
-    let mut chat_title = if private { sender.clone() } else { chat["title"].as_str().unwrap_or("Telegram").to_string() };
+    let mut chat_title = if private { sender.clone() } else { clean(chat["title"].as_str().unwrap_or("Telegram"), 80) };
     if let (Some(_), Some(topic)) = (&thread_id, reply["forum_topic_created"]["name"].as_str()) {
-        chat_title = format!("{chat_title} · {topic}");
+        chat_title = format!("{chat_title} · {}", clean(topic, 60));
     }
-    let handle = me.username.to_lowercase();
-    let mentions_bot = (!handle.is_empty() && text.to_lowercase().contains(&handle))
+    let mentions_bot = mentions(&text, &me.username)
         || message["entities"].as_array().into_iter().flatten().chain(message["caption_entities"].as_array().into_iter().flatten()).any(|entity| entity["type"] == "text_mention" && id_text(&entity["user"]["id"]).as_deref() == Some(me.user_id.as_str()));
     let replies_to_bot = !opens_topic && !me.user_id.is_empty() && id_text(&reply["from"]["id"]).as_deref() == Some(me.user_id.as_str());
     Some(Incoming {
@@ -217,6 +215,7 @@ pub fn incoming(account_id: &str, me: &Identity, update: &Value) -> Option<Incom
         reply_to: (!opens_topic).then(|| id_text(&reply["message_id"])).flatten(),
         sender,
         text,
+        date: message["date"].as_i64().unwrap_or(0),
         mentions_bot,
         replies_to_bot,
     })

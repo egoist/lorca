@@ -66,16 +66,17 @@ async fn run(app: Weak<App>, plugin_id: String, service: Arc<dyn Service>, io: D
     let (read, write) = tokio::io::split(io);
     let writer: Writer = Arc::new(tokio::sync::Mutex::new(write));
     let mut lines = BufReader::new(read).lines();
-    // Calls in flight by request id, so a `notifications/cancelled` stops one.
-    let calls: Arc<Mutex<HashMap<String, tokio::task::AbortHandle>>> = Arc::default();
+    // Calls in flight by request id, so a `notifications/cancelled` stops one. A call stops
+    // between awaits of its own, never halfway through writing its reply.
+    let calls: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<()>>>> = Arc::default();
     while let Ok(Some(line)) = lines.next_line().await {
         let Ok(message) = serde_json::from_str::<Value>(&line) else { continue };
         let Some(app) = app.upgrade() else { return };
         let method = message["method"].as_str().unwrap_or_default().to_string();
         let Some(id) = message.get("id").cloned() else {
             if method == "notifications/cancelled" {
-                if let Some(call) = calls.lock().unwrap().remove(&message["params"]["requestId"].to_string()) {
-                    call.abort();
+                if let Some(cancel) = calls.lock().unwrap().remove(&message["params"]["requestId"].to_string()) {
+                    let _ = cancel.send(());
                 }
             }
             continue;
@@ -97,20 +98,21 @@ async fn run(app: Weak<App>, plugin_id: String, service: Arc<dyn Service>, io: D
             "tools/list" => send(&writer, reply(json!({ "tools": service.tools(&app, &plugin_id) }))).await,
             "tools/call" => {
                 let (writer, service, plugin_id, calls_left) = (writer.clone(), service.clone(), plugin_id.clone(), calls.clone());
-                let key = id.to_string();
+                let (cancel, cancelled) = tokio::sync::oneshot::channel();
+                calls.lock().unwrap().insert(id.to_string(), cancel);
                 let params = message["params"].clone();
-                let task = tokio::spawn(async move {
+                tokio::spawn(async move {
                     let tool = params["name"].as_str().unwrap_or_default();
                     let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
-                    let result = service.call(&app, &plugin_id, tool, args, &params["_meta"]).await;
-                    send(&writer, json!({ "jsonrpc": "2.0", "id": id, "result": result })).await;
-                    calls_left.lock().unwrap().remove(&id.to_string());
+                    tokio::select! {
+                        result = service.call(&app, &plugin_id, tool, args, &params["_meta"]) => {
+                            calls_left.lock().unwrap().remove(&id.to_string());
+                            send(&writer, json!({ "jsonrpc": "2.0", "id": id, "result": result })).await;
+                        }
+                        // The client stopped waiting: no reply.
+                        _ = cancelled => {}
+                    }
                 });
-                let mut calls = calls.lock().unwrap();
-                // One that finished already removed itself before it was here to remove.
-                if !task.is_finished() {
-                    calls.insert(key, task.abort_handle());
-                }
             }
             // `server/discover` and anything else: a server of the initialize era.
             _ => send(&writer, json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32601, "message": format!("Method not found: {method}") } })).await,
