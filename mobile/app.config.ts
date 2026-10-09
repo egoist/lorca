@@ -13,6 +13,7 @@ export default (): ExpoConfig => {
   const appId = development ? "app.lorca.dev" : "app.lorca";
   const appGroup = development ? "group.app.lorca.dev" : "group.app.lorca";
   const icon = development ? "./assets/icon-dev.png" : "./assets/icon.png";
+  const adaptiveIcon = development ? "./assets/adaptive-icon-dev.png" : "./assets/adaptive-icon.png";
   const splash = development ? "./assets/splash-icon-dev.png" : "./assets/splash-icon.png";
   const favicon = development ? "./assets/favicon-dev.png" : "./assets/favicon.png";
   const adaptiveIconBackgroundColor = development ? "#ffbe00" : "#3424f5";
@@ -56,9 +57,12 @@ export default (): ExpoConfig => {
       package: appId,
       // Firebase project lorca-a03db, with a client for app.lorca and app.lorca.dev: FCM tokens for pushes.
       googleServicesFile: "./google-services.json",
+      // The launcher shows the middle 72 of the layer's 108 dp through its mask: the icon's art is
+      // scaled into that square, its edges extended past it. The monochrome eyes are the themed icon.
       adaptiveIcon: {
         backgroundColor: adaptiveIconBackgroundColor,
-        foregroundImage: icon,
+        foregroundImage: adaptiveIcon,
+        monochromeImage: "./assets/adaptive-icon-monochrome.png",
       },
       predictiveBackGestureEnabled: true,
       versionCode: major * 1_000_000 + minor * 1_000 + patch,
