@@ -372,6 +372,9 @@ pub fn serve(app: &Arc<App>, method: &str, body: &Value) -> anyhow::Result<Value
     } else {
         None
     };
+    // A change that can hold or release work updates the subscription's attention item.
+    let mut touched = None;
+    let mut deleted = None;
     let mut db = app.store.connection.lock().unwrap();
     let tx = db.transaction()?;
     let reply = match method {
@@ -424,6 +427,7 @@ pub fn serve(app: &Arc<App>, method: &str, body: &Value) -> anyhow::Result<Value
                 }
             }
             save_subscription(&tx, &key, &sub)?;
+            touched = Some(sub.id.clone());
             summary(&sub, &deliveries(&tx, &key)?, now_unix())
         }
         "events.route" => {
@@ -439,7 +443,7 @@ pub fn serve(app: &Arc<App>, method: &str, body: &Value) -> anyhow::Result<Value
             })?
         }
         "events.delete" => {
-            subscription(&tx, &key, id)?;
+            deleted = Some(subscription(&tx, &key, id)?.config.bot_id);
             if deliveries(&tx, &key)?
                 .iter()
                 .any(|d| d.envelope.subscription_id == id && d.state == DeliveryState::Running)
@@ -475,17 +479,101 @@ pub fn serve(app: &Arc<App>, method: &str, body: &Value) -> anyhow::Result<Value
             let mut sub = subscription(&tx, &key, &item.envelope.subscription_id)?;
             clear_problem(&mut sub, FAILED_PROBLEM);
             save_subscription(&tx, &key, &sub)?;
+            touched = Some(sub.id);
             json!({"id": item.id, "state": item.state})
         }
         _ => bail!("Unknown event method"),
     };
     tx.commit()?;
+    drop(db);
+    if let Some(sub_id) = touched {
+        report_held(app, &sub_id);
+    }
+    if let Some(source) = deleted.and_then(|bot_id| dm_source(app, &bot_id)) {
+        crate::attention::settle(app, &source, &held_prefix(id));
+        crate::attention::settle(app, &source, &auth_prefix(id));
+    }
     Ok(reply)
 }
 
 fn clear_problem(sub: &mut Subscription, problem: &str) {
     if sub.health.problem.as_deref() == Some(problem) {
         sub.health.problem = None;
+    }
+}
+
+fn held_prefix(id: &str) -> String {
+    format!("event:{id}:held:")
+}
+
+fn auth_prefix(id: &str) -> String {
+    format!("event:{id}:auth:")
+}
+
+fn dm_source(app: &App, bot_id: &str) -> Option<crate::attention::Source> {
+    let dm = app.dm_with(bot_id, None).ok()?;
+    Some(crate::attention::Source { chat_id: dm.meta.id, task_id: None, message_id: None, review_id: None })
+}
+
+/// Keeps a quiet attention item in the bot's DM while a subscription's work waits on the user:
+/// a delivery that failed or was interrupted, or a gateway that stopped authenticating. Each
+/// settles once the user retries, discards, or reconnects. Called without the store lock, since
+/// it resolves the DM and writes the attention table.
+fn report_held(app: &App, sub_id: &str) {
+    let Some(key) = app.dek() else { return };
+    let (sub, held) = {
+        let db = app.store.connection.lock().unwrap();
+        let Ok(sub) = subscription(&db, &key, sub_id) else { return };
+        let held = deliveries_of(&db, &key, sub_id)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|d| matches!(d.state, DeliveryState::Failed | DeliveryState::Uncertain));
+        (sub, held)
+    };
+    let Some(source) = dm_source(app, &sub.config.bot_id) else { return };
+    let runner = app
+        .this_device_id()
+        .and_then(|id| app.device(&id))
+        .map(|device| device.name)
+        .unwrap_or_else(|| "its Runner".into());
+    let raise = |prefix: String, fresh: &str, title: String, summary: &str, next_action: String| {
+        let report = crate::attention::Report {
+            key: String::new(),
+            category: crate::attention::Category::Blocker,
+            title,
+            summary: summary.into(),
+            next_action,
+            source: source.clone(),
+            coordinator_bot_id: Some(sub.config.bot_id.clone()),
+            urgent: false,
+            quiet: true,
+        };
+        crate::attention::raise(app, &prefix, fresh, report, Some(&sub.config.bot_id));
+    };
+    match &held {
+        Some(item) => raise(
+            held_prefix(&sub.id),
+            &item.id,
+            format!("Events on hold: {}", sub.config.name),
+            if item.state == DeliveryState::Uncertain {
+                "Lorca stopped during an event’s turn, which may have acted already, so later events wait."
+            } else {
+                "An event’s turn didn’t finish, so later events wait."
+            },
+            format!("Read the chat, then retry or discard the event on {runner} with lorca events."),
+        ),
+        None => crate::attention::settle(app, &source, &held_prefix(&sub.id)),
+    }
+    if sub.health.problem.as_deref() == Some(AUTH_PROBLEM) {
+        raise(
+            auth_prefix(&sub.id),
+            &sub.generation.to_string(),
+            format!("Events refused: {}", sub.config.name),
+            "An event from its gateway didn’t match its route, so Lorca refused it.",
+            format!("Run lorca events reconnect on {runner}, then give the gateway the new route."),
+        );
+    } else {
+        crate::attention::settle(app, &source, &auth_prefix(&sub.id));
     }
 }
 
@@ -569,12 +657,17 @@ pub fn receive(app: &App, event: Envelope) -> anyhow::Result<Value> {
         return Ok(json!({"status": "rejected", "reason": "unknown_subscription"}));
     };
     let mut sub: Subscription = crypto::decrypt_json(&key, SUB_KIND, &bytes)?;
+    let refused = sub.health.problem.as_deref() == Some(AUTH_PROBLEM);
     let verified = validate_envelope(&sub.secret, &event, now);
     if verified.is_err() || sub.generation != event.generation {
         sub.health.authentication_failures += 1;
         sub.health.problem = Some(AUTH_PROBLEM.into());
         save_subscription(&tx, &key, &sub)?;
         tx.commit()?;
+        drop(db);
+        if !refused {
+            report_held(app, &sub.id);
+        }
         return Ok(json!({"status": "rejected", "reason": "authentication"}));
     }
     let exists = tx
@@ -623,6 +716,10 @@ pub fn receive(app: &App, event: Envelope) -> anyhow::Result<Value> {
     clear_problem(&mut sub, AUTH_PROBLEM);
     save_subscription(&tx, &key, &sub)?;
     tx.commit()?;
+    drop(db);
+    if refused {
+        report_held(app, &sub.id);
+    }
     Ok(json!({"status": if matched { "queued" } else { "filtered" }, "id": id}))
 }
 
@@ -726,6 +823,10 @@ pub fn finished(
     save_delivery(&tx, &key, &item)?;
     save_subscription(&tx, &key, &sub)?;
     tx.commit()?;
+    drop(db);
+    if !success {
+        report_held(app, &sub.id);
+    }
     Ok(())
 }
 
@@ -735,14 +836,20 @@ pub fn recover(app: &App) -> anyhow::Result<()> {
     let Some(key) = app.dek() else { return Ok(()) };
     let mut db = app.store.connection.lock().unwrap();
     let tx = db.transaction()?;
+    let mut held = std::collections::BTreeSet::new();
     for mut item in deliveries(&tx, &key)?
         .into_iter()
         .filter(|d| d.state == DeliveryState::Running)
     {
         item.state = DeliveryState::Uncertain;
         save_delivery(&tx, &key, &item)?;
+        held.insert(item.envelope.subscription_id.clone());
     }
     tx.commit()?;
+    drop(db);
+    for sub_id in held {
+        report_held(app, &sub_id);
+    }
     Ok(())
 }
 
@@ -813,7 +920,11 @@ pub fn tick(app: &Arc<App>) -> anyhow::Result<()> {
             continue;
         }
         if let Some(id) = &sub.config.routine_id {
-            if !app.routine(id).is_some_and(|r| r.is_enabled) || app.is_routine_running(id) {
+            // A paused routine, or one stopped at its limits, holds the events aimed at it.
+            if !app.routine(id).is_some_and(|r| r.is_enabled)
+                || app.is_routine_running(id)
+                || app.budgets.admit(app, "routine", id).is_err()
+            {
                 continue;
             }
         }
@@ -967,6 +1078,9 @@ mod tests {
     fn items(app: &App) -> Vec<Delivery> {
         deliveries(&app.store.connection.lock().unwrap(), &app.dek().unwrap()).unwrap()
     }
+    fn attention(app: &App) -> Vec<String> {
+        crate::attention::view(app).unwrap().items.into_iter().map(|item| item.title).collect()
+    }
 
     #[test]
     fn authenticity_binds_payload_and_all_metadata_and_rejects_stale_deliveries() {
@@ -1079,6 +1193,7 @@ mod tests {
             receive(&scratch.0, event(&route, "4")).unwrap()["status"],
             "rejected"
         );
+        assert_eq!(attention(&scratch.0), ["Events refused: Repository updates"]);
         let renewed: GatewayRoute =
             serde_json::from_value(serve(&scratch.0, "events.route", &json!({"id": id})).unwrap())
                 .unwrap();
@@ -1090,6 +1205,7 @@ mod tests {
             receive(&scratch.0, event(&renewed, "4")).unwrap()["status"],
             "queued"
         );
+        assert!(attention(&scratch.0).is_empty(), "a delivery that authenticates settles it");
         assert_ne!(route.secret, renewed.secret);
     }
 
@@ -1328,6 +1444,51 @@ mod tests {
             listed["subscriptions"][0]["health"]["last_outcome"],
             "error"
         );
+        assert_eq!(attention(&scratch.0), ["Events on hold: Repository updates"]);
+        serve(&scratch.0, "events.discard", &json!({"id": items(&scratch.0)[0].id})).unwrap();
+        assert!(attention(&scratch.0).is_empty(), "discarding the held event settles it");
+    }
+
+    #[cfg(feature = "runner")]
+    #[tokio::test]
+    async fn resuming_a_turn_stopped_at_its_limits_returns_the_event_to_its_inbox() {
+        let scratch = scratch();
+        let (_, route) = create(&scratch.0, QueuePolicy::Fifo);
+        let delivery = receive(&scratch.0, event(&route, "1")).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let bot = config(&scratch.0, QueuePolicy::Fifo).bot_id;
+        let dm = scratch.0.dm_with(&bot, None).unwrap();
+        crate::budgets::serve(
+            &scratch.0,
+            "budgets.set",
+            &json!({"kind": "chat", "id": dm.meta.id, "limits": {"max_runtime_secs": 1}}),
+        )
+        .unwrap();
+        let job: crate::model::Job = serde_json::from_value(json!({
+            "id": format!("event-{delivery}"), "chat_id": dm.meta.id, "bot_id": bot,
+            "kind": "event", "trigger_message_id": delivery,
+            "requested_by": scratch.0.this_device_id().unwrap(), "created_at": 0.0
+        }))
+        .unwrap();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let stopped = crate::budgets::for_job(&scratch.0, &job)
+            .unwrap()
+            .run(&cancel, tokio::time::sleep(std::time::Duration::from_secs(3)))
+            .await;
+        assert!(stopped.is_err(), "the turn stops at its run time limit");
+        let mut item = items(&scratch.0).remove(0);
+        item.state = DeliveryState::Failed;
+        save_delivery(&scratch.0.store.connection.lock().unwrap(), &scratch.0.dek().unwrap(), &item).unwrap();
+
+        crate::budgets::serve(
+            &scratch.0,
+            "budgets.resume",
+            &json!({"kind": "job", "id": job.id, "request_id": "resume-event", "renew": true, "run": true}),
+        )
+        .unwrap();
+        assert_eq!(items(&scratch.0)[0].state, DeliveryState::Pending);
     }
 
     #[test]

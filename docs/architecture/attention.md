@@ -12,11 +12,12 @@ The shared Rust hooks are `attention::report(app: &Arc<App>, report: Report, act
 
 ## What raises items on its own
 
-Durable tasks, the review queue, and handoffs keep their items themselves through `attention::raise` and `attention::settle`, quietly, since each already tells the bots and the user in its own way: an item only joins the list and the coordinator's prompt. A producer keeps one active item per topic prefix and source (task or chat), says it again in fresh words while the work stays where it is, and settles it when the work moves on; the next time, a new key starts a new item.
+Durable tasks, the review queue, handoffs, and event subscriptions keep their items themselves through `attention::raise` and `attention::settle`, quietly, since each already tells the bots and the user in its own way: an item only joins the list and the coordinator's prompt. A producer keeps one active item per topic prefix and source (task or chat), says it again in fresh words while the work stays where it is, and settles it when the work moves on; the next time, a new key starts a new item.
 
 - **Tasks** (`tasks::changed`, on the task's authority): a blocked task is a blocker (`task:blocked:r<revision>`, the reason and the next action), a task awaiting review a review (`task:review:…`); leaving that state settles it.
 - **Reviews** (`review_queue::save`, on the item's Runner): a pending item is a review (`review:<id>:v<version>`, its summary and rationale, linked to its status message); a decision settles it, and an item invalidated after approval comes back under its new version.
 - **Handoffs** (`handoffs::route_report`, on the requesting Runner): a blocked or failed attempt is a blocker for the requesting bot (`handoff:<id>:<job>`, linked to the report marker); a follow-up, the requester's cancellation, or a later completed attempt settles it.
+- **Event subscriptions** (`event_triggers`, on the subscription's Runner): a delivery that failed or was interrupted is a blocker in the bot's DM (`event:<subscription>:held:<delivery>`), as is a gateway that stopped authenticating (`event:<subscription>:auth:<generation>`); a retry or discard, an authenticated delivery, a reconnect, or removing the subscription settles it.
 
 A report's `task_id` must name a task this Device has. The `attention` tool is one of Lorca's own tools, which a bot's Access leaves alone, as it does `message_bot`.
 

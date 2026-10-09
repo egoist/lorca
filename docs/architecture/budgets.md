@@ -11,7 +11,7 @@ Limits apply to three scopes:
 - `task`: all runs of a [durable task](tasks.md) together, once the user sets limits on it from the task sheet. A task's run counts only toward the task. When the task's limits stop a run, the run's outcome blocks the task with the limit's reason (`tasks::execution::budget_block_reason` reads the task's snapshot), and the task sheet's Resume opens Limits, since a new run would only be refused again.
 - `routine`: all runs of a routine and its checks together, until the user resumes it with fresh limits. A routine's run counts only toward the routine.
 
-A `message_bot` handoff is the target bot's turn and counts toward the target's DM limits.
+A `message_bot` handoff is the target bot's turn and counts toward the target's DM limits. An [event's](event-triggers.md#durable-ordering-and-execution) turn counts toward its DM's limits, or its routine's when its subscription targets one.
 
 The ledger keeps only what someone may look at or resume: limits the user set, a turn or routine that stopped, and work in flight. A turn that finishes on its own drops its record. A new turn in a chat replaces a stopped one there, since the user moved on. Records for a deleted chat or routine, other Runners' projections once unpaired, and resume receipts older than a week are pruned. Work with no limits touches no ledger.
 
@@ -46,7 +46,7 @@ Snapshots carry the scope, its limits and usage, `state` (`ready`, `running`, `c
 | `budgets.set` | `kind` (`chat`, `job`, `task`, or `routine`), `id`, `limits`, `runner_id?`, `bot_id` for a turn, `chat_id?`; sets the limits and keeps what was used |
 | `budgets.resume` | `kind`, `id`, `request_id`, `runner_id?`, `renew?`, `run?`; resumes stopped work |
 
-Another Device's call goes to the bot's Runner through the existing sealed request path, and the Runner checks the bot is its own. Raising a limit keeps the stop until the user resumes. `renew: true` grants the limits again in full. A repeated request id returns its receipt and neither renews nor starts work again. A scope still running refuses to resume. `run: true` continues a stopped turn from its transcript under the same Job id (a delegated turn goes on as its [handoff](handoffs.md)'s next attempt), starts a new run of a routine through `run_now`, or of a task through `tasks.run` at its current revision, so the task's owner checks it as for any run. A plugin call the turn made is never sent again from the ledger.
+Another Device's call goes to the bot's Runner through the existing sealed request path, and the Runner checks the bot is its own. Raising a limit keeps the stop until the user resumes. `renew: true` grants the limits again in full. A repeated request id returns its receipt and neither renews nor starts work again. A scope still running refuses to resume. `run: true` continues a stopped turn from its transcript under the same Job id (a delegated turn goes on as its [handoff](handoffs.md)'s next attempt), returns an event's delivery to its subscription's inbox, which admits it again under the same Job id, starts a new run of a routine through `run_now`, or of a task through `tasks.run` at its current revision, so the task's owner checks it as for any run. A plugin call the turn made is never sent again from the ledger.
 
 ## In the apps
 
