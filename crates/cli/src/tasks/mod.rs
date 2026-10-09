@@ -601,6 +601,7 @@ fn run(app: &App, task: &mut Task, params: &Value) -> Result<Job, String> {
         bot_id: task.owner_bot_id.clone(),
         task_id: Some(task.id.clone()),
         task_context: None,
+        handoff: None,
         kind: "task".into(),
         trigger_message_id: String::new(),
         routine_id: None,

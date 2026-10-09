@@ -18,6 +18,7 @@ pub mod crypto;
 pub mod decisions;
 pub mod events;
 pub mod files;
+pub mod handoffs;
 pub mod identity;
 pub mod keys;
 #[cfg(feature = "runner")]

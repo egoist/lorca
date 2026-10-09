@@ -1008,18 +1008,32 @@ enum MockData {
             ),
             Message(
                 author: .bot("bot-nova"),
-                body: .handoff(from: "bot-nova", to: "bot-quill", reason: "Draft a short launch announcement that leads with what people can do."),
+                body: .tool(ToolInvocation(
+                    name: "message_bot", summary: "Messaged Writer",
+                    detail: "Draft a short launch announcement that leads with what people can do.",
+                    isRunning: false, targetBotID: "bot-quill")),
                 createdAt: minutesAgo(35)
             ),
             Message(
                 author: .bot("bot-nova"),
-                body: .text("Writer has the brief. I'll keep the final draft with the launch checklist for your review."),
+                body: .text("Writer has the brief. I'll bring the draft back here when it's ready."),
                 createdAt: minutesAgo(34)
+            ),
+            // Writer's handoff report, which wakes Project Manager in this chat.
+            Message(
+                author: .bot("bot-quill"),
+                body: .handoff(from: "bot-quill", to: "bot-nova", reason: "Draft saved to `launch/announcement.md`. It leads with what people can do and stays under 60 words."),
+                createdAt: minutesAgo(24)
+            ),
+            Message(
+                author: .bot("bot-nova"),
+                body: .text("Writer's draft is in `launch/announcement.md`: three short sentences that open with building a team of bots. I added it to the launch checklist for your review."),
+                createdAt: minutesAgo(23)
             ),
             Message(
                 author: .system,
                 body: .notice("Waiting for your review · Draft: Launch announcement"),
-                createdAt: minutesAgo(33)
+                createdAt: minutesAgo(22)
             ),
         ]
     }

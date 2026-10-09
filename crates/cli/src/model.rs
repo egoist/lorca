@@ -846,6 +846,9 @@ pub struct Job {
     /// a command the bot left running that ended.
     pub kind: String,
     pub trigger_message_id: String,
+    /// A durable delegated request or the continuation that reads its report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff: Option<crate::handoffs::HandoffJob>,
     /// `routine`: which routine is running.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routine_id: Option<String>,

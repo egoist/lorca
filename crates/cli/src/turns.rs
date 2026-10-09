@@ -31,7 +31,7 @@ use crate::memory::{self, MemoryStore};
 use crate::model::*;
 use crate::plugins::review::Trigger;
 use crate::providers;
-use crate::runtime::{chat_source, name_of, start_turn, TurnOutcome};
+use crate::runtime::{chat_source, name_of, TurnOutcome};
 
 /// The most chat messages a turn rebuilds as they are. Past this a chat is compacted by count,
 /// so nothing is dropped without a summary; with compaction off, older rows are left out.
@@ -170,7 +170,8 @@ async fn run_budgeted_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) 
     let attention_started_at = now_secs();
     let mut tools: Vec<Arc<dyn Tool>> = vec![
         Arc::new(ListTeammates { app: app.clone(), chat_id: chat.meta.id.clone() }),
-        Arc::new(MessageBot { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone(), hops: job.hops }),
+        Arc::new(MessageBot { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone(), hops: job.hops, task_id: job.task_id.clone() }),
+        Arc::new(Handoffs { app: app.clone(), bot_id: bot.id.clone(), request: match &job.handoff { Some(crate::handoffs::HandoffJob::Request { request }) => Some(request.clone()), _ => None } }),
         Arc::new(CreateBot { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone() }),
         Arc::new(EditBot { app: app.clone(), bot: bot.clone() }),
         Arc::new(Routines { app: app.clone(), bot: bot.clone() }),
@@ -402,7 +403,9 @@ async fn run_budgeted_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) 
     if let Some(id) = job.routine_id.as_deref().filter(|_| !cancel.is_cancelled() && (error.is_some() || !failed)) {
         crate::routines::model_result(app, id, error);
     }
-    let outcome = if state.sent {
+    let outcome = if job.handoff.is_some() && (failed || state.failed) {
+        TurnOutcome::Skipped
+    } else if state.sent {
         TurnOutcome::Sent
     } else if failed || state.failed {
         TurnOutcome::Skipped
@@ -1596,14 +1599,14 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
         prompt.push_str(
             "\nThis is your direct chat with the user. You always answer here. When the user mentions another bot with @, \
              or a task belongs to a teammate, call message_bot: it delivers your message to that bot, who answers the user \
-             in their own chat and can message you back. Then tell the user briefly what you passed on.\n",
+             in their own chat. Include expected_output and acceptance_criteria; results report back here automatically. Then tell the user briefly what you passed on.\n",
         );
     }
 
     if let Some(from) = job.from_bot_id.as_ref().and_then(|id| app.bot(id)) {
         prompt.push_str(&format!(
             "\nThis turn was started by a message from {name} (the last \"[Message from {name}]\" entry). Handle their request \
-             for the user, and use message_bot to reply to {name} (id {id}) only when they need something back.\n",
+             for the user. What you report or reply goes back to {name} on its own; use message_bot to {name} (id {id}) only for something else.\n",
             name = from.name,
             id = from.id
         ));
@@ -1629,6 +1632,7 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
          including you (your id is {}), to behave differently, change its profile with edit_bot.\n",
         bot.id
     ));
+    prompt.push_str(&crate::handoffs::prompt(app, job));
     prompt.push_str(&routines_prompt(app, bot));
     prompt.push_str(&crate::attention::prompt(app, &bot.id, &chat.meta.id, job.kind == "attention_report"));
     prompt.push_str("\nDurable work: use tasks to track multi-turn goals, ownership, acceptance criteria, dependencies, next action, blockers, and result/evidence. Open records appear after the transcript on every request, even after compaction. A queued task only runs when explicitly started with tasks run. Read the latest revision before editing; a conflict means reload, never overwrite.\n");
@@ -2121,83 +2125,96 @@ struct MessageBot {
     chat_id: String,
     bot: Bot,
     hops: u32,
+    task_id: Option<String>,
 }
 
 #[async_trait]
 impl Tool for MessageBot {
-    fn name(&self) -> &str {
-        "message_bot"
-    }
+    fn name(&self) -> &str { "message_bot" }
     fn description(&self) -> &str {
-        "Send a message to a bot that is not in this chat. It lands in that bot's own chat with the user, where it \
-         answers and can message you back. Include the context they need; they do not see this conversation."
+        "Hand work to a bot outside this chat. It lands in that bot's own chat with the user, and they do not see this \
+         conversation, so give them the context they need. Say what you need back in expected_output and acceptance_criteria. \
+         Their result, or why they could not finish, comes back to this chat on its own and starts your next turn. Returns \
+         the handoff's id and job_id, and whether their Runner has it yet."
     }
     fn parameters(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "bot_id": { "type": "string", "description": "The teammate's id, from the user's @mention or list_teammates" },
-                "message": { "type": "string", "description": "What you want them to do, with the context they need" }
-            },
-            "required": ["bot_id", "message"],
-            "additionalProperties": false
-        })
+        json!({ "type": "object", "properties": {
+            "bot_id": { "type": "string", "description": "The teammate's id from an @mention or list_teammates" },
+            "message": { "type": "string", "description": "What the recipient should do" },
+            "context": { "type": "string", "description": "Supplied facts; the recipient does not see this conversation" },
+            "expected_output": { "type": "string", "description": "The deliverable you need to continue" },
+            "acceptance_criteria": { "type": "array", "items": { "type": "string" }, "description": "Conditions for a satisfactory result" },
+            "task_id": { "type": "string", "description": "Existing canonical parent task id; defaults to this turn's task" }
+        }, "required": ["bot_id", "message"], "additionalProperties": false })
     }
-    fn execution_mode(&self) -> Option<ToolExecutionMode> {
-        Some(ToolExecutionMode::Sequential)
-    }
+    fn execution_mode(&self) -> Option<ToolExecutionMode> { Some(ToolExecutionMode::Sequential) }
     async fn execute(&self, _id: &str, args: Value, _cancel: CancellationToken, _on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
-        let bot_id = args["bot_id"].as_str().unwrap_or("").trim();
-        let message = args["message"].as_str().unwrap_or("").trim().to_string();
-        if bot_id.is_empty() || message.is_empty() {
-            return Err("bot_id and message are required".into());
-        }
-        if self.hops >= MAX_BOT_HOPS {
-            return Err(ToolError(format!(
-                "Bots have passed this along {} times without the user. Answer the user instead of messaging another bot.",
-                self.hops
-            )));
-        }
-        let target = bot_by_id(&self.app.state.lock().unwrap().bots, bot_id)?;
-        if target.id == self.bot.id {
-            return Err("You cannot message yourself".into());
-        }
-        let chat = self.app.chat(&self.chat_id).ok_or("Chat is gone")?;
-        if chat.meta.is_group() && chat.meta.bot_ids.contains(&target.id) {
-            return Err(ToolError(format!("{} is in this chat and reads it. Say it here instead.", target.name)));
-        }
+        let mut input: crate::handoffs::DelegateInput = serde_json::from_value(args).map_err(|e| ToolError(e.to_string()))?;
+        // Keep the team's id lookup diagnostics consistent with edit_bot and @mentions.
+        bot_by_id(&self.app.state.lock().unwrap().bots, input.bot_id.trim())?;
+        input.task_id = input.task_id.or_else(|| self.task_id.clone());
+        let target = input.bot_id.clone();
+        let message = input.message.clone();
+        let value = crate::handoffs::delegate(&self.app, &self.bot.id, &self.chat_id, self.hops, input).map_err(ToolError)?;
+        let name = name_of(&self.app, &target);
+        let result = json!({ "handoff_id": value["handoff_id"], "job_id": value["job_id"], "target_runner_id": value["target_runner_id"], "delivery": value["delivery"] });
+        Ok(ToolResult::text(result.to_string())
+            .with_details(json!({ "summary": format!("Messaged {name}"), "bot_id": target, "message": message })))
+    }
+}
 
-        // Delivered into the target's own chat with the user, as a message from this bot.
-        let dm = self.app.dm_with(&target.id, None).map_err(|e| ToolError(e.to_string()))?;
-        let incoming = Message::new(
-            &dm.meta.id,
-            Author::Bot { bot_id: self.bot.id.clone() },
-            Body::Handoff { from: self.bot.id.clone(), to: target.id.clone(), reason: message.clone() },
-        );
-        self.app.upsert_message(incoming.clone(), true);
+struct Handoffs {
+    app: Arc<App>,
+    bot_id: String,
+    request: Option<crate::handoffs::HandoffRequest>,
+}
 
-        let job = Job {
-            id: format!("job-{}", uuid::Uuid::new_v4()),
-            chat_id: dm.meta.id.clone(),
-            bot_id: target.id.clone(),
-            kind: "message".into(),
-            task_id: None,
-            task_context: None,
-            trigger_message_id: incoming.id,
-            routine_id: None,
-            check: None,
-            requested_by: self.app.this_device_id().unwrap_or_default(),
-            from_bot_id: Some(self.bot.id.clone()),
-            hops: self.hops + 1,
-            round: 0,
-            is_winding_down: false,
-            setup: None,
-            created_at: now_secs(),
+#[async_trait]
+impl Tool for Handoffs {
+    fn name(&self) -> &str { "handoffs" }
+    fn description(&self) -> &str {
+        "Work you handed off with message_bot, and work handed to you. list and get show each handoff and its report, also \
+         after a restart. follow_up sends a finished handoff again with more instructions; cancel stops one still going; both \
+         take its current job_id. On a turn that is a handoff, report ends the turn and sends the result back: a status, a \
+         one- or two-sentence summary, and any result_links and evidence. Report only what you checked."
+    }
+    fn parameters(&self) -> Value {
+        json!({ "type": "object", "properties": {
+            "action": { "type": "string", "enum": ["list", "get", "follow_up", "cancel", "report"] },
+            "handoff_id": { "type": "string" }, "job_id": { "type": "string", "description": "Current job_id from inspection, required for follow_up/cancel" },
+            "outstanding": { "type": "boolean" }, "task_id": { "type": "string" }, "message": { "type": "string" }, "reason": { "type": "string" },
+            "status": { "type": "string", "enum": ["completed", "failed", "blocked", "cancelled"] }, "summary": { "type": "string" },
+            "result_links": { "type": "array", "items": { "type": "object", "properties": {
+                "kind": { "type": "string", "enum": ["message", "output", "file", "url", "review"] }, "label": { "type": "string" },
+                "chat_id": { "type": "string" }, "message_id": { "type": "string" }, "output_id": { "type": "string" }, "version": { "type": "integer", "minimum": 1 },
+                "attachment_id": { "type": "string" }, "review_id": { "type": "string" }, "url": { "type": "string", "description": "HTTPS link" }
+            }, "required": ["kind", "label"], "additionalProperties": false } },
+            "evidence": { "type": "array", "items": { "type": "string" }, "description": "Checks and observations supporting the report" }
+        }, "required": ["action"], "additionalProperties": false })
+    }
+    fn execution_mode(&self) -> Option<ToolExecutionMode> { Some(ToolExecutionMode::Sequential) }
+    async fn execute(&self, _id: &str, mut args: Value, _cancel: CancellationToken, _on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
+        let action = args["action"].as_str().unwrap_or("").to_string();
+        if action == "report" {
+            let request = self.request.as_ref().ok_or("This turn is not an active delegated request")?;
+            if args["handoff_id"].as_str().is_some_and(|id| id != request.handoff_id) { return Err("Report the handoff assigned to this turn".into()); }
+            args["handoff_id"] = json!(request.handoff_id);
+            args["job_id"] = json!(request.job_id);
+        }
+        args["bot_id"] = json!(self.bot_id);
+        if let Some(id) = args["handoff_id"].as_str() {
+            let record = crate::handoffs::get(&self.app, id).map_err(ToolError)?;
+            if record.current().request.from_bot_id != self.bot_id && record.current().request.target_bot_id != self.bot_id { return Err("This handoff belongs to other bots".into()); }
+        }
+        let value = crate::handoffs::dispatch(&self.app, &format!("handoffs.{action}"), args).map_err(ToolError)?;
+        let summary = match action.as_str() {
+            "report" => "Reported back",
+            "follow_up" => "Followed up",
+            "cancel" => "Cancelled a handoff",
+            _ => "Checked handoffs",
         };
-        start_turn(&self.app, job);
-
-        Ok(ToolResult::text(format!("Messaged {}. They will answer the user in their own chat and can message you back.", target.name))
-            .with_details(json!({ "summary": format!("Messaged {}", target.name), "bot_id": target.id, "message": message })))
+        let result = ToolResult::text(value.to_string()).with_details(json!({ "summary": summary }));
+        Ok(if action == "report" { result.terminating() } else { result })
     }
 }
 
@@ -3438,6 +3455,7 @@ mod tests {
             task_id: None,
             task_context: None,
             trigger_message_id: String::new(),
+            handoff: None,
             routine_id: None,
             check: None,
             requested_by: "dev".into(),
@@ -3814,6 +3832,7 @@ mod tests {
                 task_id: None,
                 task_context: None,
                 trigger_message_id: String::new(),
+                handoff: None,
                 check: None,
                 routine_id: None,
                 requested_by: requested_by.into(),
@@ -4634,7 +4653,7 @@ mod tests {
         let error = edit.execute("call", json!({ "bot_id": "Chef", "description": "Cooks" }), CancellationToken::new(), no_updates.clone()).await.unwrap_err();
         assert_eq!(error.0, "No bot with id Chef. Bots: Chef (b1), Chef (b2)");
 
-        let message = MessageBot { app: app.clone(), chat_id: "chat".into(), bot: chef.clone(), hops: 0 };
+        let message = MessageBot { app: app.clone(), chat_id: "chat".into(), bot: chef.clone(), hops: 0, task_id: None };
         let error = message.execute("call", json!({ "bot_id": "Chef", "message": "hi" }), CancellationToken::new(), no_updates).await.unwrap_err();
         assert_eq!(error.0, "No bot with id Chef. Bots: Chef (b1), Chef (b2)");
 

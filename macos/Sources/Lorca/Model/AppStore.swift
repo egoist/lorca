@@ -576,7 +576,7 @@ final class AppStore {
         case let .text(value): body = value.isEmpty ? Attachment.summary(last.attachments) : value
         case let .tool(tool): body = L("Messaged %@: %@", tool.targetBotID.flatMap(bot)?.name ?? L("a teammate"), tool.detail)
         case let .handoff(from, to, reason):
-            body = !chat.isGroup && chat.botIDs.contains(to)
+            body = chat.botIDs.contains(to) && !chat.botIDs.contains(from)
                 ? L("Message from %@: %@", bot(from)?.name ?? L("a teammate"), reason)
                 : L("Handed off to %@", bot(to)?.name ?? L("a teammate"))
         case let .notice(value): body = value

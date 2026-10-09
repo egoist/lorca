@@ -169,7 +169,7 @@ export function preview(chat: Chat, bots: Map<string, Bot>): string {
       break;
     case "handoff":
       body =
-        chat.kind !== "group" && chat.bot_ids.includes(shown.body.to)
+        chat.bot_ids.includes(shown.body.to) && !chat.bot_ids.includes(shown.body.from)
           ? t("Message from {name}: {reason}", { name: bots.get(shown.body.from)?.name ?? t("a teammate"), reason: shown.body.reason })
           : t("Handed off to {name}", { name: bots.get(shown.body.to)?.name ?? t("a teammate") });
       break;

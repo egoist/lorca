@@ -399,13 +399,13 @@ func textPopover(c *ui.Context, anchor ui.Element, text string) {
 	})
 }
 
-// firstLineOf is the first non-empty line of `text`, with fence markers skipped: what a one-line
-// preview shows.
+// firstLineOf is the first non-empty line of `text`, with fence markers skipped and bold and code
+// marks dropped, as the sidebar's preview drops them: what a one-line preview shows.
 func firstLineOf(text string) string {
 	for _, line := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
 		line = strings.TrimSpace(line)
 		if line != "" && !strings.HasPrefix(line, "```") {
-			return line
+			return strings.NewReplacer("**", "", "`", "").Replace(line)
 		}
 	}
 	return ""

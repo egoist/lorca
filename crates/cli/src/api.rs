@@ -84,6 +84,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         }
         method if method.starts_with("reviews.") => crate::review_queue::dispatch(app, method, params).await,
         method if method.starts_with("tasks.") => crate::tasks::dispatch(app, method, params).await,
+        method if method.starts_with("handoffs.") => crate::handoffs::dispatch(app, method, params),
         "hello" => Ok(json!({
             "version": crate::config::VERSION,
             "has_identity": app.has_identity(),

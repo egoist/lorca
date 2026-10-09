@@ -574,6 +574,9 @@ describe("format", () => {
     expect(preview(chat("dm", [sent]), bots)).toBe("Messaged Scout: please look");
     const handoff = msg({ kind: "bot", bot_id: "b1" }, { kind: "handoff", from: "b1", to: "b2", reason: "over to you" });
     expect(preview({ ...chat("dm", [handoff]), bot_ids: ["b2"] }, bots)).toBe("Message from Chef: over to you");
+    // A handoff's report reaches the requesting bot's group from outside it.
+    const report = msg({ kind: "bot", bot_id: "b2" }, { kind: "handoff", from: "b2", to: "b1", reason: "done" });
+    expect(preview({ ...chat("group", [report]), bot_ids: ["b1", "b3"] }, bots)).toBe("Message from Scout: done");
   });
 
   test("the working row reads what the one bot at work is doing", () => {

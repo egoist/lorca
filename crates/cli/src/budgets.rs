@@ -542,7 +542,8 @@ pub fn serve(app: &Arc<App>, method: &str, params: &Value) -> Result<Value, Stri
                 // never sent again from here.
                 (_, Some(mut job)) => {
                     job.check = job.check.or_else(|| Some(crate::model::CheckReport { found: String::new(), error: None }));
-                    crate::runtime::start_turn(app, job);
+                    // A delegated turn goes on as its handoff's next attempt.
+                    crate::handoffs::resume_stopped(app, job)?;
                 }
                 _ => {}
             }

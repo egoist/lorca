@@ -960,7 +960,7 @@ func (s *Store) Preview(chat *Chat) string {
 		}
 		body = L("Messaged %@: %@", target, content.Tool.Detail)
 	case BodyHandoff:
-		if !chat.IsGroup() && slices.Contains(chat.BotIDs, content.Handoff.To) {
+		if slices.Contains(chat.BotIDs, content.Handoff.To) && !slices.Contains(chat.BotIDs, content.Handoff.From) {
 			body = L("Message from %@: %@", s.botName(content.Handoff.From, L("a teammate")), content.Handoff.Reason)
 		} else {
 			body = L("Handed off to %@", s.botName(content.Handoff.To, L("a teammate")))

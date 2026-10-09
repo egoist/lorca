@@ -46,7 +46,7 @@ Snapshots carry the scope, its limits and usage, `state` (`ready`, `running`, `c
 | `budgets.set` | `kind` (`chat`, `job`, `task`, or `routine`), `id`, `limits`, `runner_id?`, `bot_id` for a turn, `chat_id?`; sets the limits and keeps what was used |
 | `budgets.resume` | `kind`, `id`, `request_id`, `runner_id?`, `renew?`, `run?`; resumes stopped work |
 
-Another Device's call goes to the bot's Runner through the existing sealed request path, and the Runner checks the bot is its own. Raising a limit keeps the stop until the user resumes. `renew: true` grants the limits again in full. A repeated request id returns its receipt and neither renews nor starts work again. A scope still running refuses to resume. `run: true` continues a stopped turn from its transcript under the same Job id, starts a new run of a routine through `run_now`, or of a task through `tasks.run` at its current revision, so the task's owner checks it as for any run. A plugin call the turn made is never sent again from the ledger.
+Another Device's call goes to the bot's Runner through the existing sealed request path, and the Runner checks the bot is its own. Raising a limit keeps the stop until the user resumes. `renew: true` grants the limits again in full. A repeated request id returns its receipt and neither renews nor starts work again. A scope still running refuses to resume. `run: true` continues a stopped turn from its transcript under the same Job id (a delegated turn goes on as its [handoff](handoffs.md)'s next attempt), starts a new run of a routine through `run_now`, or of a task through `tasks.run` at its current revision, so the task's owner checks it as for any run. A plugin call the turn made is never sent again from the ledger.
 
 ## In the apps
 

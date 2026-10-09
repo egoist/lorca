@@ -273,6 +273,7 @@ fn job_for(app: &Arc<App>, routine: &Routine) -> Result<Job, String> {
         task_id: None,
         task_context: None,
         trigger_message_id: String::new(),
+        handoff: None,
         routine_id: Some(routine.id.clone()),
         check: None,
         requested_by: app.this_device_id().unwrap_or_default(),

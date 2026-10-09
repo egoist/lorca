@@ -153,6 +153,8 @@ pub struct App {
     pub credentials: Mutex<Credentials>,
     pub state: Mutex<State>,
     pub store: LocalStore,
+    /// Serializes encrypted handoff record merges and admission on this Device.
+    pub handoff_lock: Mutex<()>,
     pub budgets: crate::budgets::BudgetStore,
     #[cfg(feature = "runner")]
     pub connector_limits: crate::connector_limits::ConnectorLimits,
@@ -288,6 +290,7 @@ impl App {
             credentials: Mutex::new(credentials),
             state: Mutex::new(state),
             store,
+            handoff_lock: Mutex::new(()),
             budgets: crate::budgets::BudgetStore::default(),
             #[cfg(feature = "runner")]
             connector_limits: crate::connector_limits::ConnectorLimits::default(),

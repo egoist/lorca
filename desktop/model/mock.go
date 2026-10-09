@@ -359,9 +359,12 @@ func managerThread() []*Message {
 		mockMessage(System, Body{Kind: BodyNotice, Text: "Waiting for your review · $ git tag v1.4.0 && git push origin v1.4.0"}, minutesAgo(189)),
 		mockMessage(System, Body{Kind: BodyNotice, Text: "Waiting for your review · GitHub: add_issue_comment · owner: lorca-app, repo: relay, issue_number: 214"}, minutesAgo(188)),
 		mockMessage(You, textBody("Ask Writer to keep the announcement short and lead with what people can do."), minutesAgo(36)),
-		mockMessage(BotAuthor("bot-nova"), Body{Kind: BodyHandoff, Handoff: Handoff{From: "bot-nova", To: "bot-quill", Reason: "Draft a short launch announcement that leads with what people can do."}}, minutesAgo(35)),
-		mockMessage(BotAuthor("bot-nova"), textBody("Writer has the brief. I'll keep the final draft with the launch checklist for your review."), minutesAgo(34)),
-		mockMessage(System, Body{Kind: BodyNotice, Text: "Waiting for your review · Draft: Launch announcement"}, minutesAgo(33)),
+		mockMessage(BotAuthor("bot-nova"), Body{Kind: BodyTool, Tool: &ToolInvocation{Name: "message_bot", Summary: "Messaged Writer", Detail: "Draft a short launch announcement that leads with what people can do.", TargetBotID: "bot-quill"}}, minutesAgo(35)),
+		mockMessage(BotAuthor("bot-nova"), textBody("Writer has the brief. I'll bring the draft back here when it's ready."), minutesAgo(34)),
+		// Writer's handoff report, which wakes Project Manager in this chat.
+		mockMessage(BotAuthor("bot-quill"), Body{Kind: BodyHandoff, Handoff: Handoff{From: "bot-quill", To: "bot-nova", Reason: "Draft saved to `launch/announcement.md`. It leads with what people can do and stays under 60 words."}}, minutesAgo(24)),
+		mockMessage(BotAuthor("bot-nova"), textBody("Writer's draft is in `launch/announcement.md`: three short sentences that open with building a team of bots. I added it to the launch checklist for your review."), minutesAgo(23)),
+		mockMessage(System, Body{Kind: BodyNotice, Text: "Waiting for your review · Draft: Launch announcement"}, minutesAgo(22)),
 	}
 }
 

@@ -89,7 +89,8 @@ export function buildRows(chat: Chat, bots: Map<string, Bot>, workingBotIds: str
         previousAuthorKey = null;
         break;
       case "handoff": {
-        const incoming = chat.kind !== "group" && chat.bot_ids.includes(message.body.to);
+        // From a bot outside the chat, as a DM's request or a handoff's report: a message.
+        const incoming = chat.bot_ids.includes(message.body.to) && !chat.bot_ids.includes(message.body.from);
         rows.push({
           key: message.id,
           type: "marker",
@@ -338,7 +339,8 @@ export const MessageRow = memo(function MessageRow({
 export const MarkerRow = memo(function MarkerRow({ row, onPress }: { row: Extract<Row, { type: "marker" }>; onPress?: (row: Extract<Row, { type: "marker" }>) => void }) {
   useLanguage();
   const p = usePalette();
-  const preview = row.tooltip ? firstLine(row.tooltip) : "";
+  // Bold and code marks go, as the chat list's preview drops them.
+  const preview = row.tooltip ? firstLine(row.tooltip).replace(/\*\*|`/g, "") : "";
   return (
     <Pressable
       style={({ pressed }) => [styles.centered, { paddingTop: row.groupStart ? 14 : 6, opacity: pressed ? 0.5 : 1 }]}
