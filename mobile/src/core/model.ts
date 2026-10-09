@@ -59,6 +59,8 @@ export interface Device {
   last_seen: number;
   /// Plugins installed on that Runner, with their setup state.
   plugins?: PluginStatus[];
+  /// The channels its bots listen on.
+  channels?: ChannelStatus[];
   /// The `lorca` that Device runs, as `lorca --version` says it.
   version?: string;
   /// Only on a Runner whose CLI replaces itself (installed with lorca.app's script).
@@ -183,7 +185,8 @@ export interface Routine {
   created_at: number;
 }
 
-export type Author = { kind: "you" } | { kind: "bot"; bot_id: string } | { kind: "system" };
+/// `contact` is someone outside Lorca, in a channel's conversation.
+export type Author = { kind: "you" } | { kind: "bot"; bot_id: string } | { kind: "system" } | { kind: "contact"; name: string };
 
 export interface ChatSearchResults {
   chats: { chat_id: string; snippet: string }[];
@@ -461,6 +464,55 @@ export interface ChatMeta {
   description?: string | null;
   is_pinned: boolean;
   created_at: number;
+  /// A conversation a channel keeps: one Telegram chat or topic, or one Slack thread, named by
+  /// `title`. The bot's own DM has none.
+  channel?: ChatChannel | null;
+}
+
+/// Where a channel's conversation happens.
+export interface ChatChannel {
+  channel_id: string;
+  service: string;
+  account_id: string;
+  chat_id: string;
+  thread_id?: string | null;
+}
+
+/// What a channel takes.
+export interface ChannelListen {
+  every?: boolean;
+  mentions?: boolean;
+  replies?: boolean;
+  tags?: string[];
+}
+
+/// A bot listening on a Telegram or Slack account, as its Runner advertises it.
+export interface ChannelStatus {
+  id: string;
+  bot_id: string;
+  name: string;
+  /// `telegram` or `slack`.
+  service: string;
+  account_id: string;
+  chats?: { id: string; title?: string }[];
+  listen: ChannelListen;
+  task: string;
+  /// `listening`, `paused`, `held` (a message's turn didn't finish, so later ones wait), or
+  /// `offline` (the account can't be read now).
+  state: "listening" | "paused" | "held" | "offline";
+  detail?: string;
+  held_delivery?: string | null;
+}
+
+/// The one DM a bot has with the user: a direct chat that is not a channel's conversation.
+export function isBotDM(chat: ChatMeta): boolean {
+  return chat.kind === "dm" && !chat.channel;
+}
+
+/// A transcript with more than one speaker on the bots' side: a group, or a channel's
+/// conversation with the people there.
+export function showsSpeakers(chat: ChatMeta): boolean {
+  return chat.kind === "group" || !!chat.channel;
 }
 
 /// The tokens and money the turns in a chat used, from its Runner.

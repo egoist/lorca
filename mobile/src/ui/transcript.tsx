@@ -14,12 +14,12 @@ import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSequence, with
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import { ShimmerView } from "../../modules/lorca-core/ShimmerView";
-import { canBeQuoted, isLive, isSentMessage, showsCard, type Author, type Body, type Bot, type Chat, type CommandRun, type Message } from "../core/model";
+import { canBeQuoted, isLive, isSentMessage, showsCard, showsSpeakers, type Author, type Body, type Bot, type Chat, type CommandRun, type Message } from "../core/model";
 import { engine } from "../core/engine";
 import { useStore } from "../core/store";
 import { language, t, useLanguage } from "../i18n";
 import { AttachmentBlock } from "./attachments";
-import { BotAvatar } from "./Avatar";
+import { BotAvatar, ContactAvatar } from "./Avatar";
 import { daySeparator, firstLine, workingActivity } from "./format";
 import { Markdown } from "./Markdown";
 import { Symbol } from "./Symbol";
@@ -60,12 +60,12 @@ export function buildRows(chat: Chat, bots: Map<string, Bot>, workingBotIds: str
       rows.push({ key: `day-${message.id}`, type: "day", at: message.created_at });
       previousAuthorKey = null;
     }
-    const authorKey = message.author.kind === "bot" ? `bot:${message.author.bot_id}` : message.author.kind;
+    const authorKey = keyOf(message.author);
     const groupStart = separated || authorKey !== previousAuthorKey;
     switch (message.body.kind) {
       case "text": {
         const next = shown[i + 1];
-        const nextKey = next ? (next.author.kind === "bot" ? `bot:${next.author.bot_id}` : next.author.kind) : null;
+        const nextKey = next ? keyOf(next.author) : null;
         const nextSeparated = next ? next.created_at - message.created_at >= SEPARATOR_GAP_SECS : true;
         const groupEnd = nextSeparated || nextKey !== authorKey || next?.body.kind !== "text";
         rows.push({
@@ -74,7 +74,7 @@ export function buildRows(chat: Chat, bots: Map<string, Bot>, workingBotIds: str
           message,
           groupStart,
           groupEnd,
-          showsName: chat.kind === "group" && message.author.kind === "bot" && groupStart,
+          showsName: showsSpeakers(chat) && (message.author.kind === "bot" || message.author.kind === "contact") && groupStart,
         });
         previousAuthorKey = authorKey;
         break;
@@ -165,7 +165,15 @@ const REPLY_SWIPE = 56;
 export function quoteAuthorName(author: Author, bots: Map<string, Bot>): string {
   if (author.kind === "you") return t("You");
   if (author.kind === "bot") return bots.get(author.bot_id)?.name ?? t("Bot");
+  if (author.kind === "contact") return author.name;
   return "Lorca";
+}
+
+/// Who a run of bubbles belongs to: the user, one bot, or one person outside Lorca.
+function keyOf(author: Author): string {
+  if (author.kind === "bot") return `bot:${author.bot_id}`;
+  if (author.kind === "contact") return `contact:${author.name}`;
+  return author.kind;
 }
 
 /// How far from the screen's left edge a drag stays the system's back gesture.
@@ -250,6 +258,7 @@ export const MessageRow = memo(function MessageRow({
   const pulsing = useAnimatedStyle(() => ({ opacity: pulse.value }));
   const isYou = message.author.kind === "you";
   const bot = message.author.kind === "bot" ? bots.get(message.author.bot_id) : undefined;
+  const contact = message.author.kind === "contact" ? message.author.name : undefined;
   const text = message.body.kind === "text" ? message.body.text : "";
   const attachments = message.body.kind === "text" ? (message.body.attachments ?? []) : [];
   const failed = message.state.kind === "failed";
@@ -267,11 +276,15 @@ export const MessageRow = memo(function MessageRow({
     </Animated.View>
     <Animated.View style={swipe.follow}>
     <View style={[styles.messageRow, { paddingTop: groupStart ? 14 : 3 }, isYou ? styles.messageRowYou : styles.messageRowBot]}>
-      {showsAvatar && <View style={{ width: AVATAR + GUTTER, alignSelf: "flex-end" }}>{groupEnd && <BotAvatar bot={bot} size={AVATAR} />}</View>}
+      {showsAvatar && (
+        <View style={{ width: AVATAR + GUTTER, alignSelf: "flex-end" }}>
+          {groupEnd && (contact !== undefined ? <ContactAvatar name={contact} size={AVATAR} /> : <BotAvatar bot={bot} size={AVATAR} />)}
+        </View>
+      )}
       <View style={[styles.bubbleColumn, { maxWidth: columnWidth }, isYou && styles.bubbleColumnYou]}>
         {showsName && (
           <Text style={[styles.author, { color: p.secondaryLabel }]} numberOfLines={1}>
-            {bot?.name ?? t("Bot")}
+            {contact ?? bot?.name ?? t("Bot")}
           </Text>
         )}
         {quote && (

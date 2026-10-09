@@ -5,7 +5,7 @@
 import { useMemo } from "react";
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
-import { groupOutputs, reviewIsOpen, runsInTerminal, taskOrder, type AutoReview, type ProjectContext, type BudgetState, type DurableTask, type ReviewItem, type OutputSeries, type PlaybookScope, type PlaybookSummary, type Bot, type Chat, type ChatMeta, type ChatUsage, type Device, type Message, type ProviderModel, type ProviderStatus, type RelayProblem, type Routine } from "./model";
+import { groupOutputs, reviewIsOpen, runsInTerminal, taskOrder, type AutoReview, type ProjectContext, type BudgetState, type DurableTask, type ReviewItem, type OutputSeries, type PlaybookScope, type PlaybookSummary, type Bot, type ChannelStatus, type Chat, type ChatMeta, type ChatUsage, type Device, type Message, type ProviderModel, type ProviderStatus, type RelayProblem, type Routine } from "./model";
 import { t } from "../i18n";
 import { savePrefs } from "./prefs";
 import { emptyAttention, type AttentionView } from "./attention";
@@ -303,6 +303,30 @@ export function patchRoutine(id: string, update: (routine: Routine) => Routine) 
 
 export function removeRoutine(id: string) {
   useStore.setState((s) => ({ routines: s.routines.filter((r) => r.id !== id) }));
+}
+
+/// A channel changed or removed here before its Runner says so in its record.
+export function patchChannel(id: string, update: (channel: ChannelStatus) => ChannelStatus | null) {
+  useStore.setState((s) => ({
+    devices: s.devices.map((d) =>
+      d.channels?.some((c) => c.id === id) ? { ...d, channels: d.channels.flatMap((c) => (c.id === id ? [update(c)].filter((u): u is ChannelStatus => !!u) : [c])) } : d,
+    ),
+  }));
+}
+
+/// The bot's channels, as its Runner advertises them.
+export function useChannels(botId: string | undefined): ChannelStatus[] {
+  const runnerId = useStore((s) => s.bots.find((b) => b.id === botId)?.runner_id);
+  return useStore(useShallow((s) => s.devices.find((d) => d.id === runnerId)?.channels?.filter((c) => c.bot_id === botId) ?? []));
+}
+
+/// A channel on any Runner, and the Runner.
+export function channelById(id: string): { channel: ChannelStatus; runnerId: string } | undefined {
+  for (const device of useStore.getState().devices) {
+    const channel = device.channels?.find((c) => c.id === id);
+    if (channel) return { channel, runnerId: device.id };
+  }
+  return undefined;
 }
 
 /// How long a command runs before it counts as a running task.

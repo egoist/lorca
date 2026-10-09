@@ -5,7 +5,7 @@ import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-native";
 import { engine } from "../../../src/core/engine";
-import { deviceName, isRunner, providerLabel, type Device, type UpdateStatus } from "../../../src/core/model";
+import { deviceName, isBotDM, isRunner, providerLabel, type Device, type UpdateStatus } from "../../../src/core/model";
 import { deviceIsOnline, useStore } from "../../../src/core/store";
 import { t, useLanguage } from "../../../src/i18n";
 import { BotAvatar } from "../../../src/ui/Avatar";
@@ -60,7 +60,7 @@ export default function DeviceScreen() {
   const relay = relayUrl?.replace(/^https?:\/\//, "");
 
   function openChat(botId: string) {
-    const dm = chats.find((c) => c.kind === "dm" && c.bot_ids[0] === botId);
+    const dm = chats.find((c) => isBotDM(c) && c.bot_ids[0] === botId);
     if (!dm) return;
     router.dismissAll();
     router.push(`/chat/${dm.id}`);

@@ -26,6 +26,8 @@ import {
   markFileError,
   markRead,
   patchRoutine,
+  patchChannel,
+  channelById,
   removeChat,
   removeMessage,
   removeRoutine,
@@ -889,6 +891,33 @@ class Engine {
     void core.request("routines.delete", { id });
   }
 
+  // MARK: - Channels
+
+  /// Pauses or resumes a channel on its Runner. Paused, it takes no new messages.
+  setChannelPaused(id: string, paused: boolean) {
+    const found = channelById(id);
+    if (!found) return;
+    patchChannel(id, (c) => ({ ...c, state: paused ? "paused" : "listening" }));
+    void core.request(paused ? "events.pause" : "events.resume", { runner_id: found.runnerId, id });
+  }
+
+  /// Tries the message that holds a channel again, or skips it, which lets the next ones run.
+  settleHeldMessage(id: string, retry: boolean) {
+    const found = channelById(id);
+    const held = found?.channel.held_delivery;
+    if (!found || !held) return;
+    patchChannel(id, (c) => ({ ...c, state: "listening", held_delivery: null, detail: "" }));
+    void core.request(retry ? "events.retry" : "events.discard", { runner_id: found.runnerId, id: held });
+  }
+
+  /// Removes a channel from its Runner; its conversations stay.
+  removeChannel(id: string) {
+    const found = channelById(id);
+    if (!found) return;
+    patchChannel(id, () => null);
+    void core.request("events.delete", { runner_id: found.runnerId, id });
+  }
+
   /// The change shows at once; the core's roster event confirms it.
   private patchChat(chatId: string, update: (meta: ChatMeta) => ChatMeta) {
     useStore.setState((s) => ({ chats: s.chats.map((chat) => (chat.id === chatId ? { ...chat, ...update(chat) } : chat)) }));
@@ -952,7 +981,7 @@ export const engine = new Engine();
 // MARK: - Helpers
 
 export function chatTitle(chat: ChatMeta): string {
-  if (chat.kind === "group" && chat.title?.trim()) return chat.title.trim();
+  if ((chat.kind === "group" || chat.channel) && chat.title?.trim()) return chat.title.trim();
   const names = chat.bot_ids.map((id) => botById(id)?.name).filter((n): n is string => !!n);
   if (chat.kind === "dm") return names[0] ?? t("Chat");
   return names.length ? names.join(", ") : t("Group");
