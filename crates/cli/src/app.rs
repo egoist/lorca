@@ -2359,8 +2359,14 @@ mod tests {
         assert_eq!(reloaded.chat("b").unwrap().meta.mute, Some(Mute { until: Some(100.0) }));
         drop(reloaded);
 
-        // Pinning brings a hidden chat back; deleting a section leaves its chats in none.
+        // Pinning brings a hidden chat back, and moving a chat to a section shows it there, off
+        // the pinned rows; deleting a section leaves its chats in none.
         app.pin_chat("a", None).unwrap();
+        assert!(!app.chat("a").unwrap().meta.is_hidden);
+        app.set_chat_section("a", Some(customers.id.clone())).unwrap();
+        assert!(!app.chat("a").unwrap().meta.is_pinned);
+        app.hide_chat("a", true).unwrap();
+        app.set_chat_section("a", None).unwrap();
         assert!(!app.chat("a").unwrap().meta.is_hidden);
         app.delete_section(&customers.id).unwrap();
         assert_eq!(app.chat("b").unwrap().meta.section_id, None);

@@ -170,7 +170,7 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
   const renderItem = useCallback(
     ({ item }: { item: ChatListRow | SearchRow }) => {
       if ("snippet" in item) return <SearchResultRow item={item} bots={bots} query={searchingText} onOpen={openChat} />;
-      if (item.kind === "header") return <GroupHeader group={item.group} collapsed={item.collapsed} sections={sections} />;
+      if (item.kind === "header") return <GroupHeader group={item.group} collapsed={item.collapsed} sections={sections} width={sidebar ? sidebarWidth : undefined} />;
       const chat = item.chat;
       const working = responding.has(chat.id) || chat.bot_ids.some((id) => workingBots.has(id));
       // A sidebar row has no peek: the chat opens beside it.
@@ -392,10 +392,14 @@ function confirmDeleteSection(section: Section) {
 /// A group's header: its name and a chevron, as a collapsible list section on each platform. A
 /// tap folds it; a long press on a section's header renames, moves, or deletes it, and on the
 /// Chats header starts a section.
-const GroupHeader = memo(function GroupHeader({ group, collapsed, sections }: { group: ChatGroup; collapsed: boolean; sections: Section[] }) {
+const GroupHeader = memo(function GroupHeader({ group, collapsed, sections, width: fixedWidth }: { group: ChatGroup; collapsed: boolean; sections: Section[]; width?: number }) {
   useLanguage();
   const p = usePalette();
   const ios = Platform.OS === "ios";
+  const menuRef = useRef<MenuComponentRef>(null);
+  const { width: windowWidth } = useWindowDimensions();
+  // The menu's host takes its size from what it is given, as a chat row's does.
+  const width = fixedWidth ?? windowWidth;
   const title = groupTitle(group, sections);
   const place = group.kind === "section" ? sections.findIndex((section) => section.id === group.id) : -1;
   const section = place >= 0 ? sections[place] : undefined;
@@ -412,7 +416,8 @@ const GroupHeader = memo(function GroupHeader({ group, collapsed, sections }: { 
   const header = (
     <Pressable
       onPress={() => fold(group, !collapsed)}
-      style={styles.header}
+      onLongPress={!ios && actions.length ? () => menuRef.current?.show() : undefined}
+      style={[styles.header, { width }]}
       accessibilityRole="button"
       accessibilityLabel={title}
       accessibilityState={{ expanded: !collapsed }}
@@ -426,8 +431,10 @@ const GroupHeader = memo(function GroupHeader({ group, collapsed, sections }: { 
   if (!actions.length) return header;
   return (
     <MenuView
+      ref={menuRef}
       actions={actions}
       shouldOpenOnLongPress
+      style={{ width }}
       onOpenMenu={haptic.longPress}
       onPressAction={({ nativeEvent }) => {
         if (nativeEvent.event === "new") newSection();

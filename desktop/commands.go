@@ -401,11 +401,12 @@ func sectionMenu(kind windowKind) *mygo.MenuItem {
 	return submenu(L("Move to Section"), items...)
 }
 
-// chatMenuKey is what the Chat menu's Mute and Move to Section items are built from.
+// chatMenuKey is what the Chat menu's Mute and Move to Section items are built from: whether a
+// chat shows, its section, whether it is muted, and the sections.
 func chatMenuKey() string {
 	var key strings.Builder
 	if chat := selectedChat(); chat != nil {
-		fmt.Fprintf(&key, "%s|%s|%t|", chat.ID, chat.SectionID, chat.Mute != nil)
+		fmt.Fprintf(&key, "chat|%s|%t|", chat.SectionID, chat.Mute != nil)
 	}
 	for _, section := range store.Sections {
 		key.WriteString(section.ID + "=" + section.Name + ";")
