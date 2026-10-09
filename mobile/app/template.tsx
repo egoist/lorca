@@ -42,7 +42,7 @@ export default function TemplateImportScreen() {
 
   const [from, setFrom] = useState(opened ?? "");
   const [source, setSource] = useState<Source | undefined>(opened ? { link: opened } : undefined);
-  const [runnerId, setRunnerId] = useState<string>(() => runners.find((r) => deviceIsOnline(r.id))?.id ?? runners[0]?.id ?? "");
+  const [runnerId, setRunnerId] = useState<string>();
   const [provider, setProvider] = useState<string>(providers[0]);
   const [name, setName] = useState("");
   const nameEdited = useRef(false);
@@ -52,7 +52,9 @@ export default function TemplateImportScreen() {
   const [failed, setFailed] = useState<string>();
   const [importing, setImporting] = useState(false);
   const generation = useRef(0);
-  const runner = runners.find((r) => r.id === runnerId);
+  // The Runner picked, else the first online one, as New Bot picks it; the list may arrive after
+  // the sheet, when a link opened it as the phone paired.
+  const runner = runners.find((r) => r.id === runnerId) ?? runners.find((r) => deviceIsOnline(r.id)) ?? runners[0];
   const effectiveProvider = providers.includes(provider) ? provider : providers[0];
   // A plugin added or signed in on the Runner meanwhile changes what the import needs.
   const runnerPlugins = JSON.stringify(runner?.plugins ?? []);
@@ -135,7 +137,7 @@ export default function TemplateImportScreen() {
 
   return (
     <>
-      <Stack.Screen options={{ title: t("New Bot from Template") }} />
+      <Stack.Screen options={{ title: t("New Bot") }} />
       <FormToolbar cancelLabel={t("Cancel")} saveLabel={t("Create")} saveDisabled={!canCreate} onCancel={() => router.dismiss()} onSave={() => void create()} />
       <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ paddingBottom: 40 }} keyboardDismissMode="on-drag" keyboardShouldPersistTaps="handled">
         <Section title={t("From")}>
@@ -184,9 +186,9 @@ export default function TemplateImportScreen() {
                   key={r.id}
                   title={r.name}
                   subtitle={`${r.model} · ${deviceIsOnline(r.id) ? t("Online") : t("Offline")}`}
-                  checked={r.id === runnerId}
+                  checked={r.id === runner?.id}
                   onPress={() => {
-                    if (importing || r.id === runnerId) return;
+                    if (importing || r.id === runner?.id) return;
                     setRunnerId(r.id);
                     setMappings({});
                   }}

@@ -158,7 +158,7 @@ export function TemplateShareScreen({ botId }: { botId: string }) {
 
   return (
     <>
-      <Stack.Screen options={{ title: t("Share “{name}”", { name }) }} />
+      <Stack.Screen options={{ title: t("Share Bot") }} />
       <Stack.Toolbar placement="right">
         {Platform.OS === "android" ? (
           <Stack.Toolbar.Button icon={AndroidIcons.link} accessibilityLabel={primary} disabled={!contents || !!busy} onPress={() => void share()} />
