@@ -4110,7 +4110,10 @@ mod tests {
     #[cfg(any(unix, windows))]
     async fn call_tool(turn: &mut TurnState, tool: &dyn Tool, call_id: &str, args: Value) -> (Message, Result<ToolResult, ToolError>) {
         turn.handle(AgentEvent::ToolExecutionStart { tool_call_id: call_id.into(), tool_name: tool.name().into(), args: args.clone() });
-        let result = tool.execute(call_id, args, CancellationToken::new(), Arc::new(|_| {})).await;
+        // A hang fails the test after a minute instead of holding the run.
+        let result = tokio::time::timeout(Duration::from_secs(60), tool.execute(call_id, args, CancellationToken::new(), Arc::new(|_| {})))
+            .await
+            .unwrap_or_else(|_| panic!("{} did not return within a minute", tool.name()));
         // The loop hands an error on as text, without details.
         let (shown, is_error) = match &result {
             Ok(result) => (result.clone(), false),
