@@ -134,6 +134,18 @@ async fn answer(app: &Arc<App>, request: &Request) -> Result<Value, String> {
         #[cfg(feature = "runner")]
         "coding.transcript" | "coding.stop" | "coding.answer" => crate::coding::serve(app, &request.verb, body).await,
         #[cfg(feature = "runner")]
+        "routines.regenerate_key" => {
+            let id = body["id"].as_str().ok_or("missing id")?;
+            crate::routine_events::regenerate_key(app, id).await?;
+            Ok(json!({ "routine": app.routine(id).map(|routine| app.routine_out(&routine)) }))
+        }
+        #[cfg(feature = "runner")]
+        "routines.subscribe" => {
+            let id = body["id"].as_str().ok_or("missing id")?;
+            crate::routine_events::subscribe_now(app, id).await?;
+            Ok(json!({ "routine": app.routine(id).map(|routine| app.routine_out(&routine)) }))
+        }
+        #[cfg(feature = "runner")]
         "playbooks.draft" => {
             let scope = serde_json::from_value(body["scope"].clone()).map_err(|_| "Explicit playbook scope is required")?;
             crate::playbook_tools::capture(app, &scope, body).await

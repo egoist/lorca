@@ -154,6 +154,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/pair/{nonce}", axum::routing::delete(delete_pairing))
         .route("/v1/pair/{nonce}/request", get(get_pair_request))
         .route("/v1/pair/{nonce}/reply", post(post_pair_reply))
+        .merge(crate::receivers::router(state.clone()))
         .merge(public)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(axum::middleware::from_fn_with_state(state.clone(), require_protocol))

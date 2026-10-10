@@ -22,6 +22,7 @@ pub mod decisions;
 pub mod drafts;
 pub mod events;
 pub mod event_triggers;
+pub mod routine_events;
 pub mod files;
 pub mod feedback;
 pub mod handoffs;

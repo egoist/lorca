@@ -70,10 +70,12 @@ const (
 	// ProblemCheckBlocked is a check that called something that could change things, or that the
 	// bot's Access leaves out.
 	ProblemCheckBlocked
-	// ProblemWatchFailed and ProblemCalendarFailed: a watch couldn't read its pull request, or a
-	// routine around events its calendar.
-	ProblemWatchFailed
+	// ProblemCalendarFailed is a routine around events that couldn't read its calendar.
 	ProblemCalendarFailed
+	// ProblemAppNotInstalled and ProblemNeedsSetup: a routine on events whose receiver waits for
+	// the user, the GitHub App installed on its repository or another service set up.
+	ProblemAppNotInstalled
+	ProblemNeedsSetup
 )
 
 // Problem is what went wrong, while something did: the CLI's state with the kind of failure.
@@ -84,10 +86,7 @@ func (r Routine) Problem() RoutineProblem {
 	health := r.Health
 	model := health.ModelStatus != ""
 	readFailed := ProblemNone
-	switch {
-	case r.PullRequest != nil:
-		readFailed = ProblemWatchFailed
-	case r.Calendar != nil:
+	if r.Calendar != nil {
 		readFailed = ProblemCalendarFailed
 	}
 	switch r.State {
@@ -119,6 +118,13 @@ func (r Routine) Problem() RoutineProblem {
 		}
 		return ProblemCheckFailed
 	}
+	// A routine on events whose receiver waits for the user.
+	if r.IsEnabled && r.Events != nil && r.Events.Status == "needs_setup" {
+		if r.Events.IsGitHub() {
+			return ProblemAppNotInstalled
+		}
+		return ProblemNeedsSetup
+	}
 	return ProblemNone
 }
 
@@ -133,8 +139,12 @@ func (p RoutineProblem) Text() string {
 		return L("Can’t connect")
 	case ProblemSignInFailed, ProblemModelSignInFailed:
 		return L("Sign-in failed")
-	case ProblemCheckFailed, ProblemCheckBlocked, ProblemWatchFailed, ProblemCalendarFailed:
+	case ProblemCheckFailed, ProblemCheckBlocked, ProblemCalendarFailed:
 		return L("Check failed")
+	case ProblemAppNotInstalled:
+		return L("App not installed")
+	case ProblemNeedsSetup:
+		return L("Needs setup")
 	}
 	return ""
 }
@@ -145,8 +155,9 @@ func (p RoutineProblem) NeedsUser() bool {
 	return p != ProblemNone && p != ProblemCantConnect && p != ProblemModelCantConnect
 }
 
-// Explanation is what happened and how to fix it, for the routine sheet.
-func (p RoutineProblem) Explanation(bot, runner string) string {
+// Explanation is what happened and how to fix it, for the routine sheet; subject is what a
+// routine on events watches.
+func (p RoutineProblem) Explanation(bot, runner, subject string) string {
 	switch p {
 	case ProblemModelSignedOut:
 		return L("The model provider turned down three sign-ins in a row, so the routine is paused. Reconnect the provider in Settings, then resume it.")
@@ -166,8 +177,12 @@ func (p RoutineProblem) Explanation(bot, runner string) string {
 		return L("The check stopped with an error. %@ got the error and can fix the check.", bot)
 	case ProblemCheckBlocked:
 		return L("The check tried to change something, or to use something this bot's Access leaves out. Ask %@ to fix it.", bot)
-	case ProblemWatchFailed:
-		return L("The last check couldn’t read the pull request. %@ got the error and can fix the watch.", bot)
+	case ProblemAppNotInstalled:
+		// The repository of "acme/project#42".
+		repo, _, _ := strings.Cut(subject, "#")
+		return L("The Lorca GitHub App isn’t installed on %@, or isn’t connected to this account yet. Install it from the GitHub row: the watch starts once it’s in.", repo)
+	case ProblemNeedsSetup:
+		return L("The service needs you first. %@ said what to do in the chat.", bot)
 	case ProblemCalendarFailed:
 		return L("The last check couldn’t read the calendar. Make sure %@ may use it in Access, and that it’s signed in on %@.", bot, runner)
 	}
@@ -178,8 +193,8 @@ func (p RoutineProblem) Explanation(bot, runner string) string {
 // hours, now or in half a year: "Weekdays at 9:00 AM (New York time)". An interval counts time,
 // whatever the zone.
 func (r Routine) ScheduleSummary() string {
-	// A watch reads on an interval, and events keep their own times.
-	if strings.HasPrefix(r.Schedule, "every ") || r.PullRequest != nil || r.Calendar != nil {
+	// Events keep their own times.
+	if strings.HasPrefix(r.Schedule, "every ") || r.Events != nil || r.Calendar != nil {
 		return r.ScheduleText
 	}
 	zone, err := time.LoadLocation(r.Timezone)

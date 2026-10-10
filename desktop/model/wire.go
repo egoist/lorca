@@ -338,13 +338,21 @@ type WireRoutine struct {
 	State           *string            `json:"state"`
 	Health          *WireRoutineHealth `json:"health"`
 
-	OnceAt      *float64 `json:"once_at"`
-	PullRequest *struct {
-		Repo   string  `json:"repo"`
-		Number int     `json:"number"`
-		Title  *string `json:"title"`
-		URL    *string `json:"url"`
-	} `json:"pull_request"`
+	OnceAt *float64 `json:"once_at"`
+	Events *struct {
+		Receiver   string  `json:"receiver"`
+		Subject    *string `json:"subject"`
+		Status     *string `json:"status"`
+		SourceName *string `json:"source_name"`
+		Title      *string `json:"title"`
+		URL        *string `json:"url"`
+		Endpoint   *string `json:"endpoint"`
+		Key        *string `json:"key"`
+		LastEvent  *struct {
+			Summary string  `json:"summary"`
+			At      float64 `json:"at"`
+		} `json:"last_event"`
+	} `json:"events"`
 	Calendar *struct {
 		Account   *string `json:"account"`
 		Matching  *string `json:"matching"`
@@ -1069,9 +1077,17 @@ func ToRoutine(wire WireRoutine) *Routine {
 	// A one-time routine, a watch, and a routine around events are worded here, in the app's
 	// language, from what the CLI says of them.
 	switch {
-	case wire.PullRequest != nil:
-		routine.PullRequest = &RoutineWatch{Repo: wire.PullRequest.Repo, Number: wire.PullRequest.Number, Title: str(wire.PullRequest.Title), URL: str(wire.PullRequest.URL)}
-		routine.ScheduleText = L("Watches %@", routine.PullRequest.Label())
+	case wire.Events != nil:
+		events := &RoutineEvents{
+			Receiver: wire.Events.Receiver, Subject: str(wire.Events.Subject), Status: cmp.Or(str(wire.Events.Status), "pending"),
+			SourceName: str(wire.Events.SourceName), Title: str(wire.Events.Title), URL: str(wire.Events.URL),
+			Endpoint: str(wire.Events.Endpoint), Key: str(wire.Events.Key),
+		}
+		if last := wire.Events.LastEvent; last != nil {
+			events.LastEvent = &LastEvent{Summary: last.Summary, At: seconds(last.At)}
+		}
+		routine.Events = events
+		routine.ScheduleText = events.Words()
 	case wire.Calendar != nil:
 		events := &RoutineCalendar{Account: str(wire.Calendar.Account), Matching: str(wire.Calendar.Matching)}
 		if wire.Calendar.Minutes != nil {

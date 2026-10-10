@@ -351,7 +351,9 @@ export function SharedTemplate({ id }: { id: string }) {
   )
 }
 
-function Header({ language, onLanguage }: { language: Language | null; onLanguage: (lng: Language) => void }) {
+/// The header of a page whose address the language can't change: the logo, and the other
+/// language, switched in place.
+export function Header({ language, onLanguage }: { language: Language | null; onLanguage: (lng: Language) => void }) {
   const other: Language = language === 'zh' ? 'en' : 'zh'
   return (
     <header className="sticky top-4 z-40 mt-4 px-4">

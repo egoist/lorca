@@ -47,7 +47,7 @@ Chef proposes the bots, creates them once you say yes, and each one gets its own
     Read, write, and edit files, search, run shell commands, search the web, and use the plugins installed on that computer, as far as its [Access](/docs/access) allows. It runs as you, on the machine you assigned it to. See [Tools](/docs/tools).
   </Accordion>
   <Accordion title="What does the relay see?">
-    Encrypted blobs, public keys, sizes, and timestamps. Bot names, chat titles, messages, files, and provider credentials are all inside the ciphertext. See [Security](/docs/security).
+    Encrypted blobs, public keys, sizes, and timestamps. Bot names, chat titles, messages, files, and provider credentials are all inside the ciphertext. A pull request watch or a routine's webhook is the exception: the relay reads each event while it encrypts it for your computer. See [Security](/docs/security#webhooks).
   </Accordion>
   <Accordion title="What happens if I lose a computer?">
     Your backup phrase is your identity. Restore it on another computer and your chats come back from the relay. You can unpair the lost computer from any other Device, including your phone.

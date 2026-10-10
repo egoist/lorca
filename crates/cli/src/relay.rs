@@ -448,6 +448,29 @@ impl RelayClient {
         Ok(())
     }
 
+    /// The link a user follows to set a receiver up for this account: where the GitHub App
+    /// installs, or where they authorize it when it is installed on `subject`'s repository. A
+    /// relay without the receiver answers 404.
+    pub async fn receiver_setup(&self, url: &str, token: &str, receiver: &str, subject: Option<&str>) -> RelayResult<Value> {
+        Self::check(self.http().post(format!("{url}/v1/receivers/{receiver}/setup")).bearer_auth(token).json(&json!({ "subject": subject })).send().await?).await
+    }
+
+    /// Asks a receiver to seal its events about `subject` to this machine under a subscription's
+    /// secret. Answers `status`: `subscribed`, `needs_setup` (with `setup_url`), or `refused`
+    /// (with `message`). A relay without the receiver answers 404.
+    pub async fn receiver_subscribe(&self, url: &str, token: &str, receiver: &str, body: &Value) -> RelayResult<Value> {
+        Self::check(self.http().post(format!("{url}/v1/receivers/{receiver}/subscriptions")).bearer_auth(token).json(body).send().await?).await
+    }
+
+    /// Replaces the hash of the key a receiver's senders include.
+    pub async fn receiver_key(&self, url: &str, token: &str, receiver: &str, id: &str, key_hash: &str) -> RelayResult<()> {
+        Self::check(self.http().post(format!("{url}/v1/receivers/{receiver}/subscriptions/{id}/key")).bearer_auth(token).json(&json!({ "key_hash": key_hash })).send().await?).await.map(|_| ())
+    }
+
+    pub async fn receiver_unsubscribe(&self, url: &str, token: &str, receiver: &str, id: &str) -> RelayResult<()> {
+        Self::check(self.http().delete(format!("{url}/v1/receivers/{receiver}/subscriptions/{id}")).bearer_auth(token).send().await?).await.map(|_| ())
+    }
+
     pub async fn machines(&self, url: &str, token: &str) -> RelayResult<(Vec<MachineIn>, i64)> {
         let value = Self::check(self.http().get(format!("{url}/v1/machines")).bearer_auth(token).send().await?).await?;
         let machines: Vec<MachineIn> = serde_json::from_value(value["machines"].clone()).unwrap_or_default();

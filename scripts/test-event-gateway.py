@@ -64,9 +64,10 @@ class GatewayContract(unittest.TestCase):
         key = b"a-private-routine-webhook-key-with-entropy"
         headers = {"Authorization": "Bearer " + key.decode()}
         event = gateway.webhook_envelope(self.route, key, b'{"status":"deployed"}', headers, 1700000000)
-        self.assertEqual((event["event_type"], event["payload"]), ("webhook", '{"status":"deployed"}'))
+        self.assertEqual(event["event_type"], "webhook")
+        self.assertEqual(json.loads(event["payload"]), {"kind": "request", "summary": "Webhook request", "data": {"status": "deployed"}})
         text = gateway.webhook_envelope(self.route, key, "plain words 🌱".encode(), {"X-Lorca-Key": key.decode()}, 1700000000)
-        self.assertEqual(json.loads(text["payload"]), "plain words 🌱")
+        self.assertEqual(json.loads(text["payload"])["data"], "plain words 🌱")
         self.assertNotEqual(event["delivery_id"], gateway.webhook_envelope(self.route, key, b'{"status":"deployed"}', headers, 1700000000)["delivery_id"])
         repeat = dict(headers, **{"Idempotency-Key": "deploy-7"})
         self.assertEqual(
@@ -76,6 +77,30 @@ class GatewayContract(unittest.TestCase):
         for bad in [{}, {"Authorization": "Bearer wrong"}, {"X-Lorca-Key": key.decode() + "x"}]:
             with self.assertRaises(ValueError):
                 gateway.webhook_envelope(self.route, key, b"{}", bad, 1700000000)
+
+    def test_a_routines_github_events_say_what_happened_about_each_pull_request(self):
+        repo = {"full_name": "Acme/Project"}
+        heads = {}
+        def send(event, payload):
+            body = json.dumps(payload).encode()
+            signature = "sha256=" + hmac.new(self.secret, body, hashlib.sha256).hexdigest()
+            return gateway.github_routine_envelopes(self.route, self.secret, body, signature, event, 1700000000, heads)
+        pushed = send("pull_request", {"action": "synchronize", "repository": repo, "pull_request": {"number": 42, "head": {"sha": "abc"}, "title": "Add login"}})
+        self.assertEqual(len(pushed), 1)
+        self.assertEqual(pushed[0]["event_type"], "github")
+        self.assertEqual(json.loads(pushed[0]["payload"])["subject"], "Acme/Project#42")
+        self.assertEqual(json.loads(pushed[0]["payload"])["summary"], "New commits pushed")
+        self.assertEqual(heads, {"Acme/Project#42": "abc"})
+        status = send("status", {"state": "failure", "sha": "abc", "context": "ci", "repository": repo})
+        self.assertEqual(json.loads(status[0]["payload"])["summary"], "Status failed: ci")
+        self.assertEqual(send("pull_request", {"action": "labeled", "repository": repo, "pull_request": {"number": 42}}), [])
+        merged = json.loads(send("pull_request", {"action": "closed", "repository": repo, "pull_request": {"number": 42, "merged": True}})[0]["payload"])
+        self.assertTrue(merged["ends"])
+        two = send("check_run", {"action": "completed", "repository": repo, "check_run": {"name": "test", "conclusion": "failure", "pull_requests": [{"number": 1}, {"number": 2}]}})
+        self.assertEqual([json.loads(e["payload"])["subject"] for e in two], ["Acme/Project#1", "Acme/Project#2"])
+        self.assertNotEqual(two[0]["delivery_id"], two[1]["delivery_id"])
+        with self.assertRaises(ValueError):
+            gateway.github_routine_envelopes(self.route, self.secret, b"{}", "sha256=00", "status", 1700000000, heads)
 
 
 def free_port():

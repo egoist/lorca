@@ -30,6 +30,8 @@ pub enum Schedule {
     Once(chrono::NaiveDateTime),
     /// So many minutes before calendar events start, or after they end; the events place it.
     Events(EventOffset),
+    /// A routine's that runs on events from a receiver: they start its runs.
+    OnEvents,
 }
 
 /// Where a run falls against a calendar event: `minutes` before it starts, or after it ends.
@@ -82,6 +84,9 @@ pub fn parse(text: &str) -> Result<Schedule, String> {
     let lowered = text.to_lowercase();
     if let Some(rest) = lowered.strip_prefix("every ").or_else(|| lowered.strip_prefix('@')) {
         return parse_every(rest.trim());
+    }
+    if lowered == "on events" {
+        return Ok(Schedule::OnEvents);
     }
     if let Some(rest) = lowered.strip_prefix("once ") {
         return parse_once(rest.trim());
@@ -275,7 +280,7 @@ impl Schedule {
             Schedule::Every(secs) => after.checked_add(*secs),
             Schedule::Cron(cron) => cron.next_after(after, zone),
             Schedule::Once(_) => self.once_at(zone).filter(|at| *at > after),
-            Schedule::Events(_) => None,
+            Schedule::Events(_) | Schedule::OnEvents => None,
         }
     }
 
@@ -303,6 +308,7 @@ impl Schedule {
             Schedule::Cron(cron) => cron.describe(),
             Schedule::Once(at) => format!("Once on {} at {}", at.format("%Y-%m-%d"), clock(at.hour(), at.minute())),
             Schedule::Events(offset) => describe_events(*offset, None),
+            Schedule::OnEvents => "On events".into(),
         }
     }
 
@@ -321,6 +327,7 @@ impl Schedule {
             Schedule::Cron(cron) => cron.normalized.clone(),
             Schedule::Once(at) => format!("once {}", at.format("%Y-%m-%d %H:%M")),
             Schedule::Events(EventOffset { minutes, after }) => format!("{minutes}m {} events", if *after { "after" } else { "before" }),
+            Schedule::OnEvents => "on events".into(),
         }
     }
 }

@@ -648,7 +648,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                     return Err("Save routine checks on the bot's assigned Runner.".into());
                 }
             }
-            let triggers = routines::Triggers { pull_request: params["pull_request"].as_str(), calendar: params["calendar"].as_str(), event_match: params["event_match"].as_str() };
+            let triggers = routines::Triggers { receiver: params["receiver"].as_str(), subject: params["subject"].as_str(), calendar: params["calendar"].as_str(), event_match: params["event_match"].as_str() };
             let routine = routines::create_routine(
                 app,
                 &bot_id,
@@ -666,8 +666,8 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         "routines.update" => {
             let id = string(&params, "id")?;
             let mut routine = app.routine(&id).ok_or("Unknown routine")?;
-            if ["name", "schedule", "prompt", "timezone", "missed_run_policy", "pull_request", "calendar", "event_match"].iter().any(|field| params.get(field).is_some()) {
-                let triggers = routines::Triggers { pull_request: params["pull_request"].as_str(), calendar: params["calendar"].as_str(), event_match: params["event_match"].as_str() };
+            if ["name", "schedule", "prompt", "timezone", "missed_run_policy", "calendar", "event_match"].iter().any(|field| params.get(field).is_some()) {
+                let triggers = routines::Triggers { calendar: params["calendar"].as_str(), event_match: params["event_match"].as_str(), ..Default::default() };
                 routine = routines::edit_routine(app, &id, opt_string(&params, "name").as_deref(), opt_string(&params, "schedule").as_deref(), params["prompt"].as_str(), None, params["timezone"].as_str(), params["missed_run_policy"].as_str(), triggers)?;
             }
             if let Some(enabled) = params["enabled"].as_bool() {
@@ -682,6 +682,51 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         "routines.run" => {
             routines::run_now(app, &string(&params, "id")?)?;
             Ok(Value::Null)
+        }
+        // A routine's webhook takes a new key on the bot's Runner, asked from any Device.
+        "routines.regenerate_key" => {
+            let id = string(&params, "id")?;
+            let routine = app.routine(&id).ok_or("Unknown routine")?;
+            let runner = app.bot(&routine.bot_id).map(|bot| bot.runner_id).ok_or("Unknown bot")?;
+            if app.this_device_id().as_deref() != Some(runner.as_str()) {
+                return crate::requests::ask(app, &runner, "routines.regenerate_key", json!({ "id": id })).await;
+            }
+            #[cfg(feature = "runner")]
+            {
+                crate::routine_events::regenerate_key(app, &id).await?;
+                Ok(json!({ "routine": app.routine(&id).map(|routine| app.routine_out(&routine)) }))
+            }
+            #[cfg(not(feature = "runner"))]
+            Err("Only a Runner keeps a routine's webhook.".into())
+        }
+        // A routine on events that waits on the user's setup subscribes again on its Runner,
+        // asked by an app the user came back to.
+        "routines.subscribe" => {
+            let id = string(&params, "id")?;
+            let routine = app.routine(&id).ok_or("Unknown routine")?;
+            let runner = app.bot(&routine.bot_id).map(|bot| bot.runner_id).ok_or("Unknown bot")?;
+            if app.this_device_id().as_deref() != Some(runner.as_str()) {
+                return crate::requests::ask(app, &runner, "routines.subscribe", json!({ "id": id })).await;
+            }
+            #[cfg(feature = "runner")]
+            {
+                crate::routine_events::subscribe_now(app, &id).await?;
+                Ok(json!({ "routine": app.routine(&id).map(|routine| app.routine_out(&routine)) }))
+            }
+            #[cfg(not(feature = "runner"))]
+            Err("Only a Runner subscribes a routine.".into())
+        }
+        // The link a user follows to set a relay's receiver up for this account, such as the
+        // Lorca GitHub App's install.
+        "receivers.setup" => {
+            let receiver = string(&params, "receiver")?;
+            let relay = app.relay_url().ok_or("This Device has no relay.")?;
+            let machine = app.machine_file().and_then(|m| m.machine().ok()).ok_or("This Device isn't paired.")?;
+            let token = crate::sync::token_or_register(app, &relay, &machine).await.map_err(|e| e.to_string())?;
+            app.relay.receiver_setup(&relay, &token, &receiver, params["subject"].as_str().filter(|subject| !subject.is_empty())).await.map_err(|error| match error.status {
+                Some(404) => format!("This relay has no {receiver} receiver."),
+                _ => error.message,
+            })
         }
         "routines.describe" => routines::describe(&string(&params, "schedule")?, params["timezone"].as_str(), params["missed_run_policy"].as_str()),
         "device.service_status" => {

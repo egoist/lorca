@@ -10,6 +10,7 @@ mod hub;
 mod limit;
 mod metrics;
 mod push;
+mod receivers;
 mod routes;
 mod store;
 mod sweep;
@@ -129,6 +130,57 @@ struct Args {
     /// of the file.
     #[usage(long, env = "LORCA_RELAY_FCM_SERVICE_ACCOUNT", hide_env_values = true)]
     fcm_service_account: Option<String>,
+
+    /// This relay's public address, such as https://relay.lorca.app, where services reach its
+    /// receivers: routines' webhook URLs start with it, and routines get webhooks only when it is
+    /// set.
+    #[usage(long, env = "LORCA_RELAY_PUBLIC_URL")]
+    public_url: Option<String>,
+
+    /// The Lorca GitHub App, which watches pull requests for routines: its id and its URL name.
+    /// The App is on only when all of its settings are given.
+    #[usage(long, env = "LORCA_RELAY_GITHUB_APP_ID")]
+    github_app_id: Option<String>,
+    #[usage(long, env = "LORCA_RELAY_GITHUB_APP_SLUG")]
+    github_app_slug: Option<String>,
+    /// The App's OAuth client id and secret, for the user authorization at install.
+    #[usage(long, env = "LORCA_RELAY_GITHUB_CLIENT_ID")]
+    github_client_id: Option<String>,
+    #[usage(long, env = "LORCA_RELAY_GITHUB_CLIENT_SECRET", hide_env_values = true)]
+    github_client_secret: Option<String>,
+    /// The secret GitHub signs the App's webhooks with.
+    #[usage(long, env = "LORCA_RELAY_GITHUB_WEBHOOK_SECRET", hide_env_values = true)]
+    github_webhook_secret: Option<String>,
+    /// The App's private key: the PEM itself or the path of the file.
+    #[usage(long, env = "LORCA_RELAY_GITHUB_PRIVATE_KEY", hide_env_values = true)]
+    github_private_key: Option<String>,
+    /// The page an install ends on.
+    #[usage(long, env = "LORCA_RELAY_GITHUB_DONE_URL", default = "https://lorca.app/github/connected")]
+    github_done_url: String,
+}
+
+/// The receivers whose settings are given.
+fn receivers(args: &Args) -> anyhow::Result<receivers::Receivers> {
+    let mut found = receivers::Receivers::default();
+    if let Some(base) = args.public_url.as_deref().map(str::trim).filter(|base| !base.is_empty()) {
+        found.webhook = Some(receivers::webhook::Hooks::new(base));
+    }
+    let github = [&args.github_app_id, &args.github_app_slug, &args.github_client_id, &args.github_client_secret, &args.github_webhook_secret, &args.github_private_key];
+    if github.iter().all(|value| value.as_deref().is_some_and(|value| !value.is_empty())) {
+        let key = key_text(args.github_private_key.as_deref().unwrap_or_default())?;
+        found.github = Some(receivers::github::GithubApp::new(
+            args.github_app_id.as_deref().unwrap_or_default(),
+            args.github_app_slug.as_deref().unwrap_or_default(),
+            args.github_client_id.as_deref().unwrap_or_default(),
+            args.github_client_secret.as_deref().unwrap_or_default(),
+            args.github_webhook_secret.as_deref().unwrap_or_default(),
+            &key,
+            &args.github_done_url,
+        )?);
+    } else if github.iter().any(|value| value.is_some()) {
+        anyhow::bail!("The GitHub App needs its id, slug, client id and secret, webhook secret, and private key");
+    }
+    Ok(found)
 }
 
 /// A key given as its text or as the path of a file. The text form lets a deploy with no
@@ -219,6 +271,8 @@ pub struct AppState {
     pub pusher: Arc<push::Pusher>,
     /// The pushes on their way to APNs and FCM, which a stopping relay delivers before it exits.
     pub pushes: tokio_util::task::TaskTracker,
+    /// The services' webhooks this relay takes for routines.
+    pub receivers: Arc<receivers::Receivers>,
 }
 
 /// How long a stopping relay waits for APNs and FCM to take the pushes it already answered
@@ -247,6 +301,7 @@ async fn main() -> anyhow::Result<()> {
     let db = db::open(&args.db, local.clone()).await?;
     let file_store = Arc::new(file_store(&args)?);
     let pusher = Arc::new(pusher(&args)?);
+    let receivers = receivers::shared(receivers(&args)?);
 
     let mut secret = [0u8; 32];
     match &args.secret {
@@ -277,6 +332,7 @@ async fn main() -> anyhow::Result<()> {
         file_store: file_store.clone(),
         pusher: pusher.clone(),
         pushes: tokio_util::task::TaskTracker::new(),
+        receivers: receivers.clone(),
     };
 
     let ticking = db.clone();
@@ -301,6 +357,7 @@ async fn main() -> anyhow::Result<()> {
         quota_bytes = args.quota_bytes,
         files = %file_store.describe(),
         push = %pusher.describe(),
+        receivers = %receivers.describe(),
         "lorca-relay listening"
     );
     let shared = args.db.contains("://");

@@ -36,6 +36,15 @@ Put it behind HTTPS with a reverse proxy such as Caddy or nginx (WebSocket upgra
 | `--ip-per-minute`, `--identity-per-second` | Rate limits. |
 | `LORCA_RELAY_METRICS_TOKEN` | Serves `GET /metrics` for Prometheus to whoever sends this bearer token. |
 
+### Pull request watches and webhooks
+
+Lorca's relay hosts the receivers for [pull request watches](/docs/routines#pull-request-watches) and [routines' webhooks](/docs/routines#webhooks). Yours can too: `LORCA_RELAY_PUBLIC_URL`, its own public address, turns on webhooks (`<address>/webhooks/<id>`), and a GitHub App of your own, registered from [`crates/relay/github-app.json`](https://github.com/egoist/lorca/blob/main/crates/relay/github-app.json) with its URLs on your relay's address (`/webhooks/github` and `/webhooks/github/callback`), turns on watches through `LORCA_RELAY_GITHUB_APP_ID`, `LORCA_RELAY_GITHUB_APP_SLUG`, `LORCA_RELAY_GITHUB_CLIENT_ID`, `LORCA_RELAY_GITHUB_CLIENT_SECRET`, `LORCA_RELAY_GITHUB_WEBHOOK_SECRET`, and `LORCA_RELAY_GITHUB_PRIVATE_KEY`.
+
+Without them, such a routine says **Your gateway**, and its events come through the [gateway](/docs/events) you run on one of your computers. The bot names the routine's subscription; export its route with `lorca events route <id> route.json`, then:
+
+- For a watch, run the gateway with `--github-secret-file <secret> --routine`, and add a webhook to the repository with your public URL, JSON content, the same secret, and the events Pull requests, Pull request reviews, Pull request review comments and threads, Issue comments, Check runs, Check suites, Statuses, and Workflow runs.
+- For a webhook, run it with `--webhook-key-file <key>` (a random key of at least 32 characters). It listens on `127.0.0.1:8984/hook` and takes the key as `Authorization: Bearer <key>`.
+
 ### Postgres
 
 Use a `postgres://` URL to run several relay processes against one database, for deploys without a gap. They must share `LORCA_RELAY_SECRET` and keep attachments in an S3-compatible bucket.
