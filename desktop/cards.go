@@ -1,8 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"net/url"
+	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/egoist/lorca/desktop/model"
 	"github.com/egoist/mygo"
@@ -201,6 +204,117 @@ func (m *mainWindow) permissionCard(c *ui.Context, chat *model.Chat, message *mo
 	})
 }
 
+// MARK: - The secret card
+
+// secretCaption is the line under a secret card's title: why, while it asks; the answer and what
+// was asked for, once answered.
+func secretCaption(request *model.PermissionRequest) string {
+	if request.IsPending() {
+		return request.Reason
+	}
+	return request.DecisionText() + " · " + request.Summary
+}
+
+// runnerName is where a bot's message came from: its Runner's name.
+func runnerName(message *model.Message) string {
+	if bot := store.Bot(message.Author.BotID); bot != nil {
+		if device := store.Device(bot.RunnerID); device != nil {
+			return device.Name
+		}
+	}
+	return L("its Runner")
+}
+
+// secretCardState is a secret card's own: what is typed in each field, a save under way, and why
+// one failed, until the card is answered.
+type secretCardState struct {
+	values []string
+	busy   bool
+	err    string
+}
+
+// secretCard is a bot asking for a secret, after the macOS app's SecretCellView: who asks and where
+// it goes, why, a field for each value that hides what is typed, Save and Not now, and a note that
+// the value stays on the Runner and the bot never sees it, which a failed save turns into why.
+// Once answered, the answer and what was asked for: "Saved · npm token".
+func (m *mainWindow) secretCard(c *ui.Context, chat *model.Chat, message *model.Message, cardAvatar *avatarContent, groupStart bool) {
+	p := colors(c)
+	request := message.Body.Request
+	name := botName(message)
+	chatID, messageID := chat.ID, message.ID
+	fields := request.Secret.Fields
+	holder := ui.Box(c.Key("secret:" + message.ID))
+	st := ui.Local(holder, "card", func() secretCardState { return secretCardState{} })
+	if len(st.values) != len(fields) {
+		st.values = make([]string, len(fields))
+	}
+	filled := len(fields) > 0
+	for _, value := range st.values {
+		filled = filled && strings.TrimSpace(value) != ""
+	}
+	save := func() {
+		if st.busy || !filled {
+			return
+		}
+		values := map[string]string{}
+		for i, field := range fields {
+			values[field.Name] = st.values[i]
+		}
+		st.busy, st.err = true, ""
+		store.AnswerSecret(chatID, messageID, values, func(err error) {
+			st.busy = false
+			if err != nil {
+				st.err = model.ErrorText(err)
+			}
+		})
+	}
+	title := name + " " + request.VerbPhrase()
+	caption := secretCaption(request)
+	tint := p.Accent
+	if !request.IsPending() {
+		tint = p.Label2
+	}
+	holder.Children(func() {
+		cardFrame(c, cardAvatar, groupStart, title+": "+caption, func() {
+			ui.Row(c).Size(18, 18).Center().TextColor(tint).Children(func() { symbol(c, "key", 17, 1.9) })
+			ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Children(func() {
+				ui.Text(c, title).FontSize(12.5).FontWeight(600).FixedLineHeight(17).SingleLine().Tooltip(title)
+				if caption != "" {
+					ui.Text(c, caption).Margin(2, 0, 0, 0).FontSize(11.5).LineHeight(1.35).TextColor(p.Label2).MaxLines(4)
+				}
+				if !request.IsPending() {
+					return
+				}
+				ui.Column(c).Gap(6).Margin(9, 0, 0, 0).Children(func() {
+					for i, field := range fields {
+						ui.Row(c.Key(field.Name)).Children(func() {
+							input := textField(c, &st.values[i], fieldOptions{Secure: true, Placeholder: field.Label, Label: field.Label, Disabled: st.busy}).Grow(1).Shrink(1).MinWidth(0)
+							if input.Changed() {
+								st.err = ""
+							}
+							if input.Submitted() {
+								save()
+							}
+						})
+					}
+				})
+				ui.Row(c).Gap(6).Margin(9, 0, 0, 0).Children(func() {
+					if pushButton(c.Key("save"), L("Save"), pushOptions{Small: true, Disabled: st.busy || !filled}).Clicked() {
+						save()
+					}
+					if pushButton(c.Key("deny"), L("Not now"), pushOptions{Small: true, Disabled: st.busy}).Clicked() {
+						store.AnswerPermission(chatID, messageID, "deny")
+					}
+				})
+				note := ui.Text(c, firstNonEmpty(st.err, L("Saved on %@. %@ never sees it.", runnerName(message), name))).Margin(7, 0, 0, 0).FontSize(11).LineHeight(1.35).TextColor(p.Label2).SingleLine()
+				if st.err != "" {
+					note.TextColor(p.Red).Tooltip(st.err)
+				}
+			})
+		})
+	})
+}
+
 // MARK: - The command card
 
 // commandTitle is "Chef wants to run a command on Workbench", "Chef's command is running", or
@@ -368,3 +482,236 @@ func (m *mainWindow) commandCard(c *ui.Context, chat *model.Chat, message *model
 
 // beep is the system's alert sound, for a command that cannot run.
 func beep() { go mygo.Shell.Beep() }
+
+// MARK: - The draft card
+
+// An email or Slack message a bot wrote, after the macOS app's DraftCellView: a card the user
+// edits in place, then sends or discards. While it waits: who drafted it and the account it goes
+// out from, the header rows as Mail's compose window has them (To, Cc, Bcc, Subject), the text,
+// the attachments, and Discard apart on the left from Send. A Slack card also offers Always Send,
+// which sends it and has the bot send its next messages directly. Once sent or discarded the card
+// keeps the message as it went, with how it ended on the title's line.
+
+// draftRow is one header row: its label and the field it edits.
+type draftRow struct {
+	label string
+	value *string
+}
+
+// draftCardState is a draft card's own: what the user typed, the files they kept, and a request
+// under way, until the card's version or state changes.
+type draftCardState struct {
+	version                    uint64
+	state                      string
+	to, cc, bcc, subject, body string
+	files                      []model.DraftFile
+	busy                       bool
+}
+
+func newDraftCardState(card *model.DraftCard) draftCardState {
+	f := card.Fields
+	return draftCardState{
+		version: card.Version, state: card.State, to: strings.Join(f.To, ", "), cc: strings.Join(f.Cc, ", "), bcc: strings.Join(f.Bcc, ", "),
+		subject: f.Subject, body: f.Body, files: slices.Clone(f.Attachments),
+	}
+}
+
+// fields is the message as the card shows it, with the user's changes.
+func (st *draftCardState) fields(card *model.DraftCard) model.DraftFields {
+	list := func(text string) []string {
+		var out []string
+		for _, part := range strings.Split(text, ",") {
+			if part = strings.TrimSpace(part); part != "" {
+				out = append(out, part)
+			}
+		}
+		return out
+	}
+	f := card.Fields.Clone()
+	f.To, f.Body, f.Attachments = list(st.to), st.body, slices.Clone(st.files)
+	if f.IsEmail() {
+		f.Cc, f.Bcc, f.Subject = list(st.cc), list(st.bcc), st.subject
+	}
+	return f
+}
+
+// draftFootnote is what Always Send changes, under a Slack card's buttons.
+func draftFootnote(card *model.DraftCard) string {
+	if card.IsPending() && card.Direct {
+		return L("Always Send also sends this bot's next Slack messages directly.")
+	}
+	return ""
+}
+
+func draftSpokenText(card *model.DraftCard, botName string) string {
+	parts := []string{card.Title(botName)}
+	if state := card.StateText(); state != "" {
+		parts = append(parts, state)
+	}
+	if len(card.Fields.To) > 0 {
+		parts = append(parts, L("To %@", strings.Join(card.Fields.To, ", ")))
+	}
+	if card.Fields.Subject != "" {
+		parts = append(parts, card.Fields.Subject)
+	}
+	return strings.Join(append(parts, card.Fields.Body), ": ")
+}
+
+// fileSize is "186 KB", "1.5 MB", as Finder counts.
+func fileSize(bytes int64) string {
+	if bytes >= 1_000_000 {
+		return fmt.Sprintf("%.1f MB", float64(bytes)/1_000_000)
+	}
+	return model.Kilobytes(int(bytes))
+}
+
+func (m *mainWindow) draftCard(c *ui.Context, chat *model.Chat, message *model.Message, cardAvatar *avatarContent, groupStart bool) {
+	p := colors(c)
+	card := message.Body.Draft
+	name := botName(message)
+	chatID, messageID, botID := chat.ID, message.ID, message.Author.BotID
+	holder := ui.Box(c.Key("draft:" + message.ID))
+	st := ui.Local(holder, "draft", func() draftCardState { return newDraftCardState(card) })
+	// The same card keeps what the user is typing; a new version or state shows what the Runner has.
+	if st.version != card.Version || st.state != card.State {
+		*st = newDraftCardState(card)
+	}
+	pending := card.IsPending()
+	shown := st.fields(card)
+	sendable := len(shown.To) > 0 && strings.TrimSpace(shown.Body) != ""
+	send := func(always bool) {
+		if st.busy || !sendable {
+			return
+		}
+		st.busy = true
+		store.SendDraft(chatID, messageID, botID, *card, shown, always, func(err error) {
+			st.busy = false
+			if err != nil {
+				m.showAlert(alertOptions{Message: L("Couldn't send this draft"), Informative: model.ErrorText(err)}, nil)
+			}
+		})
+	}
+	discard := func() {
+		if st.busy {
+			return
+		}
+		st.busy = true
+		store.DiscardDraft(chatID, messageID, *card, func(err error) {
+			st.busy = false
+			if err != nil {
+				m.showAlert(alertOptions{Message: L("Couldn't discard this draft"), Informative: model.ErrorText(err)}, nil)
+			}
+		})
+	}
+	rows := []draftRow{{L("To"), &st.to}}
+	if card.Fields.IsEmail() {
+		if len(card.Fields.Cc) > 0 {
+			rows = append(rows, draftRow{L("Cc"), &st.cc})
+		}
+		if len(card.Fields.Bcc) > 0 {
+			rows = append(rows, draftRow{L("Bcc"), &st.bcc})
+		}
+		rows = append(rows, draftRow{L("Subject"), &st.subject})
+	}
+	// The text's room comes from the message as the bot wrote it, so typing never moves what is
+	// under the card; a longer message scrolls.
+	lines := 0
+	for _, paragraph := range strings.Split(card.Fields.Body, "\n") {
+		lines += max(1, (utf8.RuneCountInString(paragraph)+63)/64)
+	}
+	if pending {
+		lines = max(lines, 3)
+	}
+	lines = min(lines, 14)
+	icon := "bubble.left"
+	if card.Fields.IsEmail() {
+		icon = "envelope"
+	}
+	holder.Children(func() {
+		cardFrame(c, cardAvatar, groupStart, draftSpokenText(card, name), func() {
+			ui.Row(c).Size(18, 18).Center().TextColor(p.Accent).Children(func() { symbol(c, icon, 17, 1.9) })
+			ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Children(func() {
+				ui.Row(c).Gap(8).MinWidth(0).Children(func() {
+					ui.Text(c, card.Title(name)).Grow(1).Shrink(1).MinWidth(0).FontSize(12.5).FontWeight(600).FixedLineHeight(17).SingleLine()
+					if state := card.StateText(); state != "" {
+						color := p.Label2
+						switch card.State {
+						case "failed":
+							color = p.Red
+						case "uncertain":
+							color = p.Orange
+						}
+						ui.Text(c, state).FontSize(textCaption).FixedLineHeight(17).TextColor(color).SingleLine()
+					}
+				})
+				ui.Text(c, card.Account).Margin(2, 0, 0, 0).FontSize(textCaption).LineHeight(1.35).TextColor(p.Label2).SingleLine()
+				ui.Column(c).Margin(6, 0, 0, 0).Children(func() {
+					for _, row := range rows {
+						line := p.Separator
+						ui.Row(c.Key("row-" + row.label)).Height(26).AlignItems(ui.Center).Gap(6).DrawOver(func(painter *ui.Painter, r ui.Rect) {
+							painter.Fill(ui.Rect{X: r.X, Y: r.Y + r.H - 1, W: r.W, H: 1}, line, 0)
+						}).Children(func() {
+							ui.Text(c, row.label).Width(draftLabelWidth(card)).FontSize(12).TextColor(p.Label2).SingleLine()
+							textField(c, row.value, fieldOptions{Plain: true, ReadOnly: !pending, Disabled: st.busy, Label: row.label}).
+								Grow(1).Shrink(1).MinWidth(0).MinHeight(22).Padding(0, 0).FontSize(12)
+						})
+					}
+				})
+				if pending {
+					textArea(c, &st.body, lines, fieldOptions{Plain: true, Disabled: st.busy, Label: L("Message")}).Margin(8, 0, 0, 0).Padding(0, 0)
+				} else {
+					// As it went: the text at its own height.
+					ui.Text(c, card.Fields.Body).Margin(8, 0, 0, 0).FontSize(13).LineHeight(1.4).Selectable()
+				}
+				for i, file := range st.files {
+					ui.Row(c.Key(fmt.Sprintf("file-%d", i))).Height(20).Gap(6).AlignItems(ui.Center).Children(func() {
+						ui.Row(c).TextColor(p.Label2).Children(func() { symbol(c, "paperclip", 12, 1.75) })
+						ui.Text(c, file.Name).FontSize(12).SingleLine().Shrink(1).MinWidth(0).Tooltip(file.Name)
+						if file.Size > 0 {
+							ui.Text(c, fileSize(file.Size)).FontSize(11).TextColor(p.Label2).SingleLine()
+						}
+						if pending {
+							remove := ui.ButtonBase(c).TextColor(p.Label3).Cursor(ui.CursorPointer).Label(L("Remove %@", file.Name)).Tooltip(L("Remove %@", file.Name))
+							remove.Children(func() { symbol(c, "xmark.circle.fill", 12, 1.75) })
+							if remove.Clicked() && !st.busy {
+								st.files = slices.Delete(slices.Clone(st.files), i, i+1)
+							}
+						}
+					})
+				}
+				if card.Note != "" {
+					color := p.Orange
+					if card.State == "failed" {
+						color = p.Red
+					}
+					ui.Text(c, card.Note).Margin(8, 0, 0, 0).FontSize(11).LineHeight(1.35).TextColor(color).MaxLines(3)
+				}
+				if pending {
+					ui.Row(c).Gap(8).Margin(12, 0, 0, 0).Children(func() {
+						if pushButton(c, L("Discard"), pushOptions{Small: true, Disabled: st.busy}).Clicked() {
+							discard()
+						}
+						ui.Box(c).Grow(1)
+						if card.Direct && pushButton(c, L("Always Send"), pushOptions{Small: true, Disabled: st.busy || !sendable}).Clicked() {
+							send(true)
+						}
+						if pushButton(c, L("Send"), pushOptions{Small: true, Kind: buttonPrimary, Disabled: st.busy || !sendable}).Clicked() {
+							send(false)
+						}
+					})
+				}
+				if note := draftFootnote(card); note != "" {
+					ui.Text(c, note).Margin(7, 0, 0, 0).FontSize(11).LineHeight(1.35).TextColor(p.Label2)
+				}
+			})
+		})
+	})
+}
+
+// draftLabelWidth is the header labels' column: as wide as the longest label the card shows.
+func draftLabelWidth(card *model.DraftCard) float32 {
+	if card.Fields.IsEmail() {
+		return 52
+	}
+	return 24
+}

@@ -6,7 +6,7 @@ import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
 import { Platform, PlatformColor, ScrollView, StyleSheet, Text } from "react-native";
 import { engine } from "../../src/core/engine";
-import type { BudgetLimits, BudgetState } from "../../src/core/model";
+import { isBotDM, type BudgetLimits, type BudgetState } from "../../src/core/model";
 import { useBotMap, useBudget, useStoppedTurn, useStore } from "../../src/core/store";
 import { t, useLanguage } from "../../src/i18n";
 import { alert } from "../../src/ui/alert";
@@ -32,7 +32,7 @@ export default function LimitsScreen() {
   const usage = kind === "chat" ? stopped?.usage : configured?.usage;
   const [fields, setFields] = useState<LimitFields>(() => fieldsOf(configured?.limits));
   const [busy, setBusy] = useState(false);
-  const dm = useStore((s) => s.chats.find((c) => c.kind === "dm" && c.bot_ids[0] === botId)?.id);
+  const dm = useStore((s) => s.chats.find((c) => isBotDM(c) && c.bot_ids[0] === botId)?.id);
 
   if (!bot) return null;
   // The DM a turn runs in, the task's first chat, or the routine's DM.

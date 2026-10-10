@@ -242,6 +242,7 @@ mod tests {
                 description: None,
                 is_pinned: false,
                 created_at: 1.0,
+                channel: None,
             },
             unread_count: 0,
             usage: None,

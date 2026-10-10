@@ -350,6 +350,14 @@ async fn connect(app: &Arc<App>, plugin: &Installed, name: &str, spec: &ServerSp
                 }
             }
         }
+        ServerSpec::Builtin { service: name, .. } => {
+            // Telegram's server runs only for Telegram's accounts, and Slack's for Slack's.
+            let service = super::builtin::service(name)
+                .filter(|service| service.name() == plugin.service_id())
+                .ok_or_else(|| format!("{} needs a newer Lorca on this Runner.", plugin.manifest.name))?;
+            let pipe = super::builtin::start(app, &plugin.manifest.id, service);
+            client().serve(pipe).await.map_err(|e| format!("{} did not start: {e}", plugin.manifest.name))?
+        }
         ServerSpec::Http { url, headers, auth: auth_spec, .. } => {
             // `${VAR}` in an mcp.json server's URL is the environment's.
             let url = &fill(url, values);
@@ -785,6 +793,29 @@ async fn restore_manager(app: &Arc<App>, url: &str, stored: &Value, metadata_url
     state.into_authorization_manager().ok_or_else(|| "Restoring the sign-in".to_string())
 }
 
+/// A native sign-in's access token for the service's own API, refreshed and saved first when it
+/// is about to expire, as a connection refreshes it: what a Gmail draft card's Send sends with.
+pub async fn service_token(app: &Arc<App>, plugin_id: &str, server: &str) -> Result<String, String> {
+    let generation = app.mcp.generation(plugin_id);
+    let (stored, token_endpoint) = {
+        let store = app.plugins.lock().unwrap();
+        let plugin = store.get(plugin_id).ok_or("The account was removed.")?;
+        let Some(ServerSpec::Http { auth: Some(AuthSpec::Oauth { token_endpoint: Some(endpoint), .. }), .. }) = plugin.manifest.servers.get(server) else {
+            return Err("The account has no sign-in to send with.".into());
+        };
+        (store.sign_in_secret(plugin_id, "oauth", server).ok_or("Sign in to the account again.")?, endpoint.clone())
+    };
+    if stored["native_flow"].as_bool() != Some(true) {
+        return Err("Sign in to the account again.".into());
+    }
+    let refreshed = super::oauth::refresh(&app.http, &token_endpoint, &stored).await?;
+    if let Some(refreshed) = &refreshed {
+        super::set_oauth_at_generation(app, plugin_id, server, refreshed.clone(), generation)?;
+    }
+    let saved = refreshed.as_ref().unwrap_or(&stored);
+    saved["tokens"]["access_token"].as_str().map(String::from).ok_or_else(|| "The saved sign-in has no access token".into())
+}
+
 #[derive(Debug)]
 struct DeviceBearer {
     access_token: String,
@@ -999,6 +1030,7 @@ pub fn post_sign_in_card(app: &Arc<App>, chat_id: &str, bot_id: &str, plugin_id:
             command: None,
             link: None,
             code: None,
+            secret: None,
         },
     );
     app.upsert_message(message.clone(), true);
@@ -2150,6 +2182,15 @@ pub async fn review_call(
         return Some(crate::permissions::refuse(app, chat_id, bot, denied));
     }
     if capability == crate::permissions::Capability::Read { return None; }
+    // An email or Slack message the bot writes in a chat waits as a draft for the user to send,
+    // who reviews it on its card, so Auto-review does not judge it.
+    if !unattended && crate::permissions::drafts_messages(bot) {
+        let message = app.plugins.lock().unwrap().get(&tool.plugin_id).and_then(|plugin| plugin.manifest.tools.message(&name).cloned());
+        if let Some(message) = message {
+            let names = (tool.plugin_id.as_str(), tool.server_name.as_str(), tool.plugin_name.as_str());
+            return Some(crate::drafts::stage(app, bot, chat_id, trigger, &ctx.tool_call.id, names, &name, &message, ctx.args, ctx.cancel).await);
+        }
+    }
     // The script the call comes from says what the whole batch is for.
     let script = ctx.parent.filter(|parent| parent.name == codemode::CODEMODE_TOOL_NAME).and_then(|parent| parent.arguments["code"].as_str());
     let outcome = super::review::decide(app, bot, chat_id, trigger, &tool.plugin_id, &tool.plugin_name, &name, &review_description, ctx.args, script, ctx.cancel).await;
@@ -2157,7 +2198,7 @@ pub async fn review_call(
     if unattended {
         let staged = crate::review_execution::stage_call(app, bot, chat_id, trigger, &ctx.tool_call.id,
             crate::review_queue::ReviewPayload::Plugin { plugin_id: tool.plugin_id.clone(), server_name: tool.server_name.clone(), tool: name.clone(), arguments: ctx.args.clone() },
-            crate::review_queue::ReviewTarget { account: tool.plugin_name.clone(), resource: call_summary(&name, ctx.args) }, reason.as_deref()).await;
+            crate::review_queue::ReviewTarget { account: tool.plugin_name.clone(), resource: call_summary(&name, ctx.args) }, reason.as_deref(), ctx.cancel).await;
         let status = match staged {
             Ok(item) => format!("Staged review {} (version {}). The user can edit and approve it later; the exact call resumes on this Runner. Do not retry it now.", item.id, item.version),
             Err(error) => format!("Could not stage the action for review: {error}. Report the proposed action."),
@@ -2389,8 +2430,24 @@ impl Tool for PluginTool {
         // A sign-in, connection or review may have awaited while the user revoked access.
         self.check_policy(&cancel).await?;
         let _permit = self.admit(&cancel).await?;
+        // A saved secret the call names goes in only now, past every review, and only into what
+        // Browser types on the secret's own site.
+        let page = async {
+            let tabs = server.browser_call("browser_tabs", json!({ "action": "list" })).await?;
+            let text = tabs.content.iter().filter_map(|block| match block { ContentBlock::Text(text) => Some(text.text.as_str()), _ => None }).collect::<Vec<_>>().join("\n");
+            crate::secrets::current_page(&text).ok_or_else(|| "Lorca could not tell which page the browser shows, so it typed nothing.".to_string())
+        };
+        let args = crate::secrets::fill_call(&self.app, self.policy_context.as_ref().map(|(bot, _)| bot), &self.plugin_id, &tool, args, page).await.map_err(ToolError)?;
         params.name = tool.clone().into();
         params.arguments = args.as_object().cloned();
+        // A server of Lorca's own learns whose turn called, to keep what it sent in that chat.
+        let builtin = self.app.plugins.lock().unwrap().get(&self.plugin_id).is_some_and(|plugin| matches!(plugin.manifest.servers.get(&self.server_name), Some(ServerSpec::Builtin { .. })));
+        if let (true, Some((bot, chat_id))) = (builtin, &self.policy_context) {
+            let mut meta = serde_json::Map::new();
+            meta.insert("lorca/bot_id".into(), json!(bot.id));
+            meta.insert("lorca/chat_id".into(), json!(chat_id));
+            params.meta = Some(rmcp::model::RequestMetaObject(rmcp::model::MetaObject(meta)));
+        }
         // A call the user stops, or one that runs out of time, is called off at the server too
         // (`notifications/cancelled`), so it stops the work rather than finishing it unseen.
         let request = rmcp::model::ClientRequest::CallToolRequest(rmcp::model::CallToolRequest::new(params));
@@ -2861,6 +2918,7 @@ pub async fn ask_with_rule(
             command: None,
             link: None,
             code: None,
+            secret: None,
         },
     );
     let decision = await_answer(app, chat_id, &message.id, always_rule, cancel, || {
@@ -3180,6 +3238,71 @@ for line in sys.stdin:
             tools: std::sync::RwLock::new(Vec::new()), instructions: None, resources: false, auth: None, bearer_expires_at: None,
             generation: app.mcp.generation(crate::browser::PLUGIN_ID),
         }), calls)
+    }
+
+    /// What a scripted Browser server answers a call with: a result's `content`, or an error's text.
+    pub(crate) type BrowserAnswer = Arc<dyn Fn(&str, &Value) -> Result<Value, String> + Send + Sync>;
+
+    /// A Browser server over an in-memory MCP transport that lists `tools` and answers each call
+    /// as `answer` says, recording the calls with their arguments.
+    pub(crate) async fn scripted_browser(app: &Arc<App>, tools: &[&str], answer: BrowserAnswer) -> (Arc<Server>, Arc<Mutex<Vec<(String, Value)>>>) {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+        let (client_io, server_io) = tokio::io::duplex(1 << 20);
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let recorded = calls.clone();
+        let (read, mut write) = tokio::io::split(server_io);
+        let listed: Vec<Value> = tools.iter().map(|name| json!({ "name": name, "inputSchema": { "type": "object" } })).collect();
+        tokio::spawn(async move {
+            let mut lines = tokio::io::BufReader::new(read).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let request: Value = serde_json::from_str(&line).unwrap();
+                let Some(id) = request.get("id").cloned() else { continue };
+                let result = match request["method"].as_str() {
+                    Some("initialize") => json!({ "protocolVersion": request["params"]["protocolVersion"], "capabilities": { "tools": {} }, "serverInfo": { "name": "scripted-browser", "version": "1" } }),
+                    Some("tools/list") => json!({ "tools": listed }),
+                    Some("tools/call") => {
+                        let name = request["params"]["name"].as_str().unwrap_or_default().to_string();
+                        let arguments = request["params"]["arguments"].clone();
+                        recorded.lock().unwrap().push((name.clone(), arguments.clone()));
+                        match answer(&name, &arguments) {
+                            Ok(content) => json!({ "content": content }),
+                            Err(error) => json!({ "content": [{ "type": "text", "text": format!("### Error\nError: {error}") }], "isError": true }),
+                        }
+                    }
+                    _ => json!({}),
+                };
+                let line = format!("{}\n", json!({ "jsonrpc": "2.0", "id": id, "result": result }));
+                if write.write_all(line.as_bytes()).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let service = Client { info: ClientConfig::default(), app: Arc::downgrade(app), plugin_id: crate::browser::PLUGIN_ID.into(), server: "browser".into(), generation: app.mcp.generation(crate::browser::PLUGIN_ID) }.serve(client_io).await.unwrap();
+        let tools = service.peer().list_all_tools().await.unwrap();
+        (Arc::new(Server {
+            plugin_id: crate::browser::PLUGIN_ID.into(), name: "browser".into(), service,
+            tools: std::sync::RwLock::new(tools), instructions: None, resources: false, auth: None, bearer_expires_at: None,
+            generation: app.mcp.generation(crate::browser::PLUGIN_ID),
+        }), calls)
+    }
+
+    /// A headless Browser server from this computer's Playwright MCP (`npx`), as a profile's but
+    /// without a window, on `LORCA_TEST_CHROMIUM` or else Playwright's Chrome for Testing.
+    pub(crate) async fn headless_browser(app: &Arc<App>, cwd: &std::path::Path) -> Arc<Server> {
+        let plugin = app.plugins.lock().unwrap().get(crate::browser::PLUGIN_ID).cloned().unwrap();
+        let chromium = std::env::var("LORCA_TEST_CHROMIUM").unwrap_or_else(|_| {
+            let cache = dirs::home_dir().unwrap().join("Library/Caches/ms-playwright");
+            let build = std::fs::read_dir(&cache).unwrap().flatten().map(|entry| entry.path()).filter(|path| path.file_name().unwrap().to_string_lossy().starts_with("chromium-")).max().unwrap();
+            build.join("chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing").display().to_string()
+        });
+        let args = ["-y", "@playwright/mcp@latest", "--headless", "--isolated", "--image-responses", "allow", "--executable-path", &chromium].map(String::from).to_vec();
+        let spec = ServerSpec::Stdio { command: "npx".into(), args, env: BTreeMap::new(), cwd: Some(cwd.display().to_string()), timeout: None };
+        Arc::new(connect(app, &plugin, "browser", &spec, &BTreeMap::new(), app.mcp.generation(crate::browser::PLUGIN_ID)).await.unwrap())
+    }
+
+    /// A screenshot's content, a 1×1 PNG.
+    pub(crate) fn png_content() -> Value {
+        json!([{ "type": "image", "data": PNG, "mimeType": "image/png" }])
     }
 
     /// One of the Browser plugin's tools as a bot's turn has it.
@@ -3529,7 +3652,7 @@ for line in sys.stdin:
 
         let mut local: Vec<Arc<dyn Tool>> = lorca_agent::tools::coding_tools(scratch.1.clone()).into_iter().filter(|tool| tool.name() == "read").collect();
         // The scripts' own bash: one command at a time, resolving to its output and exit code.
-        let bash = crate::shell::script_bash(app, &scratch.1);
+        let bash = crate::shell::script_bash(app, "bot-test", &scratch.1);
         assert_eq!(bash.execution_mode(), Some(lorca_agent::agent_loop::ToolExecutionMode::Sequential));
         assert!(bash.output_schema().is_some() && !bash.description().contains("session id"), "{}", bash.description());
         local.push(bash);

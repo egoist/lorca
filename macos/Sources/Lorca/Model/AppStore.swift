@@ -38,6 +38,7 @@ enum SettingsPane: String, CaseIterable {
     case autoReview = "auto-review"
     case sharedLinks = "shared-links"
     case plugins
+    case secrets
     case bots
     case device
     case advanced
@@ -48,7 +49,7 @@ enum SettingsPane: String, CaseIterable {
     var isDeviceScoped: Bool {
         switch self {
         case .general, .providers, .autoReview, .sharedLinks, .advanced: false
-        case .bots, .plugins, .device: true
+        case .bots, .plugins, .secrets, .device: true
         }
     }
 }
@@ -475,6 +476,14 @@ final class AppStore {
         noteCommand(message, in: chatID)
         noteOutput(message, in: chatID)
         if let messageIndex = chats[chatIndex].index(of: message.id) {
+            var message = message
+            // A draft card the Runner wrote again, unchanged, keeps what the user is typing in it.
+            if case let .draft(old) = chats[chatIndex].messages[messageIndex].body, case var .draft(new) = message.body,
+                new.version == old.version, new.isPending, old.isPending
+            {
+                new.edited = old.edited
+                message.body = .draft(new)
+            }
             chats[chatIndex].messages[messageIndex] = message
             emit(.messageChanged(chatID, message.id))
             if message.state == .complete { refreshChatList() }
@@ -582,13 +591,16 @@ final class AppStore {
     }
 
     func title(for chat: Chat) -> String {
-        if chat.isGroup, let custom = chat.customTitle, !custom.isEmpty { return custom }
+        if chat.isGroup || chat.channel != nil, let custom = chat.customTitle, !custom.isEmpty { return custom }
         let names = chat.botIDs.compactMap { bot($0)?.name }
         return names.isEmpty ? L("New Chat") : names.joined(separator: ", ")
     }
 
     func subtitle(for chat: Chat) -> String {
         let members = bots(in: chat)
+        if let channel = chat.channel, let only = members.first {
+            return L("%@ on %@", only.name, channel.service == "slack" ? "Slack" : "Telegram")
+        }
         if chat.isDM, let only = members.first {
             let host = device(only.runnerID)?.name ?? L("unassigned")
             return L("%@ on %@", only.provider.name, host)
@@ -618,6 +630,8 @@ final class AppStore {
         case let .permission(request):
             let who = bot(last.author.botID ?? "")?.name ?? L("A bot")
             body = "\(who) \(request.verbPhrase)"
+        case let .draft(card):
+            body = card.title(botName: bot(last.author.botID ?? "")?.name ?? L("A bot"))
         }
 
         let flattened = body
@@ -672,7 +686,7 @@ final class AppStore {
     /// twice lands in the same thread.
     @discardableResult
     func dm(with botID: Bot.ID) -> Chat.ID {
-        if let existing = chats.first(where: { $0.isDM && $0.botIDs == [botID] }) {
+        if let existing = chats.first(where: { $0.isBotDM && $0.botIDs == [botID] }) {
             return existing.id
         }
         return createChat(kind: .dm, with: [botID], title: nil)
@@ -814,6 +828,77 @@ final class AppStore {
     func botAccessCatalog(_ id: Bot.ID) async throws -> BotAccessCatalog {
         if isMock { return MockData.accessCatalog() }
         return try await client.request("bots.permissions", ["id": id], as: BotAccessCatalog.self)
+    }
+
+    /// Sends a draft card's message: the user's edit first, as the item's next version, then
+    /// that version approved, which the bot's Runner sends. `always` then turns drafts off for
+    /// the bot, so its next messages go out directly. Throws why it was not sent, with the card
+    /// back as it was.
+    func sendDraft(_ card: DraftCard, chatID: Chat.ID, messageID: Message.ID, botID: Bot.ID?, always: Bool) async throws {
+        let edited = card.shown
+        setDraft(chatID: chatID, messageID: messageID) { $0.state = "approved"; $0.fields = edited; $0.edited = nil }
+        do {
+            if isMock {
+                setDraft(chatID: chatID, messageID: messageID) { $0.state = "succeeded" }
+            } else {
+                var version = card.version
+                if edited != card.fields {
+                    let data = try await client.request("reviews.edit", ["id": card.reviewID, "expected_version": version, "message": edited.parameters])
+                    let item = try Wire.decoder.decode(ReviewItem.self, from: data)
+                    upsertReview(item)
+                    version = item.version
+                }
+                let data = try await client.request("reviews.approve", ["id": card.reviewID, "expected_version": version])
+                upsertReview(try Wire.decoder.decode(ReviewItem.self, from: data))
+            }
+        } catch {
+            setDraft(chatID: chatID, messageID: messageID) { $0 = card }
+            throw error
+        }
+        if always, let botID { setDraftsDirect(botID) }
+    }
+
+    /// Discards a draft card's message: nothing is sent.
+    func discardDraft(_ card: DraftCard, chatID: Chat.ID, messageID: Message.ID) async throws {
+        setDraft(chatID: chatID, messageID: messageID) { $0.state = "rejected" }
+        guard !isMock else { return }
+        do {
+            let data = try await client.request("reviews.reject", ["id": card.reviewID, "expected_version": card.version])
+            upsertReview(try Wire.decoder.decode(ReviewItem.self, from: data))
+        } catch {
+            setDraft(chatID: chatID, messageID: messageID) { $0 = card }
+            throw error
+        }
+    }
+
+    /// The bot sends its messages directly from now on, as its Access says once drafts are off.
+    private func setDraftsDirect(_ id: Bot.ID) {
+        guard let index = bots.firstIndex(where: { $0.id == id }) else { return }
+        var policy = bots[index].permissions ?? BotPermissions()
+        policy.drafts = false
+        bots[index].permissions = policy
+        emit(.rosterChanged)
+        perform("bots.update", ["id": id, "drafts": false])
+    }
+
+    /// Keeps what the user changed on a draft card until they send it. Only a change to its
+    /// attachments redraws the card; typing never does.
+    func editDraft(chatID: Chat.ID, messageID: Message.ID, fields: DraftCard.Fields) {
+        guard let chatIndex = chats.firstIndex(where: { $0.id == chatID }), let index = chats[chatIndex].index(of: messageID),
+            case var .draft(card) = chats[chatIndex].messages[index].body, card.isPending
+        else { return }
+        let files = card.shown.attachments
+        card.edited = fields == card.fields ? nil : fields
+        chats[chatIndex].messages[index].body = .draft(card)
+        if files != fields.attachments { emit(.messageChanged(chatID, messageID)) }
+    }
+
+    private func setDraft(chatID: Chat.ID, messageID: Message.ID, _ change: (inout DraftCard) -> Void) {
+        update(messageID, in: chatID) { message in
+            guard case var .draft(card) = message.body else { return }
+            change(&card)
+            message.body = .draft(card)
+        }
     }
 
     /// Only the user changes a bot's Access; the CLI also dismisses the access requests it left.
@@ -1438,6 +1523,67 @@ final class AppStore {
     }
 
     /// Runs the routine now, on its bot's Runner.
+    // MARK: - Channels
+
+    /// The bot's channels, as its Runner advertises them.
+    func channels(for botID: Bot.ID) -> [ChannelStatus] {
+        guard let bot = bot(botID) else { return [] }
+        return (device(bot.runnerID)?.channels ?? []).filter { $0.botID == botID }
+    }
+
+    func channel(_ id: String) -> ChannelStatus? {
+        devices.lazy.flatMap(\.channels).first { $0.id == id }
+    }
+
+    /// The conversations a channel keeps, the latest first.
+    func conversations(of channelID: String) -> [Chat] {
+        chats.filter { $0.channel?.channelID == channelID }.sorted { $0.lastActivity > $1.lastActivity }
+    }
+
+    /// The account a channel speaks through, by its name on the Runner: "Telegram · Community".
+    func accountName(of channel: ChannelStatus) -> String {
+        guard let bot = bot(channel.botID) else { return channel.serviceName }
+        return device(bot.runnerID)?.plugins.first { $0.id == channel.accountID }?.name ?? channel.serviceName
+    }
+
+    private func updateChannel(_ id: String, _ change: (inout ChannelStatus) -> Void) {
+        for index in devices.indices {
+            if let at = devices[index].channels.firstIndex(where: { $0.id == id }) {
+                change(&devices[index].channels[at])
+            }
+        }
+        emit(.rosterChanged)
+    }
+
+    private func runnerID(ofChannel id: String) -> Device.ID? {
+        devices.first { $0.channels.contains { $0.id == id } }?.id
+    }
+
+    /// Pauses or resumes a channel on its Runner. Paused, it takes no new messages.
+    func setChannelPaused(_ id: String, _ paused: Bool) {
+        guard let runnerID = runnerID(ofChannel: id) else { return }
+        updateChannel(id) { $0.state = paused ? .paused : .listening }
+        perform(paused ? "events.pause" : "events.resume", ["runner_id": runnerID, "id": id])
+    }
+
+    /// Tries the message that holds a channel again, or skips it, which lets the next ones run.
+    func settleHeldMessage(of id: String, retry: Bool) {
+        guard let runnerID = runnerID(ofChannel: id), let held = channel(id)?.heldDelivery else { return }
+        updateChannel(id) {
+            $0.state = .listening
+            $0.heldDelivery = nil
+            $0.detail = ""
+        }
+        perform(retry ? "events.retry" : "events.discard", ["runner_id": runnerID, "id": held])
+    }
+
+    func removeChannel(_ id: String) {
+        guard let runnerID = runnerID(ofChannel: id) else { return }
+        for index in devices.indices { devices[index].channels.removeAll { $0.id == id } }
+        emit(.rosterChanged)
+        perform("events.delete", ["runner_id": runnerID, "id": id])
+    }
+
     func runRoutine(_ id: Routine.ID) {
         guard let index = routines.firstIndex(where: { $0.id == id }) else { return }
         routines[index].isRunning = true
@@ -1584,8 +1730,9 @@ final class AppStore {
         guard let chat = chat(id) else { return }
 
         // A bot owns its DM, so deleting that row deletes the bot as one roster operation.
-        // Groups keep their other members; a group with nobody left is removed too.
-        if chat.isDM, let botID = chat.botIDs.first, bot(botID) != nil {
+        // Groups keep their other members; a group with nobody left is removed too. A channel's
+        // conversation is only its transcript.
+        if chat.isBotDM, let botID = chat.botIDs.first, bot(botID) != nil {
             let relatedChatIDs = chats.filter { $0.botIDs.contains(botID) }.map(\.id)
             for chatID in relatedChatIDs { replyEngine?.cancel(chatID: chatID) }
 

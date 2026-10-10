@@ -791,7 +791,7 @@ pub fn finish_job(
 }
 
 /// The turn's own limits, or its task's, stopped it on this Runner.
-fn stopped_at_limits(app: &App, job: &Job) -> bool {
+pub(crate) fn stopped_at_limits(app: &App, job: &Job) -> bool {
     app.budgets.local_snapshots(app).iter().any(|budget| {
         matches!(budget.state.as_str(), "budget_exhausted" | "interrupted")
             && ((budget.kind == "job" && budget.id == job.id)

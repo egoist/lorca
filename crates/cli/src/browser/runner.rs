@@ -13,6 +13,12 @@ use crate::app::App;
 use crate::model::{Bot, Message};
 use crate::plugins::mcp::Server;
 
+#[path = "recording.rs"]
+mod recording;
+#[path = "replay.rs"]
+mod replay;
+pub use recording::content as recording_content;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Control {
@@ -23,7 +29,8 @@ pub enum Control {
 }
 
 /// One browser profile of a bot. `revision` goes up with every change of control, so a Return
-/// to Bot made from an old view cannot hand back a newer takeover.
+/// to Bot made from an old view cannot hand back a newer takeover. `recording` while the user
+/// records a workflow in it, which they always do in control (`human`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub id: String,
@@ -34,6 +41,8 @@ pub struct Session {
     pub selected: bool,
     pub revision: u64,
     pub created_at: f64,
+    #[serde(default)]
+    pub recording: bool,
 }
 
 struct Runtime {
@@ -61,6 +70,7 @@ impl Runtime {
         }
         let mut meta = self.meta.lock().unwrap();
         meta.state = Control::Stopped;
+        meta.recording = false;
         meta.revision += 1;
     }
 }
@@ -143,6 +153,7 @@ impl Sessions {
             }
             // A restart never hands the bot a browser or opens a window.
             meta.state = Control::Stopped;
+            meta.recording = false;
             meta.revision += 1;
             items.insert(meta.id.clone(), Runtime::new(meta));
         }
@@ -198,6 +209,7 @@ impl Sessions {
             selected: false,
             revision: 1,
             created_at: crate::config::now_secs(),
+            recording: false,
         };
         let runtime = Runtime::new(meta);
         self.items.lock().unwrap().insert(runtime.meta.lock().unwrap().id.clone(), runtime.clone());
@@ -404,6 +416,9 @@ impl Sessions {
             if meta.revision != revision || meta.state != Control::Human {
                 return Err("The browser changed on its Runner. Look again before handing it back.".into());
             }
+            if meta.recording {
+                return Err("Stop recording before you hand the browser back.".into());
+            }
             if runtime.open_server().is_none() {
                 return Err("The browser was closed. Open it again.".into());
             }
@@ -424,6 +439,8 @@ impl Sessions {
         let meta = {
             let mut meta = runtime.meta.lock().unwrap();
             meta.state = Control::Stopped;
+            // Closing the browser drops a recording in progress with it.
+            meta.recording = false;
             meta.revision += 1;
             meta.clone()
         };
@@ -479,6 +496,7 @@ impl Sessions {
         }
         drop(items);
         self.save(app)?;
+        recording::forget(app, id);
         let profile = app.config.home.join("browser/profiles").join(id);
         if profile.is_dir() {
             std::fs::remove_dir_all(profile).map_err(|e| e.to_string())?;
@@ -609,6 +627,7 @@ pub fn publish_image(app: &Arc<App>, bot_id: &str, chat_id: &str, name: &str, re
 pub struct SessionTool {
     pub app: Arc<App>,
     pub bot: Bot,
+    pub chat_id: String,
 }
 
 #[async_trait]
@@ -617,10 +636,16 @@ impl Tool for SessionTool {
         "browser_session"
     }
     fn description(&self) -> &str {
-        "Your browser profiles on your Runner; each keeps its own sign-ins. `list` shows them, `create` adds one with a `name`, and `open` opens one (`session_id`) in a window on the Runner. While a profile is open, your Browser plugin calls use it; without one they use the Runner's shared headless browser. Open a profile when a site needs the user's sign-in, and ask the user to sign in there. While the user has taken over the browser, your Browser calls wait until they hand it back."
+        "Your browser profiles on your Runner; each keeps its own sign-ins. `list` shows them, `create` adds one with a `name`, and `open` opens one (`session_id`) in a window on the Runner. While a profile is open, your Browser plugin calls use it; without one they use the Runner's shared headless browser. Open a profile when a site needs the user's sign-in, and ask the user to sign in there. While the user has taken over the browser, your Browser calls wait until they hand it back. `run` repeats the recorded steps of a saved skill (`skill`: its name) that keeps them in scripts/browser-steps.json, in the profile they name, with `inputs` for its {{name}}s: each step's first matching target, then what it expects. A step the page no longer matches stops the run with a screenshot in the chat and ends your turn."
     }
     fn parameters(&self) -> Value {
-        json!({ "type": "object", "properties": { "action": { "type": "string", "enum": ["list", "create", "open"] }, "session_id": { "type": "string" }, "name": { "type": "string" } }, "required": ["action"] })
+        json!({ "type": "object", "properties": {
+            "action": { "type": "string", "enum": ["list", "create", "open", "run"] },
+            "session_id": { "type": "string" },
+            "name": { "type": "string" },
+            "skill": { "type": "string", "description": "run: the saved skill's name" },
+            "inputs": { "type": "object", "additionalProperties": { "type": "string" }, "description": "run: a value for each of the skill's inputs" }
+        }, "required": ["action"] })
     }
     async fn execute(&self, _id: &str, args: Value, cancel: CancellationToken, _on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
         if cancel.is_cancelled() {
@@ -641,6 +666,11 @@ impl Tool for SessionTool {
                 };
                 json!(opened)
             }
+            Some("run") => {
+                let skill = args["skill"].as_str().ok_or_else(|| ToolError("missing skill".into()))?;
+                let inputs: std::collections::BTreeMap<String, String> = serde_json::from_value(args["inputs"].clone()).unwrap_or_default();
+                return replay::run(&self.app, &self.bot, &self.chat_id, skill, &inputs, &cancel).await;
+            }
             _ => return Err(ToolError("Unknown browser_session action".into())),
         };
         Ok(ToolResult::text(serde_json::to_string(&result).unwrap()))
@@ -660,20 +690,36 @@ pub async fn review_call(app: &Arc<App>, bot: &Bot, chat_id: &str, trigger: &cra
     if let Err(error) = app.browser_sessions.wait_if_taken_over(&bot.id, ctx.cancel).await {
         return Some(crate::local_review::blocked(error));
     }
-    if ctx.args["action"] != "open" {
-        return None;
-    }
-    let description = "Open one of this bot's browser profiles in a window on its Runner.";
-    let outcome = crate::plugins::review::decide(app, bot, chat_id, trigger, "browser-session", "Browser", "browser_session", description, ctx.args, None, ctx.cancel).await;
+    let (description, args) = match ctx.args["action"].as_str() {
+        Some("open") => ("Open one of this bot's browser profiles in a window on its Runner.".to_string(), ctx.args.clone()),
+        // What the run does, step by step, for the reviewer.
+        Some("run") => {
+            let skill = ctx.args["skill"].as_str().unwrap_or_default();
+            let inputs: std::collections::BTreeMap<String, String> = serde_json::from_value(ctx.args["inputs"].clone()).unwrap_or_default();
+            let steps = match replay::skill_steps(app, &bot.id, chat_id, skill).and_then(|(_, steps)| steps.with_inputs(&inputs)) {
+                Ok(steps) => steps,
+                // The run itself says what is wrong.
+                Err(_) => return None,
+            };
+            let mut args = ctx.args.clone();
+            args["steps"] = json!(steps.steps.iter().map(super::steps::Step::describe).collect::<Vec<_>>());
+            (format!("Repeat the recorded steps of the saved skill {skill} in this bot's “{}” browser profile on its Runner.", steps.profile), args)
+        }
+        _ => return None,
+    };
+    let outcome = crate::plugins::review::decide(app, bot, chat_id, trigger, "browser-session", "Browser", "browser_session", &description, &args, None, ctx.cancel).await;
     let crate::plugins::review::Outcome::Ask { reason, .. } = outcome else {
         return None;
     };
+    let run = ctx.args["action"] == "run";
     if unattended {
-        return Some(crate::local_review::blocked("Opening a browser window needs approval; nobody is here to approve it.".into()));
+        let what = if run { "Running these browser steps" } else { "Opening a browser window" };
+        return Some(crate::local_review::blocked(format!("{what} needs approval; nobody is here to approve it.")));
     }
-    match crate::plugins::mcp::ask(app, chat_id, &bot.id, "browser-session", "Browser", "browser_session", description, ctx.args.clone(), reason, ctx.cancel).await {
+    match crate::plugins::mcp::ask(app, chat_id, &bot.id, "browser-session", "Browser", "browser_session", &description, args, reason, ctx.cancel).await {
         crate::plugins::mcp::Decision::Allowed | crate::plugins::mcp::Decision::Always => None,
         crate::plugins::mcp::Decision::Dismissed => Some(crate::local_review::dismissed("The user wrote instead of approving the browser.")),
+        _ if run => Some(crate::local_review::blocked("The user didn't approve running these browser steps.".into())),
         _ => Some(crate::local_review::blocked("The user didn't approve opening the browser.".into())),
     }
 }

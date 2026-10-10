@@ -438,7 +438,7 @@ extension SidebarViewController: NSMenuDelegate {
         }
         menu.addItem(.separator())
         menu.addItem(
-            item(chat?.isDM == true ? L("Delete Bot") : L("Delete"),
+            item(chat?.isBotDM == true ? L("Delete Bot") : L("Delete"),
                  #selector(RootSplitViewController.deleteChat(_:))))
     }
 

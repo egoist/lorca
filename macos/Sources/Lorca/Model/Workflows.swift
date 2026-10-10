@@ -96,10 +96,21 @@ struct WorkflowProgress: Decodable {
         var id: String
         var body: Body
     }
+    /// A channel the workflow listens on once it is on, with the Runner's channel then.
+    struct Channel: Decodable {
+        var id: String
+        var name: String
+        var serviceId: String
+        var listen: Wire.ChannelStatus.Listen
+        var channel: Wire.ChannelStatus?
+
+        var isOn: Bool { channel.map { $0.state != "paused" } ?? false }
+    }
     var setup: Setup
     var connections: [Connection]
     var specialists: [Specialist]
     var routines: [Routine]
+    var channels: [Channel]?
     var sampleMessages: [SampleMessage]
     var isRunning: Bool
 }
@@ -159,16 +170,24 @@ final class MockWorkflows {
                 "questions": [["id": "repositories", "label": "Repositories", "placeholder": "owner/repo, owner/another-repo"]],
                 "connections": [["service_id": "github", "name": "GitHub"]],
             ],
+            [
+                "id": "feedback-collector", "name": "Feedback collector", "symbol_name": "tray.and.arrow.down",
+                "outcome": "Turn feedback in your Telegram group into GitHub issues, with a digest each morning.",
+                "description": "A bot listens in a Telegram community for #feedback, mentions, and replies to it, files or updates GitHub issues, thanks people in their thread, and writes you a daily digest.",
+                "questions": [["id": "repository", "label": "Repository", "placeholder": "acme/app"]],
+                "connections": [["service_id": "telegram", "name": "Telegram"], ["service_id": "github", "name": "GitHub"]],
+            ],
         ]
         return (try? decode([WorkflowPack].self, json)) ?? []
     }
 
     private static let specialists = [
         "meeting-preparation": "Meeting Preparer", "inbox-triage": "Inbox Triager", "repository-monitoring": "Repository Monitor",
+        "feedback-collector": "Feedback Collector",
     ]
     private static let routines = [
         "meeting-preparation": "Prepare upcoming meetings", "inbox-triage": "Triage the selected inbox",
-        "repository-monitoring": "Monitor selected repositories",
+        "repository-monitoring": "Monitor selected repositories", "feedback-collector": "Feedback digest",
     ]
     private static let sample = """
         **example/workflow-demo** has two pull requests waiting on you and one new issue.
@@ -298,6 +317,20 @@ final class MockWorkflows {
                     [
                         "id": "mock-routine", "name": Self.routines[packID] ?? "", "schedule_text": "Weekdays at 9:00 AM",
                         "is_enabled": setup["routine_enabled"] as? Bool ?? false,
+                    ] as [String: Any]
+                ],
+            "channels": packID != "feedback-collector" || botID == nil
+                ? []
+                : [
+                    [
+                        "id": "community", "name": "Community feedback", "service_id": "telegram",
+                        "listen": ["mentions": true, "replies": true, "tags": ["feedback"]],
+                        "channel": setup["routine_enabled"] as? Bool == true
+                            ? [
+                                "id": "mock-channel", "bot_id": botID ?? "", "name": "Community feedback", "service": "telegram",
+                                "account_id": chosen["telegram"] ?? "", "listen": ["mentions": true, "replies": true, "tags": ["feedback"]],
+                                "task": "", "state": "listening",
+                            ] as [String: Any] : NSNull(),
                     ] as [String: Any]
                 ],
             "sample_messages": sampleState == "ready" || sampleState == "reviewed" ? [["id": "mock-sample", "body": ["text": Self.sample]]] : [],

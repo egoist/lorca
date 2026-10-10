@@ -221,6 +221,7 @@ type Store struct {
 	// mockFeedback is the demo's workflow feedback, changed in place by the same calls.
 	mockFeedback map[string]BotFeedback
 	mockBrowser  map[string][]BrowserProfile
+	mockSecrets  []mockSecret
 }
 
 type pendingEvent struct {
@@ -914,7 +915,7 @@ func (s *Store) ThisDevice() *Device {
 }
 
 func (s *Store) Title(chat *Chat) string {
-	if chat.IsGroup() && chat.CustomTitle != "" {
+	if (chat.IsGroup() || chat.Channel != nil) && chat.CustomTitle != "" {
 		return chat.CustomTitle
 	}
 	var names []string
@@ -931,6 +932,13 @@ func (s *Store) Title(chat *Chat) string {
 
 func (s *Store) Subtitle(chat *Chat) string {
 	members := s.BotsIn(chat)
+	if chat.Channel != nil && len(members) > 0 {
+		service := "Telegram"
+		if chat.Channel.Service == "slack" {
+			service = "Slack"
+		}
+		return L("%@ on %@", members[0].Name, service)
+	}
 	if chat.IsDM() && len(members) > 0 {
 		only := members[0]
 		host := L("unassigned")
@@ -1006,6 +1014,8 @@ func (s *Store) Preview(chat *Chat) string {
 	case BodyPermission:
 		who := s.botName(last.Author.BotID, L("A bot"))
 		body = who + " " + content.Request.VerbPhrase()
+	case BodyDraft:
+		body = content.Draft.Title(s.botName(last.Author.BotID, L("A bot")))
 	}
 	flattened := strings.TrimSpace(strings.NewReplacer("\n", " ", "**", "", "`", "").Replace(body))
 	if chat.IsGroup() && last.Author.Kind == AuthorBot && content.Kind == BodyText {
@@ -1069,7 +1079,7 @@ func (s *Store) sortChats() {
 // twice lands in the same thread.
 func (s *Store) DM(botID string) string {
 	for _, chat := range s.Chats {
-		if chat.IsDM() && len(chat.BotIDs) == 1 && chat.BotIDs[0] == botID {
+		if chat.IsBotDM() && len(chat.BotIDs) == 1 && chat.BotIDs[0] == botID {
 			return chat.ID
 		}
 	}
@@ -1962,6 +1972,121 @@ func (s *Store) finishMockCommand(chatID, messageID string, state CommandState) 
 	})
 }
 
+// MARK: - Channels
+
+// Channels are the bot's channels, as its Runner advertises them.
+func (s *Store) Channels(botID string) []Channel {
+	bot := s.Bot(botID)
+	if bot == nil {
+		return nil
+	}
+	device := s.Device(bot.RunnerID)
+	if device == nil {
+		return nil
+	}
+	var mine []Channel
+	for _, channel := range device.Channels {
+		if channel.BotID == botID {
+			mine = append(mine, channel)
+		}
+	}
+	return mine
+}
+
+// Channel finds a channel on any Runner.
+func (s *Store) Channel(id string) *Channel {
+	for _, device := range s.Devices {
+		for i := range device.Channels {
+			if device.Channels[i].ID == id {
+				return &device.Channels[i]
+			}
+		}
+	}
+	return nil
+}
+
+// Conversations are the conversations a channel keeps, the latest first.
+func (s *Store) Conversations(channelID string) []*Chat {
+	var kept []*Chat
+	for _, chat := range s.Chats {
+		if chat.Channel != nil && chat.Channel.ChannelID == channelID {
+			kept = append(kept, chat)
+		}
+	}
+	slices.SortStableFunc(kept, func(a, b *Chat) int { return b.LastActivity().Compare(a.LastActivity()) })
+	return kept
+}
+
+// AccountName is the account a channel speaks through, by its name on the Runner.
+func (s *Store) AccountName(channel *Channel) string {
+	if bot := s.Bot(channel.BotID); bot != nil {
+		if device := s.Device(bot.RunnerID); device != nil {
+			for _, plugin := range device.Plugins {
+				if plugin.ID == channel.AccountID {
+					return plugin.Name
+				}
+			}
+		}
+	}
+	return channel.ServiceName()
+}
+
+func (s *Store) channelRunner(id string) string {
+	for _, device := range s.Devices {
+		for _, channel := range device.Channels {
+			if channel.ID == id {
+				return device.ID
+			}
+		}
+	}
+	return ""
+}
+
+// SetChannelPaused pauses or resumes a channel on its Runner. Paused, it takes no new messages.
+func (s *Store) SetChannelPaused(id string, paused bool) {
+	channel, runner := s.Channel(id), s.channelRunner(id)
+	if channel == nil {
+		return
+	}
+	channel.State = ChannelListening
+	if paused {
+		channel.State = ChannelPaused
+	}
+	s.emit(Event{Kind: EventRosterChanged})
+	method := "events.resume"
+	if paused {
+		method = "events.pause"
+	}
+	s.perform(method, map[string]any{"runner_id": runner, "id": id})
+}
+
+// SettleHeldMessage tries the message that holds a channel again, or skips it, which lets the
+// next ones run.
+func (s *Store) SettleHeldMessage(id string, retry bool) {
+	channel, runner := s.Channel(id), s.channelRunner(id)
+	if channel == nil || channel.HeldDelivery == "" {
+		return
+	}
+	held := channel.HeldDelivery
+	channel.State, channel.HeldDelivery, channel.Detail = ChannelListening, "", ""
+	s.emit(Event{Kind: EventRosterChanged})
+	method := "events.discard"
+	if retry {
+		method = "events.retry"
+	}
+	s.perform(method, map[string]any{"runner_id": runner, "id": held})
+}
+
+// RemoveChannel removes a channel from its Runner; its conversations stay.
+func (s *Store) RemoveChannel(id string) {
+	runner := s.channelRunner(id)
+	for _, device := range s.Devices {
+		device.Channels = slices.DeleteFunc(device.Channels, func(channel Channel) bool { return channel.ID == id })
+	}
+	s.emit(Event{Kind: EventRosterChanged})
+	s.perform("events.delete", map[string]any{"runner_id": runner, "id": id})
+}
+
 // MARK: - Routines
 
 // SetRoutineEnabled pauses or resumes a routine. A resumed schedule counts from now.
@@ -2044,8 +2169,9 @@ func (s *Store) DeleteChat(id string) {
 		return
 	}
 	// A bot owns its DM, so deleting that row deletes the bot as one roster operation. Groups keep
-	// their other members; a group with nobody left is removed too.
-	if chat.IsDM() && len(chat.BotIDs) > 0 && s.Bot(chat.BotIDs[0]) != nil {
+	// their other members; a group with nobody left is removed too. A channel's conversation is
+	// only its transcript.
+	if chat.IsBotDM() && len(chat.BotIDs) > 0 && s.Bot(chat.BotIDs[0]) != nil {
 		botID := chat.BotIDs[0]
 		removed := map[string]bool{}
 		var changed []string

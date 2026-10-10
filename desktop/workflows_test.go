@@ -222,3 +222,30 @@ func workflowClick(t *testing.T, tt *ui.Tester, label string) {
 	marketClick(t, tt, label)
 	settle(tt)
 }
+
+func TestWorkflowFeedbackCollectorListensOnceOn(t *testing.T) {
+	m, tt, mk := workflowTester(t)
+	workflowMarket = mk
+	wp := workflowOpen(t, tt, "Feedback collector")
+	wantText(t, tt, "Repository", "Telegram", "GitHub")
+	workflowType(t, tt, "Repository", "acme/app")
+	workflowClick(t, tt, L("Run Sample"))
+	workflowWaitForSample(tt)
+	tt.SetSize(1180, 1400)
+	settle(tt)
+	wantText(t, tt, "Community feedback", "Telegram · Mentions, replies, #feedback")
+	if wp.progress.Channels[0].IsOn() {
+		t.Fatal("the channel listens before the workflow is on")
+	}
+	workflowClick(t, tt, L("Turn On Schedule"))
+	mk = m.appWindow.presentMarketplace("dev-workbench", &marketPage{kind: marketHomePage}, m.open)
+	workflowMarket = mk
+	settle(tt)
+	wp = workflowOpen(t, tt, "Feedback collector")
+	if !wp.progress.Channels[0].IsOn() {
+		t.Fatal("turning the workflow on left its channel off")
+	}
+	tt.Scroll(590, 500, 0, 800)
+	settle(tt)
+	renderBoth(t, tt, "workflow-feedback-on")
+}

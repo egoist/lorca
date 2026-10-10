@@ -1,6 +1,6 @@
 # Integrations and named accounts
 
-Slack, Gmail, Google Calendar, and Google Drive are [marketplace](marketplace.md) plugins backed by the services' streamable HTTP MCP servers. Settings › Plugins, the marketplace, and a bot's inspector manage them through the local CLI. The selected Runner holds each account's installation, setup, and authorization.
+Slack, Gmail, Google Calendar, and Google Drive are [marketplace](marketplace.md) plugins backed by the services' streamable HTTP MCP servers. A Slack account's app can also have a bot user that listens and answers in [channels](channels.md#accounts), with the bot and app tokens in its setup, and Telegram accounts are named accounts for channels alone. Settings › Plugins, the marketplace, and a bot's inspector manage them through the local CLI. The selected Runner holds each account's installation, setup, and authorization.
 
 ## Services and authorization
 
@@ -35,7 +35,7 @@ In the macOS app and the Windows and Linux app, a named service's marketplace pa
 
 Each instance is its own codemode namespace, such as `gmail_<uuid>__get_thread`. The catalog names its service, account label, and stable id. The bot selects that namespace explicitly and asks when the intended account is unclear. An authorization failure remains a failure for that account. `connect_plugin` accepts the instance id or its complete display name. The bot's install tool reports existing account ids and uses a newly installed instance's id for its sign-in card.
 
-Auto-review uses the existing live plugin boundary before the MCP call. Permission cards name the service and account, and exact Always allow rules use `<instance-id>/<original-tool-name>`. `tools.readonly` gives trusted read hints; `tools.draft` identifies unsent draft operations for bot policies. Curated hints list known operations explicitly. Draft creation and other effectful operations pass through Auto-review; a draft hint does not grant automatic approval. MCP tools added by a service without a trusted read/draft declaration retain the normal effectful review boundary.
+Auto-review uses the existing live plugin boundary before the MCP call. Permission cards name the service and account, and exact Always allow rules use `<instance-id>/<original-tool-name>`. `tools.readonly` gives trusted read hints; `tools.draft` identifies unsent draft operations for bot policies. Curated hints list known operations explicitly. Draft creation and other effectful operations pass through Auto-review; a draft hint does not grant automatic approval. In a chat, a call that writes a message (`tools.messages`: Gmail's `create_draft`, Slack's `slack_send_message`) waits instead as a draft card the user edits, then sends or discards ([Message drafts](drafts.md)). MCP tools added by a service without a trusted read/draft declaration retain the normal effectful review boundary.
 
 The script receives the whole MCP `CallToolResult`, including `structuredContent`, text, embedded resources, and `resource_link` blocks. Service source URLs, including message permalinks, event `htmlLink`s, and document `webViewLink`s, remain in that result. Each integration's skill tells bots to retain clickable sources in replies and summaries and to keep them associated with the account that returned them.
 

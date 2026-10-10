@@ -10,8 +10,8 @@ import (
 
 // browserProfiles is the Browser plugin sheet's Profiles section for one bot, after the macOS app's
 // BrowserProfilesSection: a row per profile with how it stands, + to add one, and on a click or a
-// right-click the profile's menu: open it, take it over or hand it back, take a screenshot into the
-// chat, close it, or delete it.
+// right-click the profile's menu: open it, take it over or hand it back, record a workflow for the
+// bot to learn, take a screenshot into the chat, close it, or delete it.
 type browserProfiles struct {
 	w             *appWindow
 	botID, chatID string
@@ -27,6 +27,8 @@ type browserProfiles struct {
 	loads  int
 	timer  *time.Timer
 	closed bool
+	// dismiss closes the plugin sheet, once a recording went to the chat it covers.
+	dismiss func()
 }
 
 func newBrowserProfiles(w *appWindow, bot *model.Bot, runner *model.Device, chatID string) *browserProfiles {
@@ -91,10 +93,14 @@ func (b *browserProfiles) profile(id string) (model.BrowserProfile, bool) {
 	return model.BrowserProfile{}, false
 }
 
-// stateText is one or two words; orange while the bot waits on the user to hand the browser back.
+// stateText is one or two words; orange while the bot waits on the user to hand the browser back,
+// red while it records.
 func (b *browserProfiles) stateText(p *palette, profile model.BrowserProfile) (string, ui.Color) {
 	if pending, ok := b.pending[profile.ID]; ok {
 		return pending, p.Label2
+	}
+	if profile.Recording {
+		return L("Recording"), p.Red
 	}
 	switch profile.State {
 	case model.BrowserBot:
@@ -109,6 +115,9 @@ func (b *browserProfiles) stateText(p *palette, profile model.BrowserProfile) (s
 
 // explanation is what the state means for the bot, as the row's tooltip.
 func (b *browserProfiles) explanation(profile model.BrowserProfile) string {
+	if profile.Recording {
+		return L("Do the task in this browser on %@, then choose Stop Recording. Passwords aren't recorded.", b.runner.Name)
+	}
 	switch profile.State {
 	case model.BrowserBot:
 		return L("%@'s browser calls use this profile.", b.botName)
@@ -153,26 +162,42 @@ func (b *browserProfiles) menu(profile model.BrowserProfile) func(*ui.Menu) {
 	return func(menu *ui.Menu) {
 		_, busy := b.pending[profile.ID]
 		items := false
-		switch profile.State {
-		case model.BrowserStopped:
-			// A window opens only on the Runner's own screen.
+		record := func() {
+			if b.chatID != "" && menu.Item(Lc("Record", "browser")).Disabled(busy).Chosen() {
+				b.perform("browser.record", profile, nil, L("Starting…"), L("Couldn't start recording"))
+			}
+		}
+		switch {
+		case profile.Recording:
+			if menu.Item(L("Stop Recording")).Disabled(busy || b.chatID == "").Chosen() {
+				b.stopRecording(profile)
+			}
+			items = true
+		case profile.State == model.BrowserStopped:
+			// A window opens only on the Runner's own screen, and a recording is made there.
 			if b.runner.IsThisDevice {
 				if menu.Item(L("Open Browser")).Disabled(busy).Chosen() {
 					b.perform("browser.open", profile, nil, L("Opening…"), L("Couldn't open the browser"))
 				}
+				record()
 			} else {
 				menu.Item(L("Open on %@", b.runner.Name)).Disabled(true)
+				if b.chatID != "" {
+					menu.Item(L("Record on %@", b.runner.Name)).Disabled(true)
+				}
 			}
 			items = true
-		case model.BrowserBot:
+		case profile.State == model.BrowserBot:
 			if menu.Item(L("Take Over")).Disabled(busy).Chosen() {
 				b.perform("browser.takeover", profile, nil, L("Taking over…"), L("Couldn't take over the browser"))
 			}
+			record()
 			items = true
-		case model.BrowserHuman:
+		case profile.State == model.BrowserHuman:
 			if menu.Item(L("Return to Bot")).Disabled(busy).Chosen() {
 				b.perform("browser.resume", profile, map[string]any{"revision": profile.Revision}, L("Returning…"), L("Couldn't hand the browser back"))
 			}
+			record()
 			items = true
 		}
 		if (profile.State == model.BrowserBot || profile.State == model.BrowserHuman) && b.chatID != "" {
@@ -213,6 +238,29 @@ func (b *browserProfiles) perform(method string, profile model.BrowserProfile, p
 		}
 		if err != nil {
 			b.w.showAlert(alertOptions{Message: failure, Informative: model.ErrorText(err)}, nil)
+		}
+		b.load()
+	})
+}
+
+// stopRecording sends the recording to the bot in the chat, which then shows: the bot answers there.
+func (b *browserProfiles) stopRecording(profile model.BrowserProfile) {
+	b.pending[profile.ID] = L("Stopping…")
+	b.loads++
+	text := L("I recorded this in the %@ browser. Make it a skill you can repeat, and ask me about anything the recording doesn't show.", profile.Name)
+	store.StopBrowserRecording(b.botID, profile.ID, b.chatID, text, func(sent bool, err error) {
+		delete(b.pending, profile.ID)
+		if b.closed {
+			return
+		}
+		switch {
+		case err != nil:
+			b.w.showAlert(alertOptions{Message: L("Couldn't stop recording"), Informative: model.ErrorText(err)}, nil)
+		case !sent:
+			b.w.showAlert(alertOptions{Message: L("Nothing was recorded"), Informative: L("Do the task in the browser while it records, then stop.")}, nil)
+		case b.dismiss != nil:
+			b.dismiss()
+			return
 		}
 		b.load()
 	})

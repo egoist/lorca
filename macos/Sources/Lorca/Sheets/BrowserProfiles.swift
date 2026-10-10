@@ -17,6 +17,28 @@ struct BrowserProfile: Decodable, Equatable {
     let state: State
     /// Goes up with every change of control; Return to Bot sends the one this Mac last saw.
     let revision: UInt64
+    /// The user is recording a workflow in it for the bot to learn, with the browser in hand.
+    let recording: Bool
+
+    private enum CodingKeys: String, CodingKey { case id, name, state, revision, recording }
+
+    init(id: String, name: String, state: State, revision: UInt64, recording: Bool = false) {
+        self.id = id
+        self.name = name
+        self.state = state
+        self.revision = revision
+        self.recording = recording
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        name = try values.decode(String.self, forKey: .name)
+        state = try values.decode(State.self, forKey: .state)
+        revision = try values.decode(UInt64.self, forKey: .revision)
+        // A Runner from before recordings leaves it out.
+        recording = try values.decodeIfPresent(Bool.self, forKey: .recording) ?? false
+    }
 }
 
 extension AppStore {
@@ -29,13 +51,30 @@ extension AppStore {
     }
 
     /// `browser.create` (`name`), `browser.open`, `browser.takeover`, `browser.resume`
-    /// (`revision`), `browser.stop`, `browser.delete`, or `browser.screenshot` (`chat_id`).
+    /// (`revision`), `browser.stop`, `browser.delete`, `browser.screenshot` (`chat_id`), or
+    /// `browser.record`.
     func browserProfileAction(_ method: String, botID: Bot.ID, params: [String: Any]) async throws {
         if isMock {
             MockBrowser.apply(method, botID: botID, params: params)
             return
         }
         _ = try await client.request(method, params.merging(["bot_id": botID]) { _, new in new })
+    }
+
+    private struct StoppedRecording: Decodable {
+        let messageId: String?
+        enum CodingKeys: String, CodingKey { case messageId = "message_id" }
+    }
+
+    /// Stops the profile's recording and sends it to the bot in the chat with the user's words.
+    /// False when the user did nothing in the browser, so nothing was sent.
+    func stopBrowserRecording(botID: Bot.ID, profileID: String, chatID: Chat.ID, text: String) async throws -> Bool {
+        if isMock {
+            MockBrowser.apply("browser.stop_recording", botID: botID, params: ["session_id": profileID])
+            return true
+        }
+        let params: [String: Any] = ["bot_id": botID, "session_id": profileID, "chat_id": chatID, "text": text]
+        return try await client.request("browser.stop_recording", params, as: StoppedRecording.self).messageId != nil
     }
 }
 
@@ -47,13 +86,14 @@ private enum MockBrowser {
     static func apply(_ method: String, botID: Bot.ID, params: [String: Any]) {
         var list = profiles[botID] ?? []
         let id = params["session_id"] as? String
-        func set(_ state: BrowserProfile.State) {
-            list = list.map { $0.id == id ? BrowserProfile(id: $0.id, name: $0.name, state: state, revision: $0.revision + 1) : $0 }
+        func set(_ state: BrowserProfile.State, recording: Bool = false) {
+            list = list.map { $0.id == id ? BrowserProfile(id: $0.id, name: $0.name, state: state, revision: $0.revision + 1, recording: recording) : $0 }
         }
         switch method {
         case "browser.create":
             list.append(BrowserProfile(id: UUID().uuidString, name: params["name"] as? String ?? "", state: .stopped, revision: 1))
-        case "browser.open", "browser.takeover": set(.human)
+        case "browser.open", "browser.takeover", "browser.stop_recording": set(.human)
+        case "browser.record": set(.human, recording: true)
         case "browser.resume": set(.bot)
         case "browser.stop": set(.stopped)
         case "browser.delete": list.removeAll { $0.id == id }
@@ -65,7 +105,8 @@ private enum MockBrowser {
 
 /// The Browser plugin sheet's Profiles section for one bot: a row per profile with how it
 /// stands, + to add one, and on a click or a right-click the profile's menu: open it, take it
-/// over or hand it back, take a screenshot into the chat, close it, or delete it.
+/// over or hand it back, record a workflow for the bot to learn, take a screenshot into the
+/// chat, close it, or delete it.
 @MainActor
 final class BrowserProfilesSection: NSObject {
     let section = SectionView(title: L("Profiles"))
@@ -161,9 +202,11 @@ final class BrowserProfilesSection: NSObject {
         return row
     }
 
-    /// One or two words; orange while the bot waits on the user to hand the browser back.
+    /// One or two words; orange while the bot waits on the user to hand the browser back, red
+    /// while it records.
     private func stateText(of profile: BrowserProfile) -> (String, NSColor) {
         if let pending = pending[profile.id] { return (pending, .secondaryLabelColor) }
+        if profile.recording { return (L("Recording"), .systemRed) }
         switch profile.state {
         case .stopped: return (L("Closed", context: "browser"), .secondaryLabelColor)
         case .bot: return (L("Open", context: "browser"), .secondaryLabelColor)
@@ -174,6 +217,9 @@ final class BrowserProfilesSection: NSObject {
 
     /// What the state means for the bot, as the row's tooltip.
     private func explanation(of profile: BrowserProfile) -> String {
+        if profile.recording {
+            return L("Do the task in this browser on %@, then choose Stop Recording. Passwords aren't recorded.", runner.name)
+        }
         switch profile.state {
         case .stopped: return L("Open it on %@ to sign in. %@ can open it too.", runner.name, bot.name)
         case .bot: return L("%@'s browser calls use this profile.", bot.name)
@@ -193,19 +239,30 @@ final class BrowserProfilesSection: NSObject {
             menu.addItem(item)
         }
         switch profile.state {
+        case _ where profile.recording:
+            add(L("Stop Recording"), #selector(stopRecording(_:)), enabled: chatID != nil)
         case .stopped:
-            // A window opens only on the Runner's own screen.
+            // A window opens only on the Runner's own screen, and a recording is made there.
             if runner.isThisDevice {
                 add(L("Open Browser"), #selector(openBrowser(_:)))
             } else {
                 add(L("Open on %@", runner.name), #selector(openBrowser(_:)), enabled: false)
             }
+            if chatID != nil {
+                if runner.isThisDevice {
+                    add(L("Record", context: "browser"), #selector(record(_:)))
+                } else {
+                    add(L("Record on %@", runner.name), #selector(record(_:)), enabled: false)
+                }
+            }
         case .bot:
             add(L("Take Over"), #selector(takeOver(_:)))
+            if chatID != nil { add(L("Record", context: "browser"), #selector(record(_:))) }
         case .takingOver:
             break
         case .human:
             add(L("Return to Bot"), #selector(returnToBot(_:)))
+            if chatID != nil { add(L("Record", context: "browser"), #selector(record(_:))) }
         }
         if profile.state == .bot || profile.state == .human, chatID != nil {
             add(L("Take Screenshot"), #selector(takeScreenshot(_:)))
@@ -244,6 +301,36 @@ final class BrowserProfilesSection: NSObject {
     @objc private func returnToBot(_ sender: NSMenuItem) {
         guard let profile = profile(sender) else { return }
         perform("browser.resume", on: profile, params: ["revision": profile.revision], while: L("Returning…"), failure: L("Couldn't hand the browser back"))
+    }
+
+    @objc private func record(_ sender: NSMenuItem) {
+        guard let profile = profile(sender) else { return }
+        perform("browser.record", on: profile, while: L("Starting…"), failure: L("Couldn't start recording"))
+    }
+
+    /// Sends the recording to the bot in the chat, which then shows: the bot answers there.
+    @objc private func stopRecording(_ sender: NSMenuItem) {
+        guard let profile = profile(sender), let chatID else { return }
+        pending[profile.id] = L("Stopping…")
+        render()
+        loads += 1
+        let text = L("I recorded this in the %@ browser. Make it a skill you can repeat, and ask me about anything the recording doesn't show.", profile.name)
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let sent = try await self.store.stopBrowserRecording(botID: self.bot.id, profileID: profile.id, chatID: chatID, text: text)
+                self.pending[profile.id] = nil
+                if sent {
+                    self.presenter?.dismiss(nil)
+                    return
+                }
+                self.alert(L("Nothing was recorded"), L("Do the task in the browser while it records, then stop."))
+            } catch {
+                self.pending[profile.id] = nil
+                self.alert(L("Couldn't stop recording"), error.localizedDescription)
+            }
+            await self.refresh()
+        }
     }
 
     @objc private func takeScreenshot(_ sender: NSMenuItem) {

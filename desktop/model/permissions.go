@@ -13,6 +13,9 @@ type BotPermissions struct {
 	Connections *map[string]ConnectionPermissions `json:"connections,omitempty"`
 	Filesystem  AccessLevel                       `json:"filesystem"`
 	Shell       bool                              `json:"shell"`
+	// Drafts is whether the bot's emails and Slack messages wait in the chat as drafts for the
+	// user to send.
+	Drafts bool `json:"drafts"`
 }
 
 type ConnectionPermissions struct {
@@ -23,7 +26,7 @@ type ConnectionPermissions struct {
 
 func (p *BotPermissions) UnmarshalJSON(data []byte) error {
 	type plain BotPermissions
-	value := plain{Filesystem: AccessWrite, Shell: true}
+	value := plain{Filesystem: AccessWrite, Shell: true, Drafts: true}
 	if err := json.Unmarshal(data, &value); err != nil {
 		return err
 	}
@@ -33,7 +36,7 @@ func (p *BotPermissions) UnmarshalJSON(data []byte) error {
 
 // FullAccess is the explicit policy of a bot with every plugin, files, and shell.
 func FullAccess() *BotPermissions {
-	return &BotPermissions{Filesystem: AccessWrite, Shell: true}
+	return &BotPermissions{Filesystem: AccessWrite, Shell: true, Drafts: true}
 }
 
 // Level is what the bot may do with a plugin: the most its grant reaches.
@@ -215,5 +218,5 @@ func mockWriterAccess() *BotPermissions {
 		"filesystem": {Capabilities: AccessWrite.Capabilities()},
 		"deepwiki":   {Capabilities: AccessRead.Capabilities()},
 	}
-	return &BotPermissions{Connections: &connections, Filesystem: AccessWrite, Shell: false}
+	return &BotPermissions{Connections: &connections, Filesystem: AccessWrite, Shell: false, Drafts: true}
 }

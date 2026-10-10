@@ -532,6 +532,8 @@ func (s *playbookSheet) historyView(c *ui.Context) {
 			return L("Deleted")
 		case step.Status == "draft" && step.Provenance.Kind == "corrections":
 			return L("Drafted from corrections")
+		case step.Status == "draft" && step.Provenance.Kind == "recording":
+			return L("Drafted from a recording")
 		case step.Status == "draft":
 			return L("Drafted from a chat")
 		case step.Provenance.Kind == "edit" && step.Revision > 1:

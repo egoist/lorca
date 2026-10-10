@@ -70,6 +70,10 @@ const (
 	// ProblemCheckBlocked is a check that called something that could change things, or that the
 	// bot's Access leaves out.
 	ProblemCheckBlocked
+	// ProblemWatchFailed and ProblemCalendarFailed: a watch couldn't read its pull request, or a
+	// routine around events its calendar.
+	ProblemWatchFailed
+	ProblemCalendarFailed
 )
 
 // Problem is what went wrong, while something did: the CLI's state with the kind of failure.
@@ -79,9 +83,19 @@ func (r Routine) Problem() RoutineProblem {
 	}
 	health := r.Health
 	model := health.ModelStatus != ""
+	readFailed := ProblemNone
+	switch {
+	case r.PullRequest != nil:
+		readFailed = ProblemWatchFailed
+	case r.Calendar != nil:
+		readFailed = ProblemCalendarFailed
+	}
 	switch r.State {
 	case "blocked":
 		if r.PausedReason != "authentication" {
+			if readFailed != ProblemNone {
+				return readFailed
+			}
 			return ProblemCheckBlocked
 		}
 		if health.ModelAuthenticationFailures >= 3 {
@@ -100,6 +114,8 @@ func (r Routine) Problem() RoutineProblem {
 			return ProblemSignInFailed
 		case health.ConnectionFailures > 0:
 			return ProblemCantConnect
+		case readFailed != ProblemNone:
+			return readFailed
 		}
 		return ProblemCheckFailed
 	}
@@ -117,7 +133,7 @@ func (p RoutineProblem) Text() string {
 		return L("Can’t connect")
 	case ProblemSignInFailed, ProblemModelSignInFailed:
 		return L("Sign-in failed")
-	case ProblemCheckFailed, ProblemCheckBlocked:
+	case ProblemCheckFailed, ProblemCheckBlocked, ProblemWatchFailed, ProblemCalendarFailed:
 		return L("Check failed")
 	}
 	return ""
@@ -150,6 +166,10 @@ func (p RoutineProblem) Explanation(bot, runner string) string {
 		return L("The check stopped with an error. %@ got the error and can fix the check.", bot)
 	case ProblemCheckBlocked:
 		return L("The check tried to change something, or to use something this bot's Access leaves out. Ask %@ to fix it.", bot)
+	case ProblemWatchFailed:
+		return L("The last check couldn’t read the pull request. %@ got the error and can fix the watch.", bot)
+	case ProblemCalendarFailed:
+		return L("The last check couldn’t read the calendar. Make sure %@ may use it in Access, and that it’s signed in on %@.", bot, runner)
 	}
 	return ""
 }
@@ -158,7 +178,8 @@ func (p RoutineProblem) Explanation(bot, runner string) string {
 // hours, now or in half a year: "Weekdays at 9:00 AM (New York time)". An interval counts time,
 // whatever the zone.
 func (r Routine) ScheduleSummary() string {
-	if strings.HasPrefix(r.Schedule, "every ") {
+	// A watch reads on an interval, and events keep their own times.
+	if strings.HasPrefix(r.Schedule, "every ") || r.PullRequest != nil || r.Calendar != nil {
 		return r.ScheduleText
 	}
 	zone, err := time.LoadLocation(r.Timezone)
@@ -181,7 +202,7 @@ func (r Routine) ScheduleSummary() string {
 // LastCheckSummary is "Today 9:00 AM · nothing new" for a routine with a check that has run,
 // else "".
 func (r Routine) LastCheckSummary() string {
-	if !r.HasCheck || r.Health.LastCheckAt.IsZero() {
+	if !r.LooksFirst() || r.Health.LastCheckAt.IsZero() {
 		return ""
 	}
 	when := DaySeparator(r.Health.LastCheckAt)

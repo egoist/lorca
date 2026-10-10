@@ -670,6 +670,7 @@ impl FileServer {
                 tags: Vec::new(),
                 named_accounts: false,
                 servers: BTreeMap::from([(SERVER.to_string(), config.spec())]),
+                builtin_servers: BTreeMap::new(),
                 variables: Vec::new(),
                 skills: Vec::new(),
                 tools: ToolHints { exposure: config.tools.clone(), ..ToolHints::default() },

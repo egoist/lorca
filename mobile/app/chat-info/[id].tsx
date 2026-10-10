@@ -5,15 +5,16 @@ import { Platform, PlatformColor, ScrollView, StyleSheet, Switch, Text, View } f
 import { Pressable } from "../../src/ui/Pressable";
 import { chatTitle, engine } from "../../src/core/engine";
 import { BROWSER_PLUGIN_ID, PROJECT_KINDS, projectSymbol, skillScopeOf, providerKinds, providerLabel, providerModels, PROVIDER_KINDS, taskSymbol, thinkingLabel, thinkingLevels, withCustomModels, type Bot, type Routine } from "../../src/core/model";
-import { deviceIsOnline, useBotMap, useBudget, useChat, useDurableTasks, useOpenReviews, useOutputs, useProject, useRoutines, useSkills, useStoppedTurn, useStore, useWorkingBotIds } from "../../src/core/store";
+import { deviceIsOnline, useBotMap, useBudget, useChannels, useChat, useDurableTasks, useOpenReviews, useOutputs, useProject, useRoutines, useSkills, useStoppedTurn, useStore, useWorkingBotIds } from "../../src/core/store";
+import { channelProblem, listenSummary, serviceSymbol } from "../../src/ui/channels";
 import { t, useLanguage } from "../../src/i18n";
 import { AvatarCluster, BotAvatar } from "../../src/ui/Avatar";
 import { CheckRow, FieldRow, MenuRow, Row, Section, ToggleRow } from "../../src/ui/forms";
 import { projectKindTitle, projectProblem, projectRowDetail } from "../../src/ui/project";
 import * as DocumentPicker from "expo-document-picker";
 import { pluginStateWord } from "../../src/ui/plugins";
-import { lastSeen, scheduleText } from "../../src/ui/format";
-import { problemNeedsUser, routineDetail, routineProblem } from "../../src/ui/routines";
+import { lastSeen } from "../../src/ui/format";
+import { problemNeedsUser, routineDetail, routineProblem, routineSchedule, routineSymbol } from "../../src/ui/routines";
 import { Symbol } from "../../src/ui/Symbol";
 import { usePalette } from "../../src/ui/theme";
 import { deviceSymbol } from "../../src/ui/devices";
@@ -51,6 +52,7 @@ export default function ChatInfoScreen() {
   const [title, setTitle] = useState(chat?.title ?? "");
   const [botName, setBotName] = useState(bot?.name ?? "");
   const routines = useRoutines(chat?.kind === "dm" ? chat.bot_ids[0] : undefined);
+  const channels = useChannels(chat?.kind === "dm" ? chat.bot_ids[0] : undefined);
   const outputs = useOutputs(chat?.id);
   const tasks = useDurableTasks(chat?.id);
   const reviews = useOpenReviews(chat?.id);
@@ -381,8 +383,8 @@ export default function ChatInfoScreen() {
             <Row
               key={routine.id}
               title={routine.name}
-              subtitle={stoppedRoutine(routine) ? `${stoppedLabel(stoppedRoutine(routine)!)} · ${scheduleText(routine.schedule_text)}` : routineDetail(routine)}
-              icon={routine.is_running ? "arrow.triangle.2.circlepath" : routine.is_enabled ? "clock" : "pause.circle"}
+              subtitle={stoppedRoutine(routine) ? `${stoppedLabel(stoppedRoutine(routine)!)} · ${routineSchedule(routine)}` : routineDetail(routine)}
+              icon={routineSymbol(routine)}
               leading={routineNeedsUser(routine) ? <Symbol name="exclamationmark.circle.fill" size={20} color={orange} /> : undefined}
               accessory={
                 <Switch
@@ -395,6 +397,34 @@ export default function ChatInfoScreen() {
               onPress={() => router.push({ pathname: "/chat-info/routine/[id]", params: { id: routine.id, bot: routine.bot_id } })}
             />
           ))}
+        </Section>
+      )}
+
+      {/* Where the bot listens, each with its pause switch; left out while it has none. */}
+      {bot && channels.length > 0 && (
+        <Section title={t("Channels")}>
+          {channels.map((channel) => {
+            const problem = channelProblem(channel);
+            return (
+              <Row
+                key={channel.id}
+                title={channel.name}
+                subtitle={problem ? `${problem} · ${listenSummary(channel.listen)}` : listenSummary(channel.listen)}
+                subtitleLines={2}
+                icon={problem ? undefined : serviceSymbol(channel.service)}
+                leading={problem ? <Symbol name="exclamationmark.circle.fill" size={20} color={orange} /> : undefined}
+                accessory={
+                  <Switch
+                    value={channel.state !== "paused"}
+                    onValueChange={(on) => engine.setChannelPaused(channel.id, !on)}
+                    trackColor={Platform.OS === "android" ? { false: p.fill, true: p.secondaryFill } : undefined}
+                    thumbColor={Platform.OS === "android" ? p.tint : undefined}
+                  />
+                }
+                onPress={() => router.push({ pathname: "/chat-info/channel/[id]", params: { id: channel.id } })}
+              />
+            );
+          })}
         </Section>
       )}
 
