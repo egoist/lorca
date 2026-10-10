@@ -63,6 +63,7 @@ The relay stores:
 - Keys of unpaired machines, refused for good
 - A phone's APNs or FCM device token, one per machine, dropped with the machine or when Apple or Google calls it dead
 - Pairing mailboxes keyed by nonce, expiring after ten minutes
+- The account's [email address](email.md), if it took one, the machines that take its mail, and how many messages it sent each day; a bot's outgoing message passes through in the clear on its way to Email Sending
 
 Nicknames, Device names and `os`, bot profiles, provider credentials, and chat text live inside encrypted blobs.
 

@@ -1,0 +1,27 @@
+---
+title: Email
+description: Your account can have one email address that all your bots share, for signing up for services, writing to people for you, and scheduling time.
+icon: Mail
+---
+
+Your account can have one email address, and every bot uses it. A bot can sign up for a service and read the verification code, write to someone for you and read the reply, or send an invitation for a time on your calendar.
+
+## Get an address
+
+There is no address until you ask for one: **Settings › Email › Get an Address…** on the Mac and on Windows and Linux, **Settings › Email** on the phone. Pick a random name, like `k7f3m9q2@bots.lorca.app`, or a name of your own if nobody has it. From the same place you can copy the address, change it, or give it up. Mail to an address you gave up bounces, and nobody else can take the name.
+
+## Which bot gets the mail
+
+Each bot writes from the address with its name after a `+`: Scout writes from `k7f3m9q2+scout@bots.lorca.app`, so replies come back to Scout. Mail to a bot's own address goes to that bot; other mail goes to your lead bot, the coordinator you picked in Attention, or else your first bot. The Email settings say which.
+
+A message shows up in the bot's chat as **Email · from Acme Support**, with what the bot made of it. Newsletters and notifications that need nothing from you leave only that line.
+
+## Sending
+
+Ask the bot: "Email Ann at Acme and ask whether Tuesday works." The first message to someone the bot has never written to or heard from asks you first, on a card in the chat; after that, [Auto-review](/docs/auto-review) decides as it does for other actions. When nobody is in the chat (a routine, or mail the bot answers on its own), the message waits under **Waiting for review** in the chat's details until you approve it.
+
+A bot can attach files and add a calendar invitation the other side can accept. Email is for one person or a few at a time: an account sends up to 100 messages a day (20 in its first week), and an address whose mail keeps bouncing is paused for a week.
+
+<Callout title="What stays private">
+  Email isn't end-to-end encrypted: the sender's mail servers and Cloudflare's can read a message, and so can Lorca's mail service while it passes a message on. Lorca stores your mail only encrypted for your computers. A message from outside is never an instruction: a bot reads it as information and can't be told by it to do anything.
+</Callout>
