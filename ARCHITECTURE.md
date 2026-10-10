@@ -59,19 +59,7 @@ Bot      1──* Handoff      (a durable delegated request with attempts and re
 Identity 1──* Task         (durable work; an owning Bot, assigned Runner, and linked Chats)
 ```
 
-| Entity             | Device                                                    | Relay                                                  |
-| ------------------ | --------------------------------------------------------- | ------------------------------------------------------ |
-| Identity           | Master + content + signing keys                           | Public key                                             |
-| Device             | Machine keypair, `os`                                     | Machine public key + encrypted metadata blob           |
-| Bot                | Decrypted profile                                         | Inside encrypted roster blobs                          |
-| Routine            | Name, schedule, prompt, state                             | Inside encrypted roster blobs                          |
-| Task               | Encrypted records, revisions, evidence references, and run claims | Account-encrypted task blobs; execution Jobs sealed to the assigned Runner |
-| Plugin             | Manifest, variables, secrets, tokens on the Runner        | Id and state inside the Runner's encrypted machine blob |
-| Channel            | Its subscription and inbox on the Runner; tokens in the plugin store | Its state inside the Runner's encrypted machine blob |
-| ProviderCredential | `credentials.json` on every Device                        | Inside the encrypted `credentials` blob                |
-| Secret             | A bot's, in `secrets.enc` on its Runner                   | Only as the sealed answer to its card                  |
-| Chat / Message     | Account/chat DEK                                          | Encrypted blobs                                        |
-| Job                | Any paired Device may create; the assigned Runner runs it | Sealed envelope to that Runner’s machine box key; deleted once run. A hard Stop sends `job_cancel` to the Device running it; the Runner seals how the turn ended (`job_result`) to the requesting Device, and lists the turn and what it is doing in its `machine` blob for every Device |
+Where each entity is kept on a Device, and what the relay holds of it: [Relay surface](docs/architecture/identity.md#relay-surface).
 
 Bots carry a name, description, provider/model settings, and an SF Symbol or encrypted avatar attachment. The apps edit these profiles through the local CLI ([Bot profiles](docs/architecture/bots.md#bot-profiles)).
 
@@ -96,7 +84,7 @@ One doc per subject under `docs/architecture/`, each short enough to read in one
 | [Outputs and evidence](docs/architecture/outputs.md) | Bot-generated files and document links, immutable versions, task evidence references, encrypted transport and native previews |
 | [Stop](docs/architecture/stopping.md) | What Stop ends: the turn's model call and tool calls, a call that never returns, commands and browser calls, the work it handed off on any Runner; what keeps running |
 | [Terminal sessions](docs/architecture/terminal-sessions.md) | A bot's commands in terminals of their own: when a call returns, background commands, the command's card, answering and stopping, Running tasks |
-| [Coding agents](docs/architecture/coding-agents.md) | Claude Code or Codex a bot runs on its Runner and supervises: worktrees, Herdr and Luvus panes or Lorca running it, review of its commands and its pane's questions, transcripts and follow-ups, outputs and wake-ups, the card |
+| [Coding agents](docs/architecture/coding-agents.md) | Claude Code or Codex a bot runs on its Runner and supervises: worktrees, Herdr and Luvus panes or Lorca running it, its saved secrets, review of its commands and its pane's questions, transcripts and follow-ups, outputs and wake-ups, the card |
 | [Secret requests](docs/architecture/secrets.md) | A password, key, or code a bot asks for on a card: sealed to its Runner, kept there, filled into Browser on its site or a command's environment by name, kept out of results and chats; managing a Runner's secrets |
 | [Browser sessions](docs/architecture/browser-sessions.md) | A bot's browser profiles on its Runner: their sign-ins, opening one in a window, taking the browser over and handing it back, recording a workflow and running it as a skill's steps, screenshots in the chat, what works from another Device, the Profiles section |
 | [Codemode and Plugins](docs/architecture/plugins.md) | Scripts that call plugin tools, MCP plugins and their installs, sign-in, plugin calls at turn time |

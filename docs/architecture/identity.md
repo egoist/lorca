@@ -66,6 +66,22 @@ The relay stores:
 
 Nicknames, Device names and `os`, bot profiles, provider credentials, and chat text live inside encrypted blobs.
 
+Each entity, as a Device keeps it and as the relay holds it:
+
+| Entity             | Device                                                    | Relay                                                  |
+| ------------------ | --------------------------------------------------------- | ------------------------------------------------------ |
+| Identity           | Master + content + signing keys                           | Public key                                             |
+| Device             | Machine keypair, `os`                                     | Machine public key + encrypted metadata blob           |
+| Bot                | Decrypted profile                                         | Inside encrypted roster blobs                          |
+| Routine            | Name, schedule, prompt, state                             | Inside encrypted roster blobs                          |
+| Task               | Encrypted records, revisions, evidence references, and run claims | Account-encrypted task blobs; execution Jobs sealed to the assigned Runner |
+| Plugin             | Manifest, variables, secrets, tokens on the Runner        | Id and state inside the Runner's encrypted machine blob |
+| Channel            | Its subscription and inbox on the Runner; tokens in the plugin store | Its state inside the Runner's encrypted machine blob |
+| ProviderCredential | `credentials.json` on every Device                        | Inside the encrypted `credentials` blob                |
+| Secret             | A bot's, in `secrets.enc` on its Runner                   | Only as the sealed answer to its card                  |
+| Chat / Message     | Account/chat DEK                                          | Encrypted blobs                                        |
+| Job                | Any paired Device may create; the assigned Runner runs it | Sealed envelope to that Runner’s machine box key; deleted once run. A hard Stop sends `job_cancel` to the Device running it; the Runner seals how the turn ended (`job_result`) to the requesting Device, and lists the turn and what it is doing in its `machine` blob for every Device |
+
 ## Account credentials
 
 The account has one set of provider credentials (`crates/cli/src/credentials.rs`, with setup in `provider_auth.rs`): API keys with optional base URLs for DeepSeek, Anthropic, OpenCode Zen, and OpenCode Go, the OAuth tokens of a ChatGPT and of a Grok sign-in, and the custom providers the user added, each with its name, protocol, base URL, key, and models (see [Providers](providers.md)). Every Device keeps the set in its core folder as `credentials.json` (mode `0600`) and the relay holds it as one `credentials` blob, encrypted with the account DEK under the slot `credentials`, so the log carries the latest version alone. A password or a key a bot asks for in a chat is not one of these: it stays on that bot's Runner ([Secret requests](secrets.md)).

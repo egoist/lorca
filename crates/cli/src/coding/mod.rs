@@ -136,6 +136,26 @@ pub(crate) struct Record {
     pub news: Option<News>,
     #[serde(default)]
     pub published: proof::Published,
+    /// The bot's command secrets it has in its environment, by name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secrets: Vec<String>,
+    /// The event behind the turn that started it (a channel's message, a service's event): its
+    /// commands are weighed against the owner's task for it, never against the event's text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event: Option<crate::event_triggers::EventTask>,
+}
+
+impl Record {
+    /// What Auto-review weighs the agent's actions against: the turn that started it.
+    fn trigger(&self) -> crate::plugins::review::Trigger {
+        crate::plugins::review::Trigger { message_id: self.trigger_message_id.clone(), routine: None, event: self.event.clone() }
+    }
+}
+
+/// `text` with this Runner's saved secrets replaced by their placeholders, as a tool's result
+/// is: what an agent prints, shows, or is sent goes to the card, its log, the bot, and outputs.
+pub(crate) fn without_secrets(app: &App, text: String) -> String {
+    crate::secrets::Redactions::load(app).text(&text).unwrap_or(text)
 }
 
 /// The transcript: the lines kept, how many went before them, and how far the bot has read.
@@ -228,12 +248,14 @@ impl Agent {
         matches!(self.record.lock().unwrap().state.as_str(), "checking" | "asking" | "starting" | "working" | "idle")
     }
 
-    fn add_lines(&self, home: &Path, new: Vec<String>) {
+    fn add_lines(&self, app: &App, new: Vec<String>) {
         if new.is_empty() {
             return;
         }
+        let redactions = crate::secrets::Redactions::load(app);
+        let new: Vec<String> = new.into_iter().map(|line| redactions.text(&line).unwrap_or(line)).collect();
         let id = self.id();
-        append_log(home, &id, &new);
+        append_log(&app.config.home, &id, &new);
         let mut transcript = self.transcript.lock().unwrap();
         transcript.lines.extend(new);
         while transcript.lines.len() > KEEP_LINES {
@@ -370,7 +392,17 @@ impl Agents {
         let output = agent.transcript.lock().unwrap().tail(ROW_LINES).join("\n");
         let device = app.bot(&record.bot_id).and_then(|bot| app.device(&bot.runner_id)).map(|device| device.name);
         let open = matches!(record.state.as_str(), "starting" | "working" | "idle");
-        AgentRun {
+        // The card goes to every Device: what the agent printed, asks, or ended on, without
+        // a saved secret, as a command's card.
+        let redactions = crate::secrets::Redactions::load(app);
+        let clean = |text: String| redactions.text(&text).unwrap_or(text);
+        let question = question.map(|question| AgentQuestion {
+            text: clean(question.text),
+            command: question.command.map(clean),
+            choices: question.choices.into_iter().map(clean).collect(),
+            ..question
+        });
+        let mut run = AgentRun {
             id: record.id,
             kind: record.kind,
             host: record.host,
@@ -385,7 +417,11 @@ impl Agents {
             pull_request: record.pull_request,
             device,
             started_at: Some(record.started_at),
-        }
+        };
+        run.task = clean(run.task);
+        redactions.option(&mut run.output);
+        redactions.option(&mut run.outcome);
+        run
     }
 
     /// Writes where `agent` stands to its card.
@@ -561,6 +597,9 @@ pub(crate) struct Start {
     pub place: workspace::Place,
     pub task: String,
     pub prompt: String,
+    /// The bot's command secrets to give it as environment variables, by name.
+    pub secrets: Vec<String>,
+    pub event: Option<crate::event_triggers::EventTask>,
 }
 
 /// Starts an agent and follows it. It returns once the agent runs; its work goes on.
@@ -579,7 +618,7 @@ pub(crate) async fn start(app: &Arc<App>, start: Start) -> Result<Arc<Agent>, St
         folder: start.place.folder.clone(),
         branch: start.place.branch.clone(),
         base: start.place.base.clone(),
-        task: start.task.clone(),
+        task: without_secrets(app, start.task.clone()),
         state: "starting".into(),
         stalled: false,
         outcome: None,
@@ -588,6 +627,8 @@ pub(crate) async fn start(app: &Arc<App>, start: Start) -> Result<Arc<Agent>, St
         ended_at: None,
         news: None,
         published: proof::Published::default(),
+        secrets: start.secrets.clone(),
+        event: start.event.clone(),
     };
     let agent = Agent::new(record);
     *agent.budget.lock().unwrap() = crate::budgets::current();
@@ -607,20 +648,26 @@ pub(crate) async fn start(app: &Arc<App>, start: Start) -> Result<Arc<Agent>, St
 }
 
 /// Starts the agent's process or pane, on `prompt` (resuming `session`), with a supervisor that
-/// follows it.
+/// follows it. An agent given secrets runs as Lorca's own process, which has them in its
+/// environment; a pane's command line and screen would show them.
 async fn launch(app: &Arc<App>, agent: &Arc<Agent>, program: &Path, host: Option<&hosts::Host>, prompt: &str, session: Option<&str>) -> Result<(), String> {
+    use lorca_agent::tools::SecretVariables;
+    let record = agent.record();
+    // Looked up as it starts, so one the user deleted meanwhile is not given.
+    let variables = match record.secrets.is_empty() {
+        true => Vec::new(),
+        false => crate::secrets::CommandSecrets { app: app.clone(), bot_id: record.bot_id.clone() }.variables(&record.secrets)?,
+    };
+    let host = host.filter(|_| variables.is_empty());
+    let prompt = without_secrets(app, prompt.to_string());
     let (tx, rx) = mpsc::unbounded_channel();
     let generation = agent.generation.fetch_add(1, Ordering::SeqCst) + 1;
     agent.stopping.store(false, Ordering::SeqCst);
     tokio::spawn(supervise(app.clone(), agent.clone(), rx, generation));
-    let (kind, folder) = {
-        let record = agent.record.lock().unwrap();
-        (record.kind.clone(), record.folder.clone())
-    };
     let driver = match host {
-        Some(host) => hosts::start(app, agent, host, program, prompt, tx).await?,
-        None if kind == "codex" => codex::start(program, &folder, prompt, session, tx).await?,
-        None => claude::start(program, &folder, prompt, session, tx).await?,
+        Some(host) => hosts::start(app, agent, host, program, &prompt, tx).await?,
+        None if record.kind == "codex" => codex::start(program, &record.folder, &prompt, session, &variables, tx).await?,
+        None => claude::start(program, &record.folder, &prompt, session, &variables, tx).await?,
     };
     *agent.driver.lock().unwrap() = Some(driver);
     Ok(())
@@ -629,6 +676,7 @@ async fn launch(app: &Arc<App>, agent: &Arc<Agent>, program: &Path, host: Option
 /// Gives the agent a message from the bot: to its running process or pane, or to a new process
 /// on its session when its process is gone (it was done and stopped, or Lorca restarted).
 pub(crate) async fn send(app: &Arc<App>, agent: &Arc<Agent>, text: &str, interrupt: bool) -> Result<String, String> {
+    let text = &without_secrets(app, text.to_string());
     let record = agent.record();
     {
         let mut kept = agent.record.lock().unwrap();
@@ -787,11 +835,12 @@ async fn handle(app: &Arc<App>, agent: &Arc<Agent>, event: Event, generation: u6
             if let Some(link) = new.iter().find_map(|line| proof::pull_request(line)) {
                 agent.record.lock().unwrap().pull_request = Some(link);
             }
-            agent.add_lines(&app.config.home, new);
+            agent.add_lines(app, new);
             unstall(app, agent);
             true
         }
         Event::Screen(screen) => {
+            let screen = without_secrets(app, screen);
             let previous = agent.transcript.lock().unwrap().screen.clone();
             let changed = previous.as_deref() != Some(screen.as_str());
             if changed {
@@ -986,7 +1035,7 @@ pub fn wake_cue(app: &App, job: &crate::model::Job) -> Option<String> {
         let lines = agent.transcript.lock().unwrap().tail(12).join("\n");
         if lines.trim().is_empty() { String::new() } else { format!(" Its last lines:\n{lines}\n") }
     };
-    Some(match news {
+    let cue = match news {
         News::Finished { said, outputs } => {
             let said = said.map(|said| format!(" It said:\n{}\n", said.chars().take(4000).collect::<String>())).unwrap_or_default();
             let outputs = if outputs.is_empty() {
@@ -1009,12 +1058,30 @@ pub fn wake_cue(app: &App, job: &crate::model::Job) -> Option<String> {
             "[{who}, which you started {place}, has ended: {outcome}.{} Tell the user, or send it a message to start it again on its session.]",
             tail()
         ),
-    })
+    };
+    Some(without_secrets(app, cue))
+}
+
+/// What Auto-review hears about an agent's environment: the saved secrets in it.
+pub(crate) fn holds_secrets(names: &[String]) -> String {
+    format!(
+        "It runs with the user's saved secrets {} in its environment, which the user gave this bot for its commands; sending one anywhere but the service it is for leaks it.",
+        names.iter().map(|name| format!("${name}")).collect::<Vec<_>>().join(", ")
+    )
 }
 
 /// Whether the agent may do what it asks: the bot's Access as it stands, then Auto-review, and
 /// the user on its card when the review asks.
 async fn approve(app: &Arc<App>, agent: &Arc<Agent>, approval: Approval) -> Result<(), String> {
+    // Neither the review nor the card sees a saved secret the agent wrote out.
+    let approval = match approval {
+        Approval::Command { command } => Approval::Command { command: without_secrets(app, command) },
+        Approval::Files { paths } => Approval::Files { paths: paths.into_iter().map(|path| without_secrets(app, path)).collect() },
+        Approval::Tool { name, mut input } => {
+            crate::secrets::Redactions::load(app).json(&mut input);
+            Approval::Tool { name, input }
+        }
+    };
     let record = agent.record();
     let who = name(&record.kind);
     let Some(bot) = app.bot(&record.bot_id) else { return Err("Its bot is gone.".into()) };
@@ -1026,13 +1093,18 @@ async fn approve(app: &Arc<App>, agent: &Arc<Agent>, approval: Approval) -> Resu
     let auto_review = app.auto_review().is_enabled;
     let (tool, description, args, question) = match &approval {
         Approval::Command { command } => {
-            if auto_review && crate::local_review::needs_no_review(app, command, &folder) {
+            // An agent holding saved secrets has each command reviewed, knowing which: any of
+            // them can read its environment.
+            if auto_review && record.secrets.is_empty() && crate::local_review::needs_no_review(app, command, &folder) {
                 return Ok(());
             }
-            let description = format!(
+            let mut description = format!(
                 "{who}, a coding agent this bot started, wants to run this shell command as the user on {runner_name}, with full filesystem, process, credential, and network access. Working directory: {}.",
                 home_relative(&folder)
             );
+            if !record.secrets.is_empty() {
+                description.push_str(&format!(" {}", holds_secrets(&record.secrets)));
+            }
             let question = AgentQuestion { kind: "command".into(), command: Some(command.chars().take(crate::model::APP_COMMAND_CHARS).collect()), ..Default::default() };
             ("bash", description, json!({ "command": command }), question)
         }
@@ -1057,7 +1129,7 @@ async fn approve(app: &Arc<App>, agent: &Arc<Agent>, approval: Approval) -> Resu
             ("coding_agent_tool", description, json!({ "tool": tool, "input": input }), question)
         }
     };
-    let trigger = crate::plugins::review::Trigger { message_id: record.trigger_message_id.clone(), routine: None, event: None };
+    let trigger = record.trigger();
     let cancel = tokio_util::sync::CancellationToken::new();
     let propose_rule = matches!(approval, Approval::Command { .. });
     let action = crate::plugins::review::Action { target_name: &runner_name, tool, description: &description, args: &args, script: None, propose_rule };
@@ -1130,7 +1202,9 @@ async fn answer_screen(app: &Arc<App>, agent: &Arc<Agent>, screen: String) {
     }
     let Some(driver) = agent.driver() else { return };
     // A question can show before the agent reads keys: it is read again once it holds still.
-    let question = settled(&*driver, screen).await;
+    let mut question = settled(&*driver, screen).await;
+    question.text = without_secrets(app, question.text);
+    question.choices = question.choices.into_iter().map(|choice| without_secrets(app, choice)).collect();
     let record = agent.record();
     let who = name(&record.kind);
     if let (Some(index), Some(bot)) = (question.allow_once(), app.bot(&record.bot_id)) {
@@ -1142,7 +1216,7 @@ async fn answer_screen(app: &Arc<App>, agent: &Arc<Agent>, screen: String) {
                 question.choices[index]
             );
             let args = json!({ "question": question.text, "answer": question.choices[index] });
-            let trigger = crate::plugins::review::Trigger { message_id: record.trigger_message_id.clone(), routine: None, event: None };
+            let trigger = record.trigger();
             let action = crate::plugins::review::Action { target_name: &runner_name, tool: "coding_agent_question", description: &description, args: &args, script: None, propose_rule: false };
             let cancel = tokio_util::sync::CancellationToken::new();
             if crate::plugins::review::review(app, &bot, &record.chat_id, &trigger, action, &cancel).await == crate::plugins::review::Outcome::Allow {
@@ -1244,7 +1318,7 @@ pub async fn serve(app: &Arc<App>, verb: &str, body: &Value) -> Result<Value, St
         "coding.transcript" => {
             if let Some(driver) = agent.driver() {
                 if let Some(screen) = driver.screen().await {
-                    agent.transcript.lock().unwrap().screen = Some(screen);
+                    agent.transcript.lock().unwrap().screen = Some(without_secrets(app, screen));
                 }
             }
             let text = {

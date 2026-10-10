@@ -24,6 +24,9 @@ pub struct CodingAgentTool {
     pub workdir: PathBuf,
     /// The message behind the turn: what Auto-review weighs the agent's commands against.
     pub trigger_message_id: String,
+    /// The event behind the turn, when one started it: the owner's task for it, whose text the
+    /// review weighs the agent's commands against instead of the event's.
+    pub event: Option<crate::event_triggers::EventTask>,
 }
 
 const DESCRIPTION: &str = "Hand a coding job to Claude Code or Codex on your Runner and supervise it. `start` runs one on `prompt` \
@@ -34,7 +37,9 @@ stalls, or exits, with its last message and the outputs Lorca published from its
 whose references you can cite as task evidence. `read` shows its transcript since you last read it (or its last `lines`), `send` gives \
 it `message`, taken up once it is done with what it does now, or at once with `interrupt: true`, which stops that first; a stopped \
 agent starts again on its session. `stop` ends it, `list` shows your agents in this chat. Every command it runs goes through Auto-review \
-as yours do, and its card in the chat shows the user its progress and anything it asks them.";
+as yours do, and its card in the chat shows the user its progress and anything it asks them. Saved secrets never go in a prompt or a \
+message: for a job that needs one, such as publishing a package, name your command secrets in `secrets`, and the agent has each as \
+$NAME in its environment.";
 
 #[async_trait]
 impl Tool for CodingAgentTool {
@@ -54,6 +59,7 @@ impl Tool for CodingAgentTool {
                 "folder": { "type": "string", "description": "start: the repository or folder to work in, absolute, ~/…, or relative to your working directory." },
                 "worktree": { "type": "string", "description": "start: the worktree to work in, by name, made from the repository's current commit if new. Default: a new one named after the job." },
                 "proof": { "type": "string", "description": "start: the proof you expect back, such as \"the output of cargo test, and before/after screenshots of the settings page\"." },
+                "secrets": { "type": "array", "items": { "type": "string" }, "description": "start: names of your saved command secrets the job needs, given to the agent as environment variables. Starting it and every command it runs are then reviewed knowing which, and it runs as Lorca's own process, not in a pane." },
                 "id": { "type": "string", "description": "read, send, stop: the agent's id." },
                 "message": { "type": "string", "description": "send: the follow-up." },
                 "interrupt": { "type": "boolean", "description": "send: stop what it does now and take this message at once." },
@@ -132,6 +138,7 @@ impl CodingAgentTool {
             chat_id: self.chat_id.clone(),
             workdir: self.workdir.clone(),
             trigger_message_id: self.trigger_message_id.clone(),
+            event: self.event.clone(),
         };
         let (call_id, args) = (call_id.to_string(), args.clone());
         let row = self.app.coding_agents.row(&self.chat_id, &call_id);
@@ -156,12 +163,19 @@ impl CodingAgentTool {
         let prompt = args["prompt"].as_str().map(str::trim).filter(|prompt| !prompt.is_empty()).ok_or("start needs a prompt")?;
         let message_id = app.coding_agents.row(&self.chat_id, call_id).ok_or("This call has no card in the chat")?;
         let (kind, program) = pick(args["agent"].as_str()).await?;
+        // Only the bot's own command secrets, which must be saved already.
+        let secrets = secret_names(args)?;
+        if !secrets.is_empty() {
+            use lorca_agent::tools::SecretVariables;
+            crate::secrets::CommandSecrets { app: app.clone(), bot_id: self.bot.id.clone() }.variables(&secrets)?;
+        }
         let folder = args["folder"].as_str();
         let worktree = args["worktree"].as_str().map(str::trim).filter(|name| !name.is_empty());
         let place = workspace::prepare(&app.config.home, &self.workdir, folder, worktree, prompt).await?;
-        let host = hosts::detect().await;
+        // A pane's command line and screen would show its secrets.
+        let host = if secrets.is_empty() { hosts::detect().await } else { None };
         let task: String = prompt.lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or(prompt).chars().take(TASK_CHARS).collect();
-        let full = brief(prompt, args["proof"].as_str(), &place);
+        let full = brief(prompt, args["proof"].as_str(), &place, &secrets);
         let start = Start {
             chat_id: self.chat_id.clone(),
             bot_id: self.bot.id.clone(),
@@ -173,6 +187,8 @@ impl CodingAgentTool {
             place: place.clone(),
             task,
             prompt: full,
+            secrets,
+            event: self.event.as_ref().map(|event| crate::event_triggers::EventTask { data: String::new(), ..event.clone() }),
         };
         let agent = super::start(app, start).await?;
         let id = agent.id();
@@ -211,7 +227,7 @@ async fn pick(asked: Option<&str>) -> Result<(String, PathBuf), String> {
 }
 
 /// The job as the agent reads it: the bot's prompt, where it works, and where its proof goes.
-fn brief(prompt: &str, proof: Option<&str>, place: &workspace::Place) -> String {
+fn brief(prompt: &str, proof: Option<&str>, place: &workspace::Place, secrets: &[String]) -> String {
     let folder = place.folder.display();
     let proof_folder = place.folder.join(workspace::PROOF_FOLDER);
     let mut brief = prompt.trim().to_string();
@@ -227,7 +243,31 @@ fn brief(prompt: &str, proof: Option<&str>, place: &workspace::Place) -> String 
     brief.push_str(
         " That folder stays out of git, so never commit it. Test output goes in .txt or .log files there, screenshots in .png files; name a screenshot before-… or after-… when it shows a change. If you open a pull request, give its link in your last message.",
     );
+    if !secrets.is_empty() {
+        let names = secrets.iter().map(|name| format!("${name}")).collect::<Vec<_>>().join(", ");
+        brief.push_str(&format!(
+            " Your environment holds {names}, saved secrets for your commands: use them only with the service each is for, and never print them, write them into a file, or put them in a commit."
+        ));
+    }
     brief
+}
+
+/// The saved secrets a start names, once each.
+fn secret_names(args: &Value) -> Result<Vec<String>, String> {
+    match &args["secrets"] {
+        Value::Null => Ok(Vec::new()),
+        Value::Array(names) => {
+            let mut out: Vec<String> = Vec::new();
+            for name in names {
+                let name = name.as_str().map(str::trim).filter(|name| !name.is_empty()).ok_or("secrets is a list of names")?;
+                if !out.iter().any(|known| known == name) {
+                    out.push(name.to_string());
+                }
+            }
+            Ok(out)
+        }
+        _ => Err("secrets is a list of names".into()),
+    }
 }
 
 /// How an agent stands, in a few words for the bot.
@@ -266,10 +306,14 @@ pub async fn review_start(app: &Arc<App>, bot: &Bot, chat_id: &str, trigger: &Tr
     });
     let who = name(&kind).to_string();
     let folder = ctx.args["folder"].as_str().filter(|folder| !folder.trim().is_empty()).unwrap_or("the bot's working directory");
-    let description = format!(
+    let mut description = format!(
         "Start {who}, a coding agent that edits files and runs commands as the user on {runner_name}, in {folder} (a new git worktree of it when it is a repository). It works on the prompt on its own until it is done; each command it runs is reviewed again before it runs."
     );
-    let args = json!({ "agent": ctx.args["agent"], "folder": ctx.args["folder"], "worktree": ctx.args["worktree"], "prompt": ctx.args["prompt"], "proof": ctx.args["proof"] });
+    let secrets = secret_names(ctx.args).unwrap_or_default();
+    if !secrets.is_empty() {
+        description.push_str(&format!(" {}", super::holds_secrets(&secrets)));
+    }
+    let args = json!({ "agent": ctx.args["agent"], "folder": ctx.args["folder"], "worktree": ctx.args["worktree"], "prompt": ctx.args["prompt"], "proof": ctx.args["proof"], "secrets": ctx.args["secrets"] });
     let action = Action { target_name: &runner_name, tool: "coding_agent", description: &description, args: &args, script: None, propose_rule: true };
     let Outcome::Ask { reason, rule } = crate::plugins::review::review(app, bot, chat_id, trigger, action, ctx.cancel).await else {
         update(&|card| card.state = "starting".into());

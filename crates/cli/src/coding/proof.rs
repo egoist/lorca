@@ -3,7 +3,8 @@
 //! diff, as a new version whenever it changed; the pull request its transcript names; and the
 //! files it saved as proof in `.lorca-proof/`, a screenshot as screenshot evidence and anything
 //! else as a test result. Evidence is the agent's own claim, so it reads as unverified. The bot
-//! gets their references to cite as task evidence.
+//! gets their references to cite as task evidence. A saved secret in the diff or a text file
+//! goes out as its placeholder, and another file that holds one is not published.
 
 use std::path::Path;
 use std::sync::{Arc, LazyLock};
@@ -64,13 +65,15 @@ pub(crate) async fn publish(app: &Arc<App>, agent: &Arc<Agent>) -> Vec<Reference
     let mut published = record.published.clone();
     let mut references = Vec::new();
     let who = super::name(&record.kind);
+    let redactions = crate::secrets::Redactions::load(app);
+    let scratch = app.config.home.join("agents").join(&record.id);
 
     if let Some(base) = record.base.as_deref() {
         let diff = super::workspace::diff(&record.folder, base).await;
+        let diff = redactions.text(&diff).unwrap_or(diff);
         let fingerprint = hex(&Sha256::digest(diff.as_bytes()));
         if !diff.trim().is_empty() && published.diff.as_ref().is_none_or(|version| version.fingerprint != fingerprint) {
             let name = format!("{}.diff", record.branch.clone().unwrap_or_else(|| record.id.clone()));
-            let scratch = app.config.home.join("agents").join(&record.id);
             let path = scratch.join(&name);
             let written = std::fs::create_dir_all(&scratch).and_then(|_| std::fs::write(&path, diff.as_bytes()));
             if written.is_ok() {
@@ -117,6 +120,25 @@ pub(crate) async fn publish(app: &Arc<App>, agent: &Arc<Agent>) -> Vec<Reference
         }
         let lower = name.to_lowercase();
         let image = [".png", ".jpg", ".jpeg", ".gif", ".webp"].iter().any(|extension| lower.ends_with(extension));
+        // A file that holds a saved secret: a text one goes out as a copy with its placeholder,
+        // another not at all.
+        let mut clean_copy = None;
+        if !image && !redactions.is_empty() {
+            let Ok(bytes) = std::fs::read(&path) else { continue };
+            match String::from_utf8(bytes) {
+                Ok(text) => {
+                    if let Some(clean) = redactions.text(&text) {
+                        let copy = scratch.join(&name);
+                        if std::fs::create_dir_all(&scratch).and_then(|_| std::fs::write(&copy, clean)).is_err() {
+                            continue;
+                        }
+                        clean_copy = Some(copy);
+                    }
+                }
+                Err(error) if redactions.text(&String::from_utf8_lossy(error.as_bytes())).is_some() => continue,
+                Err(_) => {}
+            }
+        }
         let evidence = OutputEvidence {
             kind: match (image, lower.contains("before")) {
                 (true, true) => EvidenceKind::BeforeScreenshot,
@@ -131,12 +153,17 @@ pub(crate) async fn publish(app: &Arc<App>, agent: &Arc<Agent>) -> Vec<Reference
         };
         let request = PublishOutput {
             name: name.clone(),
-            path: Some(path.to_string_lossy().to_string()),
+            path: Some(clean_copy.as_deref().unwrap_or(&path).to_string_lossy().to_string()),
             replaces: previous.as_ref().map(|version| version.message_id.clone()),
             evidence: Some(evidence),
             ..Default::default()
         };
-        if let Some(reference) = output(app, &record, &proof, request).await {
+        let published_from = if clean_copy.is_some() { &scratch } else { &proof };
+        let reference = output(app, &record, published_from, request).await;
+        if let Some(copy) = &clean_copy {
+            let _ = std::fs::remove_file(copy);
+        }
+        if let Some(reference) = reference {
             published.files.retain(|version| version.name != name);
             published.files.push(Version { name, fingerprint, message_id: reference.message_id.clone() });
             references.push(reference);

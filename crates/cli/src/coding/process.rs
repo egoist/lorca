@@ -58,14 +58,18 @@ impl Process {
     }
 }
 
+/// An environment variable the agent is given: a saved secret the bot named.
+pub(crate) type Variable = (std::ffi::OsString, std::ffi::OsString);
+
 /// Starts `program` in `cwd`. Its stdout goes to the caller line by line; how it ended arrives
 /// once it has.
-pub(crate) async fn spawn(program: &Path, args: &[String], cwd: &Path) -> Result<(Arc<Process>, ChildStdout, oneshot::Receiver<Exit>), String> {
+pub(crate) async fn spawn(program: &Path, args: &[String], cwd: &Path, variables: &[Variable]) -> Result<(Arc<Process>, ChildStdout, oneshot::Receiver<Exit>), String> {
     let mut command = lorca_agent::login_shell::command(program).await;
     command.args(args).current_dir(cwd).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
     for name in INHERITED_MARKERS {
         command.env_remove(name);
     }
+    command.envs(variables.iter().map(|(name, value)| (name, value)));
     let mut wrapped = CommandWrap::from(command);
     #[cfg(unix)]
     wrapped.wrap(process_wrap::tokio::ProcessGroup::leader());

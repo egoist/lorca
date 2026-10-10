@@ -35,8 +35,8 @@ pub(crate) struct Codex {
 }
 
 /// Starts Codex in `folder` on `prompt`, or resumes `thread` with it.
-pub(crate) async fn start(program: &Path, folder: &Path, prompt: &str, thread: Option<&str>, events: Events) -> Result<Arc<dyn Driver>, String> {
-    let (process, stdout, exit) = process::spawn(program, &["app-server".to_string()], folder).await?;
+pub(crate) async fn start(program: &Path, folder: &Path, prompt: &str, thread: Option<&str>, variables: &[process::Variable], events: Events) -> Result<Arc<dyn Driver>, String> {
+    let (process, stdout, exit) = process::spawn(program, &["app-server".to_string()], folder, variables).await?;
     let pending: Arc<Pending> = Arc::new(Mutex::new(HashMap::new()));
     let turn = Arc::new(Mutex::new(None));
     let cutting_in = Arc::new(AtomicBool::new(false));
