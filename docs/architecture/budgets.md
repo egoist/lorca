@@ -4,7 +4,7 @@ The bot's Runner enforces limits in `crates/cli/src/budgets.rs` and its `runtime
 
 ## Scopes and accounting
 
-Limits apply to three scopes:
+Limits apply to three scopes: A [coding agent](coding-agents.md#when-it-is-done)'s run time while it works counts toward the scopes of the turn that gave it the work, and a time limit reached stops it.
 
 - `chat`: the limits each new turn in that DM starts with. Changing them affects later turns.
 - `job`: one turn, under its existing Job id. Turns in a chat with limits get a record with the chat's limits copied in; a turn in a chat without limits has no record.
