@@ -15,7 +15,7 @@ Creating an identity makes a 32-byte secret on your first Device. Everything els
 
 ## What is encrypted
 
-Everything with meaning: bot names and descriptions, chat titles, messages, attachments, device names, provider credentials, skills, tasks, group projects, items waiting for review, the Attention list, and the contents of push notifications. Each is encrypted on your device with your account key (XChaCha20-Poly1305) before upload. Work sent to a bot on another computer, an answer to a secret's card, and an [event](/docs/events) from your gateway are sealed to that computer's public key, so only it can open them.
+Everything with meaning: bot names and descriptions, chat titles, messages, attachments, device names, provider credentials, skills, tasks, group projects, items waiting for review, the Attention list, and the contents of push notifications. Each is encrypted on your device with your account key (XChaCha20-Poly1305) before upload. Work sent to a bot on another computer, an answer to a secret's card, and an event that starts a bot's work are sealed to that computer's public key, so only it can open them.
 
 ## What the relay sees
 
@@ -68,7 +68,7 @@ A bot's turn sends the conversation, its description, and its tool results to th
 
 ## Webhooks
 
-Services send webhooks unencrypted. For a [pull request watch](/docs/routines#pull-request-watches) and a [routine's webhook](/docs/routines#webhooks), Lorca's relay receives them: it checks GitHub's signature or the routine's key, encrypts the event for the routine's Runner, and keeps only the encrypted copy, so it reads each request while it does that. For each such routine it keeps the pull request it watches, which of your computers runs it, a hash of the webhook's key, and the secret it signs the routine's events with, all deleted with the routine. To keep a service's requests off the relay entirely, use a [gateway](/docs/events) you run on one of your own computers, which checks the service's signature and hands the event to Lorca to encrypt.
+Services send webhooks unencrypted. For a [pull request watch](/docs/routines#pull-request-watches) and a [routine's webhook](/docs/routines#webhooks), Lorca's relay receives them: it checks GitHub's signature or the routine's key, encrypts the event for the routine's Runner, and keeps only the encrypted copy, so it reads each request while it does that. For each such routine it keeps the pull request it watches, which of your computers runs it, a hash of the webhook's key, and the secret it signs the routine's events with, all deleted with the routine. To keep a service's requests off Lorca's relay, you can [receive them yourself](/docs/relay#pull-request-watches-and-webhooks).
 
 ## Updates
 

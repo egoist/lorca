@@ -1,10 +1,10 @@
 ---
 title: Relay
-description: Your devices sync through Lorca's relay, which stores only ciphertext. You can also run your own.
+description: Your devices sync through Lorca's relay, which can't read your chats. You can also run your own.
 icon: Server
 ---
 
-Your devices sync through Lorca's relay at `relay.lorca.app`. It stores and forwards the encrypted data your devices exchange, and sends your phone its notifications. The apps use it from the start, so there is nothing to set up: a device you pair learns it from the pairing code.
+Your devices sync through Lorca's relay at `relay.lorca.app`. It stores and forwards the encrypted data your devices exchange, and sends your phone its notifications. It also takes the requests for your [pull request watches](/docs/routines#pull-request-watches) and [routines' webhooks](/docs/routines#webhooks) and encrypts each one for your computer. The apps use it from the start, so there is nothing to set up: a device you pair learns it from the pairing code.
 
 Everything is [encrypted before upload](/docs/security), so the relay can't read your chats, bots, files, or provider keys. [Security](/docs/security#what-the-relay-sees) lists what it does see.
 

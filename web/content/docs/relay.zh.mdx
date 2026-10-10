@@ -1,10 +1,10 @@
 ---
 title: 中继
-description: 你的设备通过 Lorca 的中继同步，中继只保存密文。你也可以自己运行一个。
+description: 你的设备通过 Lorca 的中继同步，中继读不到你的聊天。你也可以自己运行一个。
 icon: Server
 ---
 
-你的设备通过 Lorca 位于 `relay.lorca.app` 的中继同步。它存储并转发设备之间交换的加密数据，也负责给你的手机发送通知。应用一开始就在用它，不需要任何设置：新配对的设备会从配对码里得知它的地址。
+你的设备通过 Lorca 位于 `relay.lorca.app` 的中继同步。它存储并转发设备之间交换的加密数据，也负责给你的手机发送通知。[关注 pull request](/zh/docs/routines#关注-pull-request)和[例行任务的 Webhook](/zh/docs/routines#webhook)收到的请求也由它接收，它把每个请求加密后交给你的电脑。应用一开始就在用它，不需要任何设置：新配对的设备会从配对码里得知它的地址。
 
 一切都[在上传前加密](/zh/docs/security)，所以中继读不到你的聊天、智能体、文件或服务商密钥。它能看到什么，见[安全](/zh/docs/security#中继能看到什么)。
 
