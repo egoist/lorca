@@ -20,6 +20,7 @@ pub struct AgentLoopConfig {
     pub retry: Option<RetryPolicy>,            // default None: one try per model call
     pub request: RequestOptions,               // headers, timeout, session affinity, metadata
     pub interrupt: Option<StepInterrupt>,      // default None: see Interrupting a step
+    pub stop_grace: Duration,                  // default STOP_GRACE (15 s): how long a cancelled call may hold the run
 }
 ```
 
@@ -159,4 +160,4 @@ steering.push(AgentMessage::user("skip that, ship it"));
 interrupt.interrupt(); // false between steps, where the queue is read anyway
 ```
 
-Each step runs under a child of the run's token, and `interrupt()` cancels only that one. A reply cut short keeps its text in the context as said, without its thinking or the tool calls it was cut off in. The tools running get a cancelled token, and a call the step had not started yet gets an error result saying the user interrupted. The loop then reads the steering queue and goes on. Cancelling the run's token still ends the run.
+Each step runs under a child of the run's token, and `interrupt()` cancels only that one. A reply cut short keeps its text in the context as said, without its thinking or the tool calls it was cut off in. The tools running get a cancelled token, one that does not end within `stop_grace` is cut off ([Cancellation](how-it-works.md#cancellation)), and a call the step had not started yet gets an error result saying the user interrupted. The loop then reads the steering queue and goes on. Cancelling the run's token still ends the run.
