@@ -243,6 +243,8 @@ export type Body =
       script_command?: string;
       /** A bash call's card, from Auto-review's question to how the command ended. */
       run?: CommandRun;
+      /** The card of the coding agent a coding_agent call started, shown from the start. */
+      agent?: AgentRun;
     }
   | { kind: "handoff"; from: string; to: string; reason: string }
   | { kind: "notice"; text: string; routine_id?: string }
@@ -281,6 +283,67 @@ export interface CommandRun {
   reason?: string;
   /** The rule Always allow adds. */
   rule?: string;
+}
+
+/// A coding agent a bot runs on its Runner, Claude Code or Codex, as the card of the call that
+/// started it shows it: Auto-review's question before it starts, what it works on and where, how it
+/// stands, its last lines, and what it asks. A question about starting it or a command it wants to
+/// run is answered like a command's (`chats.permission`); one its pane asks, with a choice or text
+/// (`coding.answer`). Stop is `coding.stop`; its transcript, `coding.transcript`.
+export interface AgentRun {
+  id: string;
+  /** `claude` or `codex`. */
+  kind: string;
+  /** `herdr` or `luvus` when it runs in a pane of that terminal host on its Runner. */
+  host?: string;
+  task: string;
+  /** Where it works, from the home folder. */
+  folder?: string;
+  branch?: string;
+  state: "checking" | "asking" | "starting" | "working" | "idle" | "exited" | "failed" | "stopped" | "denied" | "expired" | "dismissed";
+  /** Working, with nothing new for a while. */
+  stalled?: boolean;
+  question?: AgentQuestion;
+  output?: string;
+  outcome?: string;
+  device?: string;
+  started_at?: number;
+}
+
+/// What a coding agent's card asks: whether it may start (`start`) or run a command (`command`),
+/// or what its pane asks, with a menu of choices (`choices`) or for text (`text`).
+export interface AgentQuestion {
+  kind: "start" | "command" | "choices" | "text";
+  text?: string;
+  command?: string;
+  choices?: string[];
+  reason?: string;
+  rule?: string;
+}
+
+/// Its product's name, which is not translated.
+export function agentName(agent: AgentRun): string {
+  return agent.kind === "codex" ? "Codex" : "Claude Code";
+}
+
+export function agentIsOpen(agent: AgentRun): boolean {
+  return ["checking", "asking", "starting", "working", "idle"].includes(agent.state);
+}
+
+/// Stop ends it: not while Auto-review decides whether it may start, and not once it is done,
+/// waiting for a follow-up.
+export function agentIsRunning(agent: AgentRun): boolean {
+  return agentIsOpen(agent) && agent.state !== "checking" && agent.state !== "idle" && agent.question?.kind !== "start";
+}
+
+/// It started, so it has a transcript to read.
+export function agentStarted(agent: AgentRun): boolean {
+  return !["checking", "denied", "expired", "dismissed"].includes(agent.state) && agent.question?.kind !== "start";
+}
+
+/// Where it works, in a word: its branch, else its folder's name.
+export function agentPlace(agent: AgentRun): string {
+  return agent.branch ?? (agent.folder ?? "").split("/").filter(Boolean).pop() ?? "";
 }
 
 export function isLive(run: CommandRun): boolean {

@@ -57,6 +57,7 @@ import {
   quoteAuthorName,
   NoticeRow,
   PermissionRow,
+  AgentRow,
   CommandRow,
   StatusRow,
   WorkingRow,
@@ -684,6 +685,7 @@ export default function ChatScreen() {
   const [answeringId, setAnsweringId] = useState<string | null>(null);
   const answering = answeringId ? chat?.messages.find((m) => m.id === answeringId) : undefined;
   const answeringRun = answering?.body.kind === "tool" ? answering.body.run : undefined;
+  const answeringAgent = answering?.body.kind === "tool" && answering.body.agent?.question?.kind === "text" ? answering.body.agent : undefined;
 
   /// The message the draft answers, from a swipe on its bubble; another chat starts without one.
   const [replying, setReplying] = useState<{ messageID: string; name: string; text: string } | null>(null);
@@ -761,6 +763,8 @@ export default function ChatScreen() {
 
   const answerCommand = useCallback((message: Message) => setAnsweringId(message.id), []);
   const stopCommand = useCallback((message: Message) => engine.stopCommand(message.chat_id, message.id), []);
+  const stopAgent = useCallback((message: Message) => engine.stopAgent(message.chat_id, message.id), []);
+  const chooseForAgent = useCallback((message: Message, choice: number) => engine.answerAgentChoice(message.chat_id, message.id, choice), []);
 
   const renderItem = useCallback(
     ({ item }: { item: Row }) => {
@@ -798,6 +802,17 @@ export default function ChatScreen() {
               onDecide={answerCard}
               onAnswer={answerCommand}
               onStop={stopCommand}
+            />
+          );
+        case "agent":
+          return (
+            <AgentRow
+              row={item}
+              isGroup={isGroup}
+              onDecide={answerCard}
+              onChoose={chooseForAgent}
+              onAnswer={answerCommand}
+              onStop={stopAgent}
             />
           );
         case "working":
@@ -956,6 +971,13 @@ export default function ChatScreen() {
           run={answeringRun}
           onDismiss={() => setAnsweringId(null)}
           onSend={(text) => engine.answerCommand(answering.chat_id, answering.id, text)}
+        />
+      ) : null}
+      {answering && answeringAgent ? (
+        <AnswerSheet
+          prompt={(answeringAgent.question?.text ?? "").split("\n").map((line) => line.trim()).filter(Boolean).pop()}
+          onDismiss={() => setAnsweringId(null)}
+          onSend={(text) => engine.answerAgentText(answering.chat_id, answering.id, text)}
         />
       ) : null}
     </View>

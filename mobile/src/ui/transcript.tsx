@@ -14,10 +14,10 @@ import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSequence, with
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import { ShimmerView } from "../../modules/lorca-core/ShimmerView";
-import { canBeQuoted, isLive, isSentMessage, showsCard, type Author, type Body, type Bot, type Chat, type CommandRun, type Message } from "../core/model";
+import { agentIsOpen, agentIsRunning, agentName, agentPlace, agentStarted, canBeQuoted, isLive, isSentMessage, showsCard, type AgentRun, type Author, type Body, type Bot, type Chat, type CommandRun, type Message } from "../core/model";
 import { engine } from "../core/engine";
 import { useStore } from "../core/store";
-import { language, t, useLanguage } from "../i18n";
+import { language, t, tc, useLanguage } from "../i18n";
 import { AttachmentBlock } from "./attachments";
 import { BotAvatar } from "./Avatar";
 import { daySeparator, firstLine, workingActivity } from "./format";
@@ -44,6 +44,7 @@ export type Row =
   | { key: string; type: "notice"; text: string; groupStart: boolean }
   | { key: string; type: "permission"; message: Message; body: Extract<Body, { kind: "permission" }>; bot: Bot | undefined; groupStart: boolean }
   | { key: string; type: "command"; message: Message; run: CommandRun; bot: Bot | undefined; groupStart: boolean }
+  | { key: string; type: "agent"; message: Message; agent: AgentRun; bot: Bot | undefined; groupStart: boolean }
   | { key: string; type: "working"; bots: Bot[] }
   | { key: string; type: "status"; text: string };
 
@@ -52,7 +53,7 @@ export function buildRows(chat: Chat, bots: Map<string, Bot>, workingBotIds: str
   const rows: Row[] = [];
   let previous: Message | null = null;
   let previousAuthorKey: string | null = null;
-  const shown = chat.messages.filter((m) => m.body.kind !== "tool" || showsCard(m.body) || isSentMessage(m.body));
+  const shown = chat.messages.filter((m) => m.body.kind !== "tool" || !!m.body.agent || showsCard(m.body) || isSentMessage(m.body));
   for (let i = 0; i < shown.length; i++) {
     const message = shown[i];
     const separated = !previous || message.created_at - previous.created_at >= SEPARATOR_GAP_SECS;
@@ -80,7 +81,10 @@ export function buildRows(chat: Chat, bots: Map<string, Bot>, workingBotIds: str
         break;
       }
       case "tool":
-        if (message.body.run) {
+        if (message.body.agent) {
+          const bot = message.author.kind === "bot" ? bots.get(message.author.bot_id) : undefined;
+          rows.push({ key: message.id, type: "agent", message, agent: message.body.agent, bot, groupStart });
+        } else if (message.body.run) {
           const bot = message.author.kind === "bot" ? bots.get(message.author.bot_id) : undefined;
           rows.push({ key: message.id, type: "command", message, run: message.body.run, bot, groupStart });
         } else {
@@ -622,6 +626,215 @@ export const CommandRow = memo(function CommandRow({
   );
 });
 
+/// How a coding agent stands, in a word or two.
+export function agentStatus(agent: AgentRun): string {
+  switch (agent.state) {
+    case "checking":
+    case "starting":
+      return tc("Starting", "coding agent");
+    case "asking":
+      return tc("Needs you", "coding agent");
+    case "working":
+      return agent.stalled ? tc("Quiet", "coding agent") : tc("Working", "coding agent");
+    case "idle":
+      return tc("Done", "coding agent");
+    case "exited":
+      return tc("Ended", "coding agent");
+    case "failed":
+      return tc("Failed", "coding agent");
+    case "denied":
+      return tc("Not allowed", "coding agent");
+    case "expired":
+      return tc("No answer", "coding agent");
+    case "dismissed":
+      return tc("Dismissed", "coding agent");
+    default:
+      return tc("Stopped", "coding agent");
+  }
+}
+
+/// "Chef wants to start Claude Code on Workbench", "Claude Code wants to run a command", "Claude
+/// Code asks", or the agent's name.
+export function agentTitle(agent: AgentRun, who: string): string {
+  const name = agentName(agent);
+  switch (agent.question?.kind) {
+    case "start":
+      return agent.device ? t("{who} wants to start {agent} on {device}", { who, agent: name, device: agent.device }) : t("{who} wants to start {agent}", { who, agent: name });
+    case "command":
+      return t("{agent} wants to run a command", { agent: name });
+    case "choices":
+    case "text":
+      return t("{agent} asks", { agent: name });
+    default:
+      return name;
+  }
+}
+
+/// The line under the task: how it stands and where it works, or how it ended.
+export function agentDetail(agent: AgentRun): string {
+  if (agent.question) return "";
+  let parts = [agentStatus(agent)];
+  if (agent.state === "failed" && agent.outcome) parts = [t("Failed: {outcome}", { outcome: agent.outcome })];
+  const place = agentPlace(agent);
+  if (place && agent.state !== "denied") parts.push(place);
+  const host = agent.host === "herdr" ? "Herdr" : agent.host === "luvus" ? "Luvus" : "";
+  if (host && agentIsOpen(agent)) parts.push(t("in {host}", { host }));
+  return parts.join(" · ");
+}
+
+/// A coding agent's card, on the row of the call that started it, from Auto-review's question to
+/// how it ended: the agent's name with Stop while it runs, what it was asked, how it stands and
+/// where it works, and while it works its last lines. When it asks: Allow once, Always allow, and
+/// Deny before it starts or runs a command; a button per choice its pane offers; or Answer, which
+/// opens the answer sheet. A tap on what it works on opens its transcript.
+export const AgentRow = memo(function AgentRow({
+  row,
+  isGroup,
+  onDecide,
+  onChoose,
+  onAnswer,
+  onStop,
+}: {
+  row: Extract<Row, { type: "agent" }>;
+  isGroup: boolean;
+  onDecide: (message: Message, decision: "allow" | "always" | "deny") => void;
+  onChoose: (message: Message, choice: number) => Promise<void>;
+  onAnswer: (message: Message) => void;
+  onStop: (message: Message) => Promise<void>;
+}) {
+  useLanguage();
+  const p = usePalette();
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const { agent } = row;
+  const question = agent.question;
+  const showsAvatar = isGroup && row.message.author.kind === "bot";
+  const who = row.bot?.name ?? t("The bot");
+  const name = agentName(agent);
+  // A new question clears what the last answer or Stop said.
+  useEffect(() => setError(null), [question, agent.state]);
+  const run = async (work: () => Promise<void>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await work();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const detail = agentDetail(agent);
+  const output = !question && (agent.state === "starting" || agent.state === "working") ? (agent.output ?? "").split("\n").filter(Boolean).join("\n") : "";
+  const decisions: [string, "allow" | "always" | "deny"][] = question?.rule
+    ? [[t("Allow once"), "allow"], [t("Always allow"), "always"], [t("Deny"), "deny"]]
+    : [[t("Allow once"), "allow"], [t("Deny"), "deny"]];
+  const openTranscript = () => {
+    const place = agentPlace(agent);
+    router.push({ pathname: "/agent/[id]", params: { id: row.message.id, chat: row.message.chat_id, title: place ? `${name} · ${place}` : name } });
+  };
+  const body = (
+    <>
+      {agent.task ? (
+        <Text style={[styles.agentTask, { color: p.label }]} numberOfLines={2}>
+          {agent.task}
+        </Text>
+      ) : null}
+      {detail ? (
+        <Text style={[styles.agentDetail, { color: p.secondaryLabel }]} numberOfLines={1}>
+          {detail}
+        </Text>
+      ) : null}
+      {output ? <OutputBlock text={output} /> : null}
+    </>
+  );
+  return (
+    <View style={[styles.messageRow, { paddingTop: row.groupStart ? 14 : 6 }]}>
+      {showsAvatar && (
+        <View style={{ width: AVATAR + GUTTER, alignSelf: "flex-end" }}>
+          <BotAvatar bot={row.bot} size={AVATAR} />
+        </View>
+      )}
+      <View style={[styles.permission, { backgroundColor: p.cell, borderColor: p.separator }]}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <Symbol name="chevron.left.forwardslash.chevron.right" size={15} color={p.tint} />
+          <Text style={[styles.permissionTitle, { color: p.label, flex: 1 }]} numberOfLines={2}>
+            {agentTitle(agent, who)}
+          </Text>
+          {agentIsRunning(agent) ? (
+            <Pressable
+              disabled={busy}
+              onPress={() => void run(() => onStop(row.message))}
+              hitSlop={6}
+              style={({ pressed }) => [styles.headerButton, { backgroundColor: pressed ? p.separator : p.fill, opacity: busy ? 0.5 : 1 }]}
+              accessibilityRole="button"
+            >
+              <Text style={{ color: p.label, fontSize: 13, fontWeight: "600" }}>{t("Stop")}</Text>
+            </Pressable>
+          ) : null}
+        </View>
+        {agentStarted(agent) ? (
+          <Pressable onPress={openTranscript} style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })} accessibilityRole="button" accessibilityHint={t("Show the transcript")}>
+            {body}
+          </Pressable>
+        ) : (
+          body
+        )}
+        {question?.kind === "command" && question.command ? (
+          <Pressable
+            onPress={() => router.push({ pathname: "/command/[id]", params: { id: row.message.id, chat: row.message.chat_id, title: t("{who}'s command", { who: name }) } })}
+            style={({ pressed }) => [styles.command, { backgroundColor: p.code, opacity: pressed ? 0.6 : 1 }]}
+            accessibilityRole="button"
+            accessibilityLabel={t("Show the full command")}
+          >
+            <Text style={[styles.commandText, { color: p.label }]} numberOfLines={1}>
+              {`$ ${firstLine(question.command)}`}
+            </Text>
+          </Pressable>
+        ) : null}
+        {(question?.kind === "choices" || question?.kind === "text") && question.text ? <OutputBlock text={question.text} /> : null}
+        {question && (question.kind === "start" || question.kind === "command") && question.reason ? <Text style={[styles.reasonText, { color: p.secondaryLabel }]}>{question.reason}</Text> : null}
+        {error ? <Text style={[styles.reasonText, { color: p.red }]}>{error}</Text> : null}
+        {question && (question.kind === "start" || question.kind === "command") ? (
+          <View style={{ flexDirection: "row", gap: 8, marginTop: 4 }}>
+            {decisions.map(([label, decision]) => (
+              <Pressable key={decision} onPress={() => onDecide(row.message, decision)} style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill }]}>
+                <Text style={{ color: decision === "deny" ? p.label : p.tint, fontSize: 13, fontWeight: "600" }}>{label}</Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
+        {question?.kind === "choices" ? (
+          <View style={{ gap: 6, marginTop: 4 }}>
+            {(question.choices ?? []).map((choice, index) => (
+              <Pressable
+                key={`${index}-${choice}`}
+                disabled={busy}
+                onPress={() => void run(() => onChoose(row.message, index))}
+                style={({ pressed }) => [styles.choiceButton, { backgroundColor: pressed ? p.separator : p.fill, opacity: busy ? 0.5 : 1 }]}
+                accessibilityRole="button"
+              >
+                <Text style={{ color: p.tint, fontSize: 14, fontWeight: "600" }} numberOfLines={2}>
+                  {choice}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
+        {question?.kind === "text" ? (
+          <View style={{ flexDirection: "row", marginTop: 4 }}>
+            <Pressable onPress={() => onAnswer(row.message)} style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill }]} accessibilityRole="button">
+              <Text style={{ color: p.tint, fontSize: 13, fontWeight: "600" }}>{t("Answer")}</Text>
+            </Pressable>
+          </View>
+        ) : null}
+        {question && (question.kind === "start" || question.kind === "command") && question.rule ? <Text style={[styles.ruleNote, { color: p.secondaryLabel }]}>{t("Always allow adds the rule “{rule}”.", { rule: question.rule })}</Text> : null}
+      </View>
+    </View>
+  );
+});
+
 /// A running command's last lines: a code block like the command's that grows to six lines and
 /// then scrolls, the newest line in view. An edge with more lines past it fades out: Android
 /// draws that itself, iOS gets a gradient in the block's color.
@@ -728,6 +941,9 @@ const styles = StyleSheet.create({
   permission: { flex: 1, borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12, paddingVertical: 10, gap: 6, maxWidth: 420 },
   permissionTitle: { fontSize: 14, fontWeight: "600", flexShrink: 1 },
   permissionButton: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8 },
+  choiceButton: { paddingHorizontal: 12, paddingVertical: 9, borderRadius: 8 },
+  agentTask: { fontSize: 14, lineHeight: 19, marginTop: 6 },
+  agentDetail: { fontSize: 12, marginTop: 3 },
   headerButton: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 7 },
   command: { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7, marginTop: 2 },
   commandText: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 12.5, lineHeight: 17 },

@@ -870,6 +870,30 @@ class Engine {
     await core.request("bash.background", { chat_id: chatId, message_id: messageId });
   }
 
+  // MARK: - Coding agents
+
+  /// Stops a coding agent on its bot's Runner; its card says so once the Runner has.
+  async stopAgent(chatId: string, messageId: string) {
+    await core.request("coding.stop", { chat_id: chatId, message_id: messageId });
+  }
+
+  /// Answers what a coding agent's pane asks with one of the choices it offers.
+  async answerAgentChoice(chatId: string, messageId: string, choice: number) {
+    await core.request("coding.answer", { chat_id: chatId, message_id: messageId, choice });
+  }
+
+  /// Types an answer into what a coding agent's pane asks, then Return.
+  async answerAgentText(chatId: string, messageId: string, text: string) {
+    await core.request("coding.answer", { chat_id: chatId, message_id: messageId, text });
+  }
+
+  /// A coding agent's transcript, from its Runner: what it was sent, said, and did, or what its
+  /// pane shows.
+  async agentTranscript(chatId: string, messageId: string): Promise<string> {
+    const answer = await core.request<{ text: string }>("coding.transcript", { chat_id: chatId, message_id: messageId });
+    return answer.text;
+  }
+
   // MARK: - Routines
 
   /// Pauses or resumes a routine; a resumed schedule counts from now.

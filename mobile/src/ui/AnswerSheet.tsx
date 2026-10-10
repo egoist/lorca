@@ -20,15 +20,16 @@ function asksYesOrNo(run: CommandRun): boolean {
 }
 
 /// Up while mounted. `onSend` rejects with why the answer did not go; the sheet shows it under the
-/// field and stays.
-export function AnswerSheet({ run, onSend, onDismiss }: { run: CommandRun; onSend: (text: string) => Promise<void>; onDismiss: () => void }) {
+/// field and stays. A command's question takes `run`; a coding agent's, `prompt`, which shows what
+/// is typed, since it asks for a word or a choice rather than a secret.
+export function AnswerSheet({ run, prompt, onSend, onDismiss }: { run?: CommandRun; prompt?: string; onSend: (text: string) => Promise<void>; onDismiss: () => void }) {
   useLanguage();
   const p = usePalette();
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const secret = !asksYesOrNo(run);
-  const placeholder = run.prompt?.trim() || t("Type your answer");
+  const secret = run ? !asksYesOrNo(run) : false;
+  const placeholder = (prompt ?? run?.prompt)?.trim() || t("Type your answer");
   const send = async () => {
     if (sending) return;
     setSending(true);
