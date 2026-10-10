@@ -4,7 +4,8 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { x25519 } from "@noble/curves/ed25519.js";
 
-import worker, { addressName, MAX_MAIL_BYTES, type Env, type IncomingMail } from "../src/index";
+import worker from "../src/index";
+import { addressName, MAX_MAIL_BYTES, type Env, type IncomingMail } from "../src/mail";
 import { base64url, fromBase64url, open, seal } from "../src/seal";
 import vector from "./seal-vector.json";
 

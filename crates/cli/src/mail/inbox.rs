@@ -415,8 +415,10 @@ pub(crate) async fn wait(app: &App, bot_id: &str, from: Option<String>, subject:
         // Registered under the lock `offer` takes, so a message can't land between the look and
         // the wait.
         let mut waiters = app.mail.waiters.lock().unwrap();
+        // A message no turn has read: waiting for one, or for this turn's chat to be free. A
+        // mail turn left with nothing to read starts no turn.
         let recent = all(app, Some(bot_id))?.into_iter().rev().find(|stored| {
-            stored.state == State::Pending && stored.at >= now_unix() - WAIT_LOOKBACK_SECS && matches(stored, from.as_deref(), subject.as_deref())
+            matches!(stored.state, State::Pending | State::Running) && stored.at >= now_unix() - WAIT_LOOKBACK_SECS && matches(stored, from.as_deref(), subject.as_deref())
         });
         if let Some(mut stored) = recent {
             stored.state = State::Done;
@@ -564,6 +566,28 @@ mod tests {
         assert_eq!(summarize_calendar(reply).unwrap(), "Calendar reply to \"Intro call\": ann@example.com accepted");
         let invite = "BEGIN:VCALENDAR\nMETHOD:REQUEST\nBEGIN:VEVENT\nSUMMARY:Lunch\nDTSTART:20261012T120000Z\nDTEND:20261012T130000Z\nEND:VEVENT\nEND:VCALENDAR\n";
         assert_eq!(summarize_calendar(invite).unwrap(), "Calendar invitation: \"Lunch\" 20261012T120000Z to 20261012T130000Z");
+    }
+
+    /// Mail that came while the bot's turn held its chat waits for a mail turn of its own; a wait
+    /// in that turn takes it instead, and the mail turn then has nothing to read.
+    #[tokio::test]
+    async fn a_wait_takes_mail_queued_behind_the_turn_that_waits() {
+        let home = std::env::temp_dir().join(format!("lorca-mail-wait-{}", uuid::Uuid::new_v4()));
+        let app = App::load(crate::config::Config { home: home.clone(), port: 0 }).unwrap();
+        crate::identity::create(&app, Some("Mac".into())).unwrap();
+        let bot = app.state.lock().unwrap().bots[0].clone();
+        let stored = Stored { id: "m1".into(), bot_id: bot.id.clone(), at: now_unix(), from: "Acme <help@acme.example>".into(), from_address: "help@acme.example".into(), to: Vec::new(), cc: Vec::new(),
+            subject: "Your code".into(), message_id: None, references: Vec::new(), text: "482913".into(), authentication: None, attachments: Vec::new(), calendar: None, state: State::Pending, job_id: None };
+        save(&app, &stored, None).unwrap();
+        tick(&app).unwrap();
+        let job_id = one(&app, "m1").unwrap().unwrap().job_id.unwrap();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let taken = wait(&app, &bot.id, Some("acme".into()), None, std::time::Duration::from_secs(1), &cancel).await.unwrap().unwrap();
+        assert_eq!((taken.id.as_str(), taken.state), ("m1", State::Done));
+        let job = crate::model::Job { id: job_id, bot_id: bot.id.clone(), requested_by: app.this_device_id().unwrap(), ..serde_json::from_value(json!({ "id": "", "chat_id": "", "bot_id": "", "kind": JOB_KIND, "trigger_message_id": "", "requested_by": "", "created_at": 0.0 })).unwrap() };
+        assert!(task_for_job(&app, &job).is_err(), "the mail turn has nothing left to read");
+        assert!(wait(&app, &bot.id, None, None, std::time::Duration::from_millis(50), &cancel).await.unwrap().is_none(), "a message is taken once");
+        let _ = std::fs::remove_dir_all(home);
     }
 
     #[test]

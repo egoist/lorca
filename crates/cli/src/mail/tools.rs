@@ -332,13 +332,13 @@ first. The user approves a first message to someone new. Email is for one person
         if let Err(error) = inbox::save(app, &stored, None) {
             tracing::warn!(%error, "keeping a sent email");
         }
-        let bounced: Vec<&Value> = sent["bounced"].as_array().into_iter().flatten().chain(sent["suppressed"].as_array().into_iter().flatten()).collect();
-        let mut result = json!({ "sent": true, "id": stored.id, "from": from, "to": to, "subject": subject });
+        let bounced: Vec<&str> = sent["bounced"].as_array().into_iter().flatten().chain(sent["suppressed"].as_array().into_iter().flatten()).filter_map(Value::as_str).collect();
+        // Plain words: the review queue shows this under an approved send.
+        let mut result = format!("Sent “{subject}” to {} from {from}.", to.join(", "));
         if !bounced.is_empty() {
-            result["bounced"] = json!(bounced);
-            result["note"] = json!("These addresses refused the message or are blocked; don't write to them again.");
+            result.push_str(&format!(" {} refused it or blocks mail from bots; don't write there again.", bounced.join(", ")));
         }
-        Ok(ToolResult::text(serde_json::to_string(&result).unwrap()).with_details(json!({ "summary": format!("Sent “{subject}”") })))
+        Ok(ToolResult::text(result).with_details(json!({ "summary": format!("Sent “{subject}”") })))
     }
 }
 

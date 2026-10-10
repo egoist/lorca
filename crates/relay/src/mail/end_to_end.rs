@@ -206,7 +206,7 @@ async fn mail_reaches_its_bot_on_its_runner_and_the_bot_answers_through_email_se
 
     // A reply keeps the thread and goes out from Chef's own address.
     let sent = call(send, json!({ "reply_to": code_id, "text": "Thanks, got it." })).await.unwrap();
-    assert!(sent.contains("\"sent\":true"), "{sent}");
+    assert!(sent.starts_with("Sent “Re: Your code” to help@acme.example from egoist+chef@bots.test."), "{sent}");
     let (account, token, body) = stub.sent.lock().unwrap()[0].clone();
     assert_eq!((account.as_str(), token.as_str()), ("acct", "Bearer api-token"));
     assert_eq!(body["from"], json!({ "address": "egoist+chef@bots.test", "name": "Chef" }));
@@ -215,7 +215,7 @@ async fn mail_reaches_its_bot_on_its_runner_and_the_bot_answers_through_email_se
     assert_eq!(body["headers"]["In-Reply-To"], "<code-1@acme.example>");
     assert_eq!(body["headers"]["References"], "<code-1@acme.example>");
     let invited = call(send, json!({ "to": ["ann@example.com"], "subject": "Intro call", "text": "Does this time work?", "invite": { "title": "Intro call", "start": "2026-10-12T15:00:00+02:00", "end": "2026-10-12T15:30:00+02:00" } })).await.unwrap();
-    assert!(invited.contains("\"sent\":true"));
+    assert!(invited.starts_with("Sent “Intro call”"), "{invited}");
     let invite = stub.sent.lock().unwrap()[1].2["attachments"][0].clone();
     assert_eq!((invite["filename"].as_str(), invite["type"].as_str()), (Some("invite.ics"), Some("text/calendar")));
 
