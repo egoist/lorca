@@ -156,6 +156,8 @@ async fn a_webhook_runs_its_routine_once_per_request_that_carries_its_key() {
     let triggers = lorca::routines::Triggers { receiver: Some("webhook"), ..Default::default() };
     let routine = lorca::routines::create_routine(&app, &bot_id, "Deploys", "", "Tell me if a deploy failed.", None, true, None, None, triggers).unwrap();
     assert_eq!(lorca::routine_events::subscribe(&app, &routine.id).await, lorca::routine_events::Subscribed::Subscribed);
+    let listed = lorca::turns::call_routines_tool(&app, &bot_id, json!({ "action": "list" })).await.unwrap();
+    assert!(listed.contains("Deploys · When its webhook is called · listening at its webhook"), "{listed}");
     let events = app.routine(&routine.id).unwrap().events.unwrap();
     assert!(events.endpoint.starts_with(&format!("{}/webhooks/", relay.url)), "{events:?}");
     assert_eq!(events.key.len(), 43, "a key the Runner made");
@@ -232,6 +234,12 @@ async fn a_github_watch_binds_through_the_install_and_runs_on_each_event_until_m
     // Installed on the repository but not bound to this account yet: the relay hands the link
     // that authorizes the App; where it isn't installed, the install link.
     let lorca::routine_events::Subscribed::NeedsSetup(url) = lorca::routine_events::subscribe(&app, &routine.id).await else { panic!("needs setup") };
+    // The bot reads that the watch waits on the user, and its list hands a fresh link, since the
+    // one it gave may have expired.
+    let listed = lorca::turns::call_routines_tool(&app, &bot_id, json!({ "action": "list" })).await.unwrap();
+    assert!(listed.contains("Login PR · Watches Acme/Project#42 · waits for the user to finish setting up GitHub"), "{listed}");
+    let fresh = listed.split("Setup link for the user, good for an hour: ").nth(1).unwrap().lines().next().unwrap();
+    assert!(fresh.starts_with(&format!("{stub}/login/oauth/authorize?")) && fresh != url, "{fresh}");
     assert!(url.starts_with(&format!("{stub}/login/oauth/authorize?client_id=client&state=")), "{url}");
     let elsewhere = lorca::api::dispatch(&app, "receivers.setup", json!({ "receiver": "github", "subject": "acme/elsewhere#1" })).await.unwrap();
     assert!(elsewhere["url"].as_str().unwrap().starts_with(&format!("{stub}/apps/lorca-test/installations/new?state=")), "{elsewhere}");
@@ -262,6 +270,8 @@ async fn a_github_watch_binds_through_the_install_and_runs_on_each_event_until_m
     lorca::routines::delete(&app, &secret.id).unwrap();
 
     assert_eq!(lorca::routine_events::subscribe(&app, &routine.id).await, lorca::routine_events::Subscribed::Subscribed);
+    let listed = lorca::turns::call_routines_tool(&app, &bot_id, json!({ "action": "list" })).await.unwrap();
+    assert!(listed.contains("Login PR · Watches Acme/Project#42 · listening for GitHub events") && !listed.contains("Setup link"), "{listed}");
     let events = app.routine(&routine.id).unwrap().events.unwrap();
     assert_eq!((events.title.as_str(), events.source_name.as_str()), ("Add passkey sign-in", "GitHub"));
     // A closed pull request is refused.

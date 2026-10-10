@@ -144,6 +144,22 @@ pub fn keep_reads(held: &Routine, incoming: &mut Routine) -> bool {
     true
 }
 
+/// How a routine on events stands, for the bot: its prompt and its routines list. A routine
+/// that waits on the user says so, since nothing runs until they act.
+pub fn standing(events: &RoutineEvents) -> String {
+    let service = if events.source_name.is_empty() { events.receiver.as_str() } else { events.source_name.as_str() };
+    if events.ended_at.is_some() {
+        return "ending: its last run is under way".into();
+    }
+    match events.status {
+        Listening::Subscribed if !events.endpoint.is_empty() => "listening at its webhook".into(),
+        Listening::Subscribed => format!("listening for {service} events"),
+        Listening::NeedsSetup => format!("waits for the user to finish setting up {service} for it; routines list gives a fresh setup link"),
+        Listening::Gateway => "its events come through the user's own gateway".into(),
+        Listening::Pending => "connecting to the relay".into(),
+    }
+}
+
 /// The line the run's note opens with, from an event's own words; an event that ends its
 /// subject says the run is the routine's last.
 pub fn lead(payload: &Value) -> Option<String> {
@@ -445,6 +461,30 @@ mod tests {
         assert!(check("git hub", "x").is_err());
         assert_eq!(check("webhook", "  ").unwrap(), ("webhook".into(), String::new()), "a webhook's events need no subject");
         assert!(check("github", "a\nb").is_err());
+    }
+
+    #[test]
+    fn the_bot_reads_how_a_routine_on_events_stands() {
+        let mut events = RoutineEvents {
+            receiver: "github".into(),
+            subject: "acme/project#42".into(),
+            subscription_id: "ev-1".into(),
+            status: Listening::NeedsSetup,
+            source_name: "GitHub".into(),
+            title: String::new(),
+            url: String::new(),
+            endpoint: String::new(),
+            key: String::new(),
+            last_event: None,
+            ended_at: None,
+        };
+        assert!(standing(&events).starts_with("waits for the user to finish setting up GitHub"));
+        events.status = Listening::Subscribed;
+        assert_eq!(standing(&events), "listening for GitHub events");
+        events.endpoint = "https://relay.lorca.app/webhooks/abc".into();
+        assert_eq!(standing(&events), "listening at its webhook");
+        events.ended_at = Some(1.0);
+        assert!(standing(&events).starts_with("ending"));
     }
 
     #[test]
