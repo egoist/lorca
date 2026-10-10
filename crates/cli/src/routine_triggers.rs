@@ -24,8 +24,10 @@ use {
 /// How often a Runner reads the calendar of a routine timed by events.
 pub const CALENDAR_SYNC_SECS: i64 = 15 * 60;
 /// How far ahead a Runner reads a calendar, past the routine's own offset.
+#[cfg(feature = "runner")]
 const CALENDAR_AHEAD_SECS: i64 = 26 * 3600;
 /// The most events a routine keeps from one read of its calendar.
+#[cfg(feature = "runner")]
 const MAX_UPCOMING: usize = 50;
 /// The poll interval of a watch whose bot gave none.
 pub const DEFAULT_WATCH_SCHEDULE: &str = "every 10m";

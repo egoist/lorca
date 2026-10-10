@@ -551,7 +551,8 @@ pub fn tick(app: &Arc<App>) {
         end_if_finished(app, &routine.id);
     }
     let enabled: Vec<Routine> = mine.into_iter().filter(|r| r.is_enabled && !crate::routine_triggers::is_finished(r)).collect();
-    for routine in enabled.iter().filter(|r| crate::routine_triggers::calendar_sync_due(r, now) && !app.routine_checks.is_running(&r.id)) {
+    // A routine stopped at its limits reads nothing either.
+    for routine in enabled.iter().filter(|r| crate::routine_triggers::calendar_sync_due(r, now) && !app.routine_checks.is_running(&r.id) && app.budgets.admit(app, "routine", &r.id).is_ok()) {
         check_then_run(app, routine.clone());
     }
     let due: Vec<Routine> = enabled
