@@ -304,6 +304,10 @@ pub fn told(events: &RoutineEvents, answer: &Subscribed) -> String {
         Subscribed::NeedsSetup(url) => {
             format!("The relay's {} receiver needs the user first for {subject}, so the routine waits. Give the user this link: {url} It starts on its own once that's done.", events.receiver)
         }
+        Subscribed::Gateway if events.receiver == "webhook" => format!(
+            "This relay doesn't host webhooks, so the routine's requests need the user's own gateway. Give the user these steps: `lorca events route {} route.json` exports its route; `python3 scripts/event-gateway.py --route route.json --webhook-key-file <file with a random key of at least 32 characters> --lorca \"$(command -v lorca)\"`, on a computer where `lorca serve` runs, takes requests on 127.0.0.1:8984/hook behind their HTTPS proxy; senders include the key as `Authorization: Bearer <key>` (https://lorca.app/docs/relay#pull-request-watches-and-webhooks).",
+            events.subscription_id
+        ),
         Subscribed::Gateway => format!(
             "This relay has no {} receiver, so the events need the user's own gateway: `lorca events route {} <file>` exports its route, and the service's skill says how to run the gateway for it. Tell the user the steps.",
             events.receiver, events.subscription_id

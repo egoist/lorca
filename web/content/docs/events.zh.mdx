@@ -1,12 +1,12 @@
 ---
 title: Webhook 与事件
-description: 服务发来事件时（比如 pull request 有了更新）启动智能体的工作，通过你自己运行的一个小网关接入。
+description: 任何服务发来事件时启动智能体的工作，通过你自己运行的一个小网关接入。
 icon: Webhook
 ---
 
 **事件订阅** 会在某个服务发来消息时启动智能体的工作：pull request 有了变化、收到一笔付款、某个脚本跑完了。每个事件都会在智能体 Runner 上、它的单聊里执行这个订阅的任务。
 
-服务发出的 webhook 是不加密的，所以 Lorca 的中继不接收它们：中继只保存密文。你自己运行一个 **网关**，用你自己的 HTTPS 地址接收服务的请求，验证之后交给 Lorca，由 Lorca 加密后发给智能体的 Runner。如果只是想跟进某一个 pull request，这些都用不着：让智能体[关注它](/zh/docs/routines#关注-pull-request)就行。
+你自己运行一个 **网关**，用你自己的 HTTPS 地址接收服务的请求，验证之后交给 Lorca，由 Lorca 加密后发给智能体的 Runner，所以请求不会以明文离开你的电脑。如果是想跟进一个 pull request，或者给例行任务一个任何服务都能调用的 URL，这些都用不着：Lorca 托管了这两样，见[关注 pull request](/zh/docs/routines#关注-pull-request)和 [Webhook](/zh/docs/routines#webhook)。
 
 ## 接收 GitHub pull request 事件
 
@@ -65,10 +65,6 @@ python3 event-gateway.py --route ~/private/pr-route.json \
 
 </Step>
 </Steps>
-
-## 例行任务的 webhook
-
-任何服务或脚本都可以通过一个专属的地址和密钥启动某个[例行任务](/zh/docs/routines)。新建一个订阅，`routine_id` 填这个例行任务，`event_types` 填 `["webhook"]`，导出它的路由，然后改用 `--webhook-key-file` 运行网关（密钥至少 32 个字符）。它监听 `127.0.0.1:8984/hook`，接收以 `Authorization: Bearer <key>` 或 `X-Lorca-Key` 带上密钥的请求。请求体，无论是 JSON 还是文本，就是智能体读到的内容。带上 `Idempotency-Key` 请求头，重复的请求只会运行一次。
 
 ## 智能体如何处理事件
 

@@ -129,6 +129,30 @@ export const zh: Messages = {
     faq: '常见问题',
     download: '下载',
   },
+  github: {
+    home: '前往 lorca.app',
+    back: '可以关闭这个页面，回到 Lorca。',
+    connected: {
+      title: 'GitHub 已连接。',
+      body: 'Lorca GitHub 应用已安装到 {{account}}，并连接到你的 Lorca 账户。关注其仓库中拉取请求的例行任务会自行开始。',
+    },
+    not_yours: {
+      title: '这次安装不属于你。',
+      body: 'GitHub 列出的你的账户可访问的安装中没有它，所以 Lorca 没有连接它。请在 Lorca 的例行任务中安装应用，并以能管理该仓库的 GitHub 账户登录。',
+    },
+    expired: {
+      title: '这个链接已过期。',
+      body: 'Lorca 给出的链接一小时内有效。请在例行任务上再次选择“安装应用”。',
+    },
+    requested: {
+      title: '已申请安装。',
+      body: '需要组织的所有者先批准 Lorca GitHub 应用。批准后，在例行任务上再次选择“安装应用”即可连接。',
+    },
+    failed: {
+      title: '无法连接 GitHub。',
+      body: 'GitHub 没有完成登录。请在 Lorca 的例行任务上选择“安装应用”重试。',
+    },
+  },
   template: {
     title: '在 Lorca 中分享的智能体',
     open: '在 Lorca 中打开',

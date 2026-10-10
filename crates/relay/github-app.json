@@ -1,0 +1,33 @@
+{
+  "name": "Lorca",
+  "description": "Starts the Lorca routines that watch a pull request when something happens on it: a review, a comment, a push, a failed check. It reads nothing else; your bots read through their own GitHub plugin.",
+  "url": "https://lorca.app",
+  "public": true,
+  "hook_attributes": {
+    "url": "https://hooks.lorca.app/github/webhook",
+    "active": true
+  },
+  "callback_urls": ["https://hooks.lorca.app/github/callback"],
+  "setup_url": "https://hooks.lorca.app/github/callback",
+  "request_oauth_on_install": true,
+  "setup_on_update": true,
+  "default_permissions": {
+    "metadata": "read",
+    "pull_requests": "read",
+    "issues": "read",
+    "checks": "read",
+    "statuses": "read",
+    "actions": "read"
+  },
+  "default_events": [
+    "pull_request",
+    "pull_request_review",
+    "pull_request_review_comment",
+    "pull_request_review_thread",
+    "issue_comment",
+    "check_run",
+    "check_suite",
+    "status",
+    "workflow_run"
+  ]
+}

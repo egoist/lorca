@@ -127,6 +127,30 @@ export const en = {
     faq: 'FAQ',
     download: 'Download',
   },
+  github: {
+    home: 'Go to lorca.app',
+    back: 'You can close this page and go back to Lorca.',
+    connected: {
+      title: 'GitHub is connected.',
+      body: 'The Lorca GitHub App is installed on {{account}} and connected to your Lorca account. Pull request watches on its repositories start on their own.',
+    },
+    not_yours: {
+      title: "This installation isn't yours.",
+      body: "GitHub doesn't list it among the installations your account can reach, so Lorca didn't connect it. Install the App from the routine in Lorca, signed in to GitHub as someone who can manage the repository.",
+    },
+    expired: {
+      title: 'This link expired.',
+      body: 'The link from Lorca works for an hour. Choose Install App on the routine again.',
+    },
+    requested: {
+      title: 'Install requested.',
+      body: "An owner of the organization approves the Lorca GitHub App first. Once they have, choose Install App on the routine again to connect it.",
+    },
+    failed: {
+      title: "Couldn't connect GitHub.",
+      body: "GitHub didn't finish the sign-in. Choose Install App on the routine in Lorca to try again.",
+    },
+  },
   template: {
     title: 'A bot shared with Lorca',
     open: 'Open in Lorca',

@@ -17,7 +17,7 @@ On the Runner, a cancelled turn ends this way:
 - **Messages** the turn held for its next step no longer wait (`App::unqueue_chat`).
 - **A review item** the turn was staging, such as an email or Slack message it was [drafting](drafts.md), is not saved: the staging gets the turn's cancellation, which ends its wait on the plugin's server, and a draft's attachment files go with it.
 
-A routine's run is a turn like any other, and Stop ends it. A routine's check, or a watch's or a calendar's read, that runs inside a turn (Run Now, or the first one as the bot sets the routine up) stops with the turn and leaves the routine's health as it was, since Stop is not a failed check (`routines::check_now`). A stopped run still counts as the run: a [one-time routine and a watch's last run](routine-triggers.md) end their routine all the same, and an event's run does not run again.
+A routine's run is a turn like any other, and Stop ends it. A routine's check, or a calendar's read, that runs inside a turn (Run Now, or the first one as the bot sets the routine up) stops with the turn and leaves the routine's health as it was, since Stop is not a failed check (`routines::check_now`). A stopped run still counts as the run: a [one-time routine's run and the last run of a routine on events](routine-triggers.md) end their routine all the same, and an event's run does not run again.
 
 Send now cuts a step short the same way ([Agent loop](runtime.md#agent-loop)): a call that does not end within the same 15 seconds is cut off, and the turn reads the user's message.
 

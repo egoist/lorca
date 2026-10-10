@@ -1,6 +1,6 @@
 ---
 title: Routines
-description: A routine is a task a bot runs on a schedule, such as a morning brief, an hourly check, or a weekly report, or once, around calendar events, or while a pull request is open.
+description: A routine is a task a bot runs on a schedule, such as a morning brief, an hourly check, or a weekly report, or once, around calendar events, on a pull request's events, or when its webhook is called.
 icon: CalendarClock
 ---
 
@@ -20,6 +20,7 @@ A routine runs at an interval (every 30 minutes, every 2 hours, every day) or at
 
 - **Run once** at a date and time: "Remind me on Monday at 9 to renew the certificate." Once it has run, the routine removes itself; the chat keeps the run.
 - **Watch a pull request**: see [below](#pull-request-watches).
+- **Run when its webhook is called**: see [below](#webhooks).
 - **Run around calendar events**: see [below](#calendar-events).
 
 ### Timezones
@@ -44,17 +45,52 @@ A routine that watches for something, such as an inbox, a feed, or a page, can c
 
 ## Pull request watches
 
-"Watch acme/project#42 and tell me when it changes." The bot follows one pull request through the [GitHub plugin](/docs/plugins) on its Runner, every 10 minutes unless you ask for another interval. It runs only when something changed, such as new commits, comments, a review, or a title, and says what. When the pull request merges or closes, the bot runs one last time and the watch removes itself.
+"Watch acme/project#42 and tell me when it changes." The bot runs once for each thing that happens on the pull request, as it happens, and says what it means for you:
+
+- new commits, a new title or description, ready for review, back to draft, reopened
+- a review (approved, changes requested, or comments), a review comment, a comment, a review thread resolved or reopened
+- a failed check, check suite, workflow run, or commit status
+
+GitHub sends these to Lorca through the **Lorca GitHub App**. The first time you watch a pull request in a repository, the routine says **App not installed**: click **Install App…** on its **GitHub** row, choose the repository on GitHub, and approve the sign-in. The page you land on says whether it worked, and the watch starts on its own. The App only reads (pull requests and their comments, checks, statuses, and workflow runs) and changes nothing; the bot reads the pull request through your own [GitHub plugin](/docs/plugins) when it runs.
+
+When the pull request merges or closes, the bot runs one last time and the watch removes itself. GitHub sends nothing when the base branch moves on and makes a conflict, so a watch doesn't notice that.
+
+The routine's sheet shows the pull request, which opens on GitHub, how it hears from GitHub (**Connected**, or **Install App…**), and its **Last event**.
+
+## Webhooks
+
+"Make a routine that runs when my deploy script calls it, and tell me why the deploy failed." A routine can run each time a service or a script sends a request to its own URL. Its sheet has a **Webhook** section:
+
+| Row | What it is |
+| --- | --- |
+| **Webhook URL** | Where requests go, such as `https://hooks.lorca.app/r/5VPZsRAyy2VIu_yNsFDw2g`. |
+| **Webhook key** | The key every request includes. Hidden until you click it. |
+| **Authorization header** | The header that carries the key, ready to paste: `Authorization: Bearer <key>`. |
+
+Each row has **Copy**. Paste the URL and the header into the service, or call it yourself:
+
+```bash
+curl -X POST "https://hooks.lorca.app/r/5VPZsRAyy2VIu_yNsFDw2g" \
+  -H "Authorization: Bearer $LORCA_WEBHOOK_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"deploy": "web", "status": "failed"}'
+```
+
+Each request runs the routine once, and the bot reads what it sent, JSON or text up to 64 KiB, as information, never as instructions. A request without the key is turned away. Send an `Idempotency-Key` header to have a retried request run once. A webhook takes a request a second, in bursts of up to 30.
+
+**Regenerate…** beside the key (**Regenerate Key…** on the phone) makes a new one; services with the old key stop reaching the routine until you give them the new one. Deleting the routine deletes its URL.
+
+Lorca's relay reads a request while it encrypts it for your Runner, then keeps only the encrypted copy.
 
 ## Calendar events
 
 "Fifteen minutes before each customer call, brief me on the customer." A routine can run a set time before an event starts, at its start, or after it ends, for the events of a Google Calendar account on the Runner, or only those with certain words in them. It runs once for each matching event, with that event. All-day events, events you declined, and focus time are left out. The routine's sheet names the account and the next event it will run for.
 
-One-time routines, watches, and calendar routines belong to your account, so a [shared bot](/docs/templates) and a [workflow](/docs/workflows) carry only repeating routines. To start a routine from another service, see [A routine's webhook](/docs/events#a-routines-webhook).
+One-time routines, watches, webhooks, and calendar routines belong to your account, so a [shared bot](/docs/templates) and a [workflow](/docs/workflows) carry only repeating routines.
 
 ## Manage routines
 
-The bot's inspector has a **Routines** section: each routine with its schedule in words, its next run, and a switch that pauses or resumes it. The symbol says what places its runs: a clock, an alarm for a one-time routine, a pull request, or a calendar. Click one for its sheet: its state, the schedule, the next run, **Missed runs**, the last check and run, a **Limits** row, the prompt and the check, and **Run Now**, **Pause**, **Edit in Chat**, and **Delete**. The phone shows the same list in the chat's Details; ask the bot in the chat to edit a routine there.
+The bot's inspector has a **Routines** section: each routine with its schedule in words, its next run, and a switch that pauses or resumes it. The symbol says what places its runs: a clock, an alarm for a one-time routine, a pull request, a link for a webhook, or a calendar. Click one for its sheet: its state, the schedule, the next run, **Missed runs**, the last check and run, a **Limits** row, the prompt and the check, and **Run Now**, **Pause**, **Edit in Chat**, and **Delete**. A watch and a webhook have no next run or missed runs: their events start them, and wait up to seven days for your Runner while it is off. The phone shows the same list in the chat's Details; ask the bot in the chat to edit a routine there.
 
 Routines run on the bot's Runner, so that computer has to be on. **Settings › Devices** says whether a Runner keeps Lorca running in the background (see [Command line](/docs/cli#a-headless-runner)).
 
@@ -68,7 +104,8 @@ A routine that needs you says so first in its row, in orange while you have to a
 | **Can't connect** | It couldn't reach a service or the AI provider. A check tries again after five minutes, then less often, up to every six hours. |
 | **Sign-in failed** | A service or the provider refused its sign-in. Sign in again before it happens three times. |
 | **Needs sign-in** | Three sign-ins in a row failed, so it paused. Reconnect the provider or sign in to the plugin, then **Resume**. |
-| **Check failed** | Its check, or a watch's or calendar's read, failed. The sheet says why; ask the bot to fix it. |
+| **Check failed** | Its check, or its calendar's read, failed. The sheet says why; ask the bot to fix it. |
+| **App not installed** | A watch's repository doesn't have the Lorca GitHub App yet. Click **Install App…** in its sheet. |
 | **Limit reached** | It reached one of its [limits](/docs/limits). Raise the limit and resume it there. |
 
 The sheet explains what happened and how to fix it.
