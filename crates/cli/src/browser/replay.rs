@@ -14,6 +14,8 @@ use crate::browser::steps::{self, Action, Expect, Step, Steps};
 
 /// How long a run waits before it looks for a step's element, or what it expects, again.
 const RETRY: Duration = Duration::from_millis(700);
+/// How long a stopped run's step keeps the browser for its call to answer.
+const STOP_WAIT: Duration = Duration::from_secs(10);
 
 /// Errors that say a target isn't the element on this page, so the next target is tried:
 /// nothing matches, more than one does, or what matches can't take the action.
@@ -91,7 +93,26 @@ pub async fn run(app: &Arc<App>, bot: &Bot, chat_id: &str, skill: &str, inputs: 
         let Some(input) = input.filter(|input| input.name == profile.name) else {
             return Err(ToolError(format!("The {} browser closed at step {} of {total}.", profile.name, index + 1)));
         };
-        match perform(&input.server, step, cancel).await {
+        // The step runs on its own: Stop ends the run at once, while the step's call keeps the
+        // browser until its server answers, up to ten seconds, as a Browser call does; one that
+        // doesn't answer closes the browser, so nothing acts after the user gets it.
+        let mut running = tokio::spawn({
+            let (server, step, cancel) = (input.server.clone(), step.clone(), cancel.clone());
+            async move { perform(&server, &step, &cancel).await }
+        });
+        let outcome = tokio::select! {
+            outcome = &mut running => outcome.unwrap_or_else(|error| Err(Halt::Mismatch(error.to_string()))),
+            _ = cancel.cancelled() => {
+                let app = app.clone();
+                tokio::spawn(async move {
+                    if tokio::time::timeout(STOP_WAIT, running).await.is_err() {
+                        input.interrupted(&app);
+                    }
+                });
+                return Err(ToolError("Stopped".into()));
+            }
+        };
+        match outcome {
             Ok(()) => {}
             Err(Halt::Stopped) => return Err(ToolError("Stopped".into())),
             Err(Halt::Mismatch(why)) if input.server.is_closed() => return Err(ToolError(format!("The {} browser closed at step {} of {total}: {why}", profile.name, index + 1))),

@@ -636,3 +636,38 @@ async fn live_record_then_run_against_real_playwright() {
     server.stop();
     fixture.abort();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stop_ends_a_run_at_once_and_its_step_keeps_the_browser_until_it_answers() {
+    let scratch = setup();
+    let app = &scratch.0;
+    let owner = bot(app);
+    let chat_id = app.state.lock().unwrap().chats[0].meta.id.clone();
+    let answer: crate::plugins::mcp::tests::BrowserAnswer = Arc::new(|name, args| {
+        if name == "browser_click" && args["target"] == "locator('#slow')" {
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+        }
+        Ok(text("ok"))
+    });
+    let (session, _) = scripted(app, &owner, "Work", answer).await;
+    save_skill(app, &owner, "slow-step", json!({ "profile": "Work", "steps": [{ "action": "click", "targets": ["locator('#slow')"] }] }));
+    let cancel = CancellationToken::new();
+    let run = {
+        let (app, owner, chat_id, cancel) = (app.clone(), owner.clone(), chat_id.clone(), cancel.clone());
+        tokio::spawn(async move { super::replay::run(&app, &owner, &chat_id, "slow-step", &Default::default(), &cancel).await.map(|_| ()).map_err(|error| error.0) })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let stopped_at = std::time::Instant::now();
+    cancel.cancel();
+    assert_eq!(run.await.unwrap(), Err("Stopped".to_string()));
+    assert!(stopped_at.elapsed() < std::time::Duration::from_millis(500), "Stop ends the run at once");
+    let takeover = {
+        let (app, bot_id, id) = (app.clone(), owner.id.clone(), session.id.clone());
+        tokio::spawn(async move { app.browser_sessions.takeover(&app, &bot_id, &id, false).await })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(!takeover.is_finished(), "the step's call keeps the browser until its server answers");
+    assert_eq!(takeover.await.unwrap().unwrap().state, Control::Human);
+    let runtime = app.browser_sessions.owned(app, &owner.id, &session.id).unwrap();
+    assert!(runtime.open_server().is_some(), "a call that answered in time leaves the browser open");
+}
