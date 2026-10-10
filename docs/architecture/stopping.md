@@ -15,6 +15,8 @@ On the Runner, a cancelled turn ends this way:
 - **Codemode scripts** stop, and the calls they left running get ten seconds to wind down. **Plugin calls** are called off at the server with `notifications/cancelled`.
 - **Messages** the turn held for its next step no longer wait (`App::unqueue_chat`).
 
+A routine's run is a turn like any other, and Stop ends it. A routine's check, or a watch's or a calendar's read, that runs inside a turn (Run Now, or the first one as the bot sets the routine up) stops with the turn and leaves the routine's health as it was, since Stop is not a failed check (`routines::check_now`). A stopped run still counts as the run: a [one-time routine and a watch's last run](routine-triggers.md) end their routine all the same, and an event's run does not run again.
+
 Send now cuts a step short the same way ([Agent loop](runtime.md#agent-loop)): a call that does not end within the same 15 seconds is cut off, and the turn reads the user's message.
 
 ## What the turn handed off

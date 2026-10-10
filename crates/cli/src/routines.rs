@@ -789,6 +789,13 @@ pub async fn check_now(app: &Arc<App>, routine: &Routine, cancel: &CancellationT
         return CheckRun { found: None, error: Some(stopped.clone()), result: stopped };
     }
     let found = run_check(app, routine, cancel).await;
+    // A check or read the user stopped with its turn (Stop, or a run by hand stopped) says
+    // nothing of how the routine stands: no failure in its health, and the schedule keeps
+    // counting from the last one that ran.
+    if cancel.is_cancelled() {
+        app.routine_checks.finish(&routine.id);
+        return found;
+    }
     if let Err(error) = checked(app, routine, &found) {
         return CheckRun { found: None, error: Some(error.clone()), result: error };
     }
@@ -1546,6 +1553,23 @@ mod tests {
         assert!(crate::routine_triggers::is_finished(&app.routine(&left.id).unwrap()));
         tick(app);
         assert!(app.routine(&left.id).is_none());
+    }
+
+    /// A check stopped with the turn it ran in records nothing: Stop is not a failed check.
+    #[cfg(feature = "runner")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_check_stopped_with_its_turn_leaves_health_alone() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        let watch = create(app, "b1", "Watch", "every 10m", "x", Some("throw new Error('boom')"), true).unwrap();
+        let stopped = CancellationToken::new();
+        stopped.cancel();
+        check_now(app, &watch, &stopped).await;
+        let after = app.routine(&watch.id).unwrap();
+        assert_eq!(after.health, None, "nothing recorded");
+        assert!(!app.routine_checks.is_running(&watch.id), "the check's hold is released");
+        check_now(app, &after, &CancellationToken::new()).await;
+        assert_eq!(app.routine(&watch.id).unwrap().health.unwrap().status, Some(crate::routine_health::CheckStatus::Failed), "a check that ran counts");
     }
 
     /// A streamable-HTTP MCP server for the tests: `tools` to list, and each call recorded and
