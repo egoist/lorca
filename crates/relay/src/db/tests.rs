@@ -445,3 +445,95 @@ async fn a_shared_link_belongs_to_the_identity_that_put_it() {
         ok!(store.put_share(&other, &name("link"), b"room", 2));
     }
 }
+
+#[tokio::test]
+async fn a_mail_address_is_one_per_identity_and_never_passes_to_another() {
+    for (store, _) in backends().await {
+        let (alice, bob) = (name("alice"), name("bob"));
+        let (first, second) = (name("a").to_lowercase(), name("b").to_lowercase());
+        assert_eq!(ok!(store.mail_address(&alice)), None);
+        ok!(store.claim_mail_address(&alice, &first, 10));
+        assert_eq!(ok!(store.mail_address(&alice)).unwrap().name, first, "{}", store.describe());
+        // The same name again changes nothing; another identity cannot have it.
+        ok!(store.claim_mail_address(&alice, &first, 10));
+        let taken = store.claim_mail_address(&bob, &first, 10).await.unwrap_err();
+        assert_eq!(taken.status(), axum::http::StatusCode::CONFLICT);
+
+        // A new name gives the old one up, and the old one stays Alice's alone.
+        ok!(store.claim_mail_address(&alice, &second, 10));
+        assert_eq!(ok!(store.mail_address(&alice)).unwrap().name, second);
+        assert!(ok!(store.mail_route(&first)).is_none(), "a released name routes nowhere");
+        assert!(store.claim_mail_address(&bob, &first, 10).await.is_err(), "a released name is not handed to anyone else");
+        ok!(store.claim_mail_address(&alice, &first, 10));
+        assert_eq!(ok!(store.mail_address(&alice)).unwrap().name, first, "its holder may take it back");
+
+        // Names an account took count for good: it may not hold more than it is allowed.
+        let third = name("c").to_lowercase();
+        let limited = store.claim_mail_address(&alice, &third, 2).await.unwrap_err();
+        assert_eq!(limited.code(), Some("limit"), "{}", store.describe());
+        ok!(store.claim_mail_address(&alice, &second, 2));
+
+        assert!(ok!(store.release_mail_address(&alice)));
+        assert!(!ok!(store.release_mail_address(&alice)));
+        assert_eq!(ok!(store.mail_address(&alice)), None);
+        assert!(ok!(store.mail_route(&first)).is_none());
+    }
+}
+
+#[tokio::test]
+async fn mail_routes_to_the_identitys_paired_runners() {
+    for (store, _) in backends().await {
+        let who = name("identity");
+        let address = name("r").to_lowercase();
+        let (mac, linux, phone) = (name("mac"), name("linux"), name("phone"));
+        for machine in [&mac, &linux, &phone] {
+            ok!(store.register_identity(&who, "content", machine, &format!("box-{machine}"), "attestation"));
+        }
+        ok!(store.claim_mail_address(&who, &address, 10));
+        assert!(ok!(store.mail_route(&address)).unwrap().machines.is_empty());
+        ok!(store.set_mail_runner(&who, &mac));
+        ok!(store.set_mail_runner(&who, &linux));
+        ok!(store.set_mail_runner(&who, &mac));
+        assert!(ok!(store.is_mail_runner(&mac)) && !ok!(store.is_mail_runner(&phone)));
+        let route = ok!(store.mail_route(&address)).unwrap();
+        assert_eq!(route.identity_pubkey, who);
+        let mut expected = vec![(mac.clone(), format!("box-{mac}")), (linux.clone(), format!("box-{linux}"))];
+        expected.sort();
+        assert_eq!(route.machines, expected, "{}", store.describe());
+
+        // An unpaired machine takes no more mail.
+        assert!(ok!(store.revoke_machine(&who, &linux)));
+        assert_eq!(ok!(store.mail_route(&address)).unwrap().machines, vec![(mac.clone(), format!("box-{mac}"))]);
+        assert!(!ok!(store.is_mail_runner(&linux)));
+
+        // A deleted identity's address bounces, and its name stays taken.
+        ok!(store.delete_identity(&who, true));
+        assert!(ok!(store.mail_route(&address)).is_none());
+        assert!(store.claim_mail_address(&name("other"), &address, 10).await.is_err());
+    }
+}
+
+#[tokio::test]
+async fn bounces_suspend_an_address_and_the_suspension_follows_a_new_name() {
+    for (store, _) in backends().await {
+        let who = name("identity");
+        ok!(store.register_identity(&who, "content", &name("machine"), "box", "attestation"));
+        let (first, second) = (name("s").to_lowercase(), name("t").to_lowercase());
+        ok!(store.claim_mail_address(&who, &first, 10));
+        let day = now() / 86_400;
+        let until = now() + 3600;
+        assert!(!ok!(store.record_mail_send(&who, day, 0, 3, until)));
+        assert!(!ok!(store.record_mail_send(&who, day, 2, 3, until)));
+        assert!(ok!(store.record_mail_send(&who, day, 1, 3, until)), "the third bounce suspends it");
+        assert!(!ok!(store.record_mail_send(&who, day, 1, 3, until)), "already suspended");
+        let usage = ok!(store.mail_usage(&who, day));
+        assert_eq!(usage.sent, 4);
+        assert!(usage.identity_created_at > 0);
+        assert!(ok!(store.mail_address(&who)).unwrap().is_suspended());
+        assert!(ok!(store.mail_route(&first)).unwrap().address.is_suspended());
+
+        ok!(store.release_mail_address(&who));
+        ok!(store.claim_mail_address(&who, &second, 10));
+        assert!(ok!(store.mail_address(&who)).unwrap().is_suspended(), "a new name keeps the suspension");
+    }
+}

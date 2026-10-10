@@ -730,11 +730,17 @@ pub fn receive_blob(
     blob: &crate::relay::BlobIn,
 ) -> anyhow::Result<()> {
     let machine = machine_file.machine()?;
-    let event = keys::unb64(&blob.ciphertext)
-        .and_then(|bytes| crypto::unseal_json::<Envelope>(&machine.box_secret, &bytes));
-    match event {
-        Ok(event) => {
-            receive(app, event)?;
+    let plaintext = keys::unb64(&blob.ciphertext).and_then(|bytes| crypto::unseal(&machine.box_secret, &bytes));
+    match plaintext {
+        // Mail the mail Worker sealed to this Runner.
+        Ok(plaintext) if plaintext.starts_with(crate::mail::MAGIC) => {
+            #[cfg(feature = "runner")]
+            crate::mail::receive(app, &plaintext)?;
+        }
+        Ok(plaintext) => {
+            if let Ok(event) = serde_json::from_slice::<Envelope>(&plaintext) {
+                receive(app, event)?;
+            }
         }
         Err(_) => {} // Unopenable envelopes cannot authorize work and are discarded.
     }

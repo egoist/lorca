@@ -11,7 +11,7 @@ Identity is a **key pair**. Devices pair. The relay stores public keys and ciphe
 1. **The app speaks only to the local CLI** over localhost websocket. The app ships the CLI binary inside its bundle and starts `lorca serve` itself, unless one already answers on the port. The CLI holds keys, talks to the relay, and talks to models.
 2. **The UI is AppKit** (SPM) on macOS: system materials, SF Symbols, Auto Layout, keyboard, accessibility. On Windows and Linux it is a MyGo app in Go, drawn with MyGo's native UI toolkit, that follows the macOS app screen for screen.
 3. **The CLI owns the agent loop:** inference, tools, streaming, cancellation, orchestration.
-4. **The relay is zero-knowledge:** opaque blobs and public keys. Auth is a signature challenge.
+4. **The relay is zero-knowledge:** opaque blobs and public keys. Auth is a signature challenge. An account that takes an [email address](docs/architecture/email.md) shares that address with the relay, which sees a bot's outgoing mail as it hands it to Email Sending.
 5. **Every Device records its `os`.** A Device with a desktop `os` (`macos`, `linux`, `windows`) is a **Runner**. Phones and tablets (`ios`, `ipados`, `android`) are Devices, never Runners.
 6. **Provider credentials belong to the account.** API keys, ChatGPT and Grok tokens, and custom providers (any server that speaks OpenAI's or Anthropic's API, or a decision API) are connected once, on any Device, and reach every paired Device as a `credentials` blob encrypted with the account DEK. A bot runs with them on whichever Runner it is assigned to.
 7. **A bot runs on one Runner:** that Device’s CLI.
@@ -67,6 +67,7 @@ Identity 1──* Task         (durable work; an owning Bot, assigned Runner, an
 | Task               | Encrypted records, revisions, evidence references, and run claims | Account-encrypted task blobs; execution Jobs sealed to the assigned Runner |
 | Plugin             | Manifest, variables, secrets, tokens on the Runner        | Id and state inside the Runner's encrypted machine blob |
 | ProviderCredential | `credentials.json` on every Device                        | Inside the encrypted `credentials` blob                |
+| Email              | The account's address; mail encrypted with the account key on its bot's Runner | Address and the Runners that take its mail; each message sealed to every Runner as an `event` envelope |
 | Chat / Message     | Account/chat DEK                                          | Encrypted blobs                                        |
 | Job                | Any paired Device may create; the assigned Runner runs it | Sealed envelope to that Runner’s machine box key; deleted once run. A hard Stop sends `job_cancel` to the Device running it; the Runner seals how the turn ended (`job_result`) to the requesting Device, and lists the turn and what it is doing in its `machine` blob for every Device |
 
@@ -102,6 +103,7 @@ One doc per subject under `docs/architecture/`, each short enough to read in one
 | [Bots and Memory](docs/architecture/bots.md) | The lead bot, DMs and groups, who answers, handoffs between bots, a bot's memory |
 | [Routines](docs/architecture/routines.md) | A bot's scheduled tasks: schedules and their timezones, runs and read-only checks, missed runs, health and recovery, and the apps' routine sheet and service row |
 | [Event triggers](docs/architecture/event-triggers.md) | Runner event subscriptions, gateways that sign and seal a service's events, the encrypted inbox, ordering and recovery |
+| [Bot email](docs/architecture/email.md) | The account's email address and each bot's, the mail Worker, sealed delivery to the Runners and which bot gets a message, the email tools, sending through the relay, the apps' Email settings, deploying it |
 | [Durable tasks](docs/architecture/tasks.md) | Work that spans turns: owner, revisions, runs and recovery, evidence, the apps' Tasks section |
 | [Coordinator attention](docs/architecture/attention.md) | Consolidated reviews, blockers, commitments and changes, coordinator briefs, deduplication, encrypted records and notification preferences |
 | [Shared project context](docs/architecture/project-context.md) | Group briefs, goals, constraints, decisions, source freshness and corrections, encrypted reference assets, bounded bot discovery |

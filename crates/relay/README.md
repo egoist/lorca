@@ -85,3 +85,15 @@ docker build -f crates/relay/Dockerfile -t lorca-relay .
 ```bash
 docker run -p 8787:8787 -v lorca-relay:/data lorca-relay
 ```
+
+### Email
+
+An account's bots share one address on a mail domain of the operator's ([Bot email](../../docs/architecture/email.md)). Without these the relay has no email and the apps show none.
+
+| Variable | Value |
+| --- | --- |
+| `LORCA_RELAY_MAIL_DOMAIN` | The mail domain, e.g. `bots.lorca.app`. |
+| `LORCA_RELAY_MAIL_TOKEN` | The output of `openssl rand -hex 32`; the mail Worker's `MAIL_TOKEN` secret holds the same value. |
+| `LORCA_RELAY_EMAIL_ACCOUNT_ID` | The Cloudflare account whose Email Sending sends bots' mail. |
+| `LORCA_RELAY_EMAIL_API_TOKEN` | A Cloudflare API token that may send email for that account. |
+| `LORCA_RELAY_MAIL_DAILY_SENDS`, `LORCA_RELAY_MAIL_NEW_DAILY_SENDS`, `LORCA_RELAY_MAIL_MAX_RECIPIENTS`, `LORCA_RELAY_MAIL_BOUNCE_LIMIT` | Limits: 100 messages a day, 20 in an account's first week, 10 recipients a message, 5 bounces a day suspend the address for a week. |

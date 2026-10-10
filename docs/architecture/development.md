@@ -23,6 +23,7 @@ lorca/
   desktop/             # the Windows and Linux app: Go on MyGo's native UI; the build bundles the CLI
   mobile/              # Expo app for iOS and Android: a paired Device over the core (modules/lorca-core)
   web/                 # the site
+  mail/                # the mail Worker: Email Routing's catch-all seals each message to the account's Runners
   scripts/             # bun scripts: dev loop, bundle build, macOS and phone releases, the desktop app's dev loop and builds, string and doc checks
   .github/workflows/   # release-cli.yml, release-mac.yml, release-desktop.yml, and release-mobile.yml: release builds; test.yml: every app's and crate's tests on each pull request; docs.yml: the doc check
 ```

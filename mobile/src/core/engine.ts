@@ -13,6 +13,7 @@ import { hostFacts } from "./host";
 import { orderProjectEntries, providerConnectMethod, withReviewModel, type PlaybookContent, type PlaybookRecord, type PlaybookScope, type ProjectContext, type ProjectEntry, type ProjectKind, type ProjectSource, type Attachment, type AutoReview, type Bot, type BrowserProfile, type BudgetLimits, type BudgetState, type CallLimits, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type DurableTask, type Message, type ReviewItem, type PluginDetail, type PluginStatus, type ProviderKind, type ProviderStatus } from "./model";
 import { coreHome, loadPrefs, pathOf, wipePrefs } from "./prefs";
 import type { SharedLink, TemplateContents, TemplateImportPreview, TemplateSelection } from "./templates";
+import type { MailApplied, MailProblem, MailStatus } from "./mail";
 import { clearPushes, installPushHandlers, registerForPushes } from "./push";
 import {
   acceptDurableTask,
@@ -159,6 +160,9 @@ class Engine {
     switch (event) {
       case "attention.changed":
         useStore.setState({ attention: data });
+        break;
+      case "mail.changed":
+        useStore.setState({ mail: data as MailStatus });
         break;
       case "snapshot":
         replaceSnapshot(data as Snapshot);
@@ -641,6 +645,28 @@ class Engine {
 
   setOwner(chatId: string, botId: string) {
     void core.request("chats.set_owner", { chat_id: chatId, bot_id: botId });
+  }
+
+  // MARK: - Email
+
+  /// Asks the relay where the account's address stands now.
+  async refreshMail(): Promise<void> {
+    useStore.setState({ mail: await core.request<MailStatus>("mail.get") });
+  }
+
+  /// Takes an address for the account, or changes the one it has: `name` the user's own, else a
+  /// random one. Answers why none was taken; the old name is given up with the change.
+  async applyMail(name?: string): Promise<MailProblem | undefined> {
+    const applied = await core.request<MailApplied>("mail.apply", name ? { name } : {});
+    if (applied.problem) return applied.problem;
+    useStore.setState({ mail: applied.mail });
+    return undefined;
+  }
+
+  /// Gives the address up: mail to it bounces from now on, and nobody gets the name again.
+  async releaseMail(): Promise<void> {
+    const { mail } = await core.request<{ mail: MailStatus }>("mail.release");
+    useStore.setState({ mail });
   }
 
   // MARK: - Auto-review

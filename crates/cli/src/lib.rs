@@ -25,6 +25,7 @@ pub mod identity;
 pub mod keys;
 #[cfg(feature = "runner")]
 pub mod local_review;
+pub mod mail;
 pub mod marketplace;
 pub mod workflows;
 pub mod memory;

@@ -1,8 +1,8 @@
 # Runs the test suites on every pull request and every push to main: the Rust workspace on Linux,
 # where the relay's store suite runs on SQLite and on a Postgres service, and on macOS; the crates
 # a Windows Runner runs, on Windows; the macOS app's XCTest suite over the markdown crate it links;
-# the Windows and Linux app's page and Go side; and the phone app's TypeScript. The end-to-end
-# scripts, which need a live relay, a model, or a simulator, run locally.
+# the Windows and Linux app's page and Go side; the phone app's TypeScript; and the mail Worker. The
+# end-to-end scripts, which need a live relay, a model, or a simulator, run locally.
 name: Tests
 
 on:
@@ -124,4 +124,18 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
+      - run: bun run test
+
+  mail-worker:
+    name: Mail Worker
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mail
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      # The email() handler against a stand-in relay, and the seal the Runners' test opens.
       - run: bun run test

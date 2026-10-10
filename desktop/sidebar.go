@@ -350,7 +350,7 @@ func (m *mainWindow) settingsSidebar(c *ui.Context) {
 	var rows []settingsRow
 	text := strings.TrimSpace(s.query)
 	if text == "" {
-		for _, pane := range model.SettingsPanes {
+		for _, pane := range store.ListedPanes() {
 			rows = append(rows, settingsRow{pane: pane})
 		}
 	} else {

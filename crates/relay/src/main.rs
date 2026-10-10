@@ -8,6 +8,7 @@ mod auth;
 mod db;
 mod hub;
 mod limit;
+mod mail;
 mod metrics;
 mod push;
 mod routes;
@@ -129,6 +130,59 @@ struct Args {
     /// of the file.
     #[usage(long, env = "LORCA_RELAY_FCM_SERVICE_ACCOUNT", hide_env_values = true)]
     fcm_service_account: Option<String>,
+
+    /// The mail domain, `bots.lorca.app`: each account may take one address there, which its
+    /// bots share. Needs --mail-token, the mail Worker's bearer. Unset, the relay has no email.
+    #[usage(long, env = "LORCA_RELAY_MAIL_DOMAIN", requires("--mail-token"))]
+    mail_domain: Option<String>,
+
+    /// The token the mail Worker sends when it asks where mail goes and hands over sealed copies.
+    #[usage(long, env = "LORCA_RELAY_MAIL_TOKEN", hide_env_values = true)]
+    mail_token: Option<String>,
+
+    /// The Cloudflare account whose Email Sending sends bots' mail. Needs --email-api-token.
+    /// Unset, mail comes in and bots cannot send.
+    #[usage(long, env = "LORCA_RELAY_EMAIL_ACCOUNT_ID", requires("--email-api-token", "--mail-domain"))]
+    email_account_id: Option<String>,
+
+    /// A Cloudflare API token that may send email for that account.
+    #[usage(long, env = "LORCA_RELAY_EMAIL_API_TOKEN", hide_env_values = true)]
+    email_api_token: Option<String>,
+
+    /// Messages an account may send a day.
+    #[usage(long, env = "LORCA_RELAY_MAIL_DAILY_SENDS", default = "100")]
+    mail_daily_sends: i64,
+
+    /// Messages an account may send a day in its first week.
+    #[usage(long, env = "LORCA_RELAY_MAIL_NEW_DAILY_SENDS", default = "20")]
+    mail_new_daily_sends: i64,
+
+    /// Recipients one message may have, To and Cc together. Email Sending allows 50.
+    #[usage(long, env = "LORCA_RELAY_MAIL_MAX_RECIPIENTS", default = "10")]
+    mail_max_recipients: usize,
+
+    /// Bounces in a day, permanent or to suppressed recipients, that suspend an address for a week.
+    #[usage(long, env = "LORCA_RELAY_MAIL_BOUNCE_LIMIT", default = "5")]
+    mail_bounce_limit: i64,
+}
+
+/// Email, when the operator set up a domain. `LORCA_RELAY_EMAIL_API_URL` points Email Sending
+/// at a test server.
+fn mail(args: &Args) -> anyhow::Result<Option<mail::MailConfig>> {
+    let (Some(domain), Some(token)) = (&args.mail_domain, &args.mail_token) else { return Ok(None) };
+    let sending = match (&args.email_account_id, &args.email_api_token) {
+        (Some(account), Some(api_token)) => Some(mail::Sending::new(account.clone(), api_token.clone(), std::env::var("LORCA_RELAY_EMAIL_API_URL").ok())?),
+        _ => None,
+    };
+    Ok(Some(mail::MailConfig {
+        domain: domain.trim().to_ascii_lowercase(),
+        worker_token: token.clone(),
+        sending,
+        daily_sends: args.mail_daily_sends,
+        new_daily_sends: args.mail_new_daily_sends,
+        max_recipients: args.mail_max_recipients.clamp(1, 50),
+        bounce_limit: args.mail_bounce_limit.max(1),
+    }))
 }
 
 /// A key given as its text or as the path of a file. The text form lets a deploy with no
@@ -219,6 +273,8 @@ pub struct AppState {
     pub pusher: Arc<push::Pusher>,
     /// The pushes on their way to APNs and FCM, which a stopping relay delivers before it exits.
     pub pushes: tokio_util::task::TaskTracker,
+    /// Email, when the operator set up a domain for it.
+    pub mail: Option<Arc<mail::MailConfig>>,
 }
 
 /// How long a stopping relay waits for APNs and FCM to take the pushes it already answered
@@ -247,6 +303,7 @@ async fn main() -> anyhow::Result<()> {
     let db = db::open(&args.db, local.clone()).await?;
     let file_store = Arc::new(file_store(&args)?);
     let pusher = Arc::new(pusher(&args)?);
+    let mail = mail(&args)?.map(Arc::new);
 
     let mut secret = [0u8; 32];
     match &args.secret {
@@ -277,6 +334,7 @@ async fn main() -> anyhow::Result<()> {
         file_store: file_store.clone(),
         pusher: pusher.clone(),
         pushes: tokio_util::task::TaskTracker::new(),
+        mail: mail.clone(),
     };
 
     let ticking = db.clone();
@@ -301,6 +359,7 @@ async fn main() -> anyhow::Result<()> {
         quota_bytes = args.quota_bytes,
         files = %file_store.describe(),
         push = %pusher.describe(),
+        mail = mail.as_ref().map(|mail| format!("{}{}", mail.domain, if mail.sending.is_some() { "" } else { " (receiving only)" })).unwrap_or_else(|| "off".into()),
         "lorca-relay listening"
     );
     let shared = args.db.contains("://");

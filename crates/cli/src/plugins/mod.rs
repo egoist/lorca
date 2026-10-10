@@ -1023,11 +1023,14 @@ pub async fn serve_request(app: &Arc<App>, verb: &str, body: &Value, requested_b
         "permissions.catalog" => {
             let installed = app.plugins.lock().unwrap().installed().to_vec();
             let statuses = app.plugins.lock().unwrap().statuses();
-            Ok(json!(installed.iter().map(|plugin| json!({
+            let mut catalog: Vec<Value> = installed.iter().map(|plugin| json!({
                 "id": plugin.manifest.id,
                 "name": statuses.iter().find(|status| status.id == plugin.manifest.id).map(|status| &status.name).unwrap_or(&plugin.manifest.name),
                 "tools": mcp::saved_tools(app, plugin).into_iter().filter(|tool| tool["hidden"] != true).collect::<Vec<_>>(),
-            })).collect::<Vec<_>>()))
+            })).collect();
+            // The account's email is granted in Access like a plugin.
+            catalog.extend(crate::mail::access_entry(app));
+            Ok(json!(catalog))
         }
         "plugins.sign_out" => Ok(json!(sign_out(app, &plugin_id()?, body["server"].as_str())?)),
         "permission.answer" => {

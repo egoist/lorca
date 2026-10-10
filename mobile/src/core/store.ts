@@ -10,6 +10,7 @@ import { t } from "../i18n";
 import { savePrefs } from "./prefs";
 import { emptyAttention, type AttentionView } from "./attention";
 import type { SharedLink } from "./templates";
+import type { MailStatus } from "./mail";
 
 export interface Running {
   chatId: string;
@@ -91,6 +92,8 @@ export interface StoreState {
   playbooks: PlaybookSummary[];
   /// The bots the account shares as links, from the roster.
   shared_links: SharedLink[];
+  /// The account's email address as the core last heard from the relay; null until it has asked.
+  mail: MailStatus | null;
   /// A shared bot's link the app was opened with (Open in Lorca on lorca.app), kept until there
   /// is an account to read it with.
   pendingTemplateLink: string | null;
@@ -130,6 +133,7 @@ function empty(): Omit<StoreState, "ready" | "dictation_lang" | "appActive" | "a
     budgets: [],
     playbooks: [],
     shared_links: [],
+    mail: null,
     pendingTemplateLink: null,
   };
 }
@@ -191,6 +195,7 @@ export function replaceSnapshot(snapshot: {
   budgets?: BudgetState[];
   playbooks?: PlaybookSummary[];
   shared_links?: SharedLink[];
+  mail?: MailStatus | null;
   auto_review?: AutoReview;
   attention?: AttentionView;
   providers?: ProviderStatus[];
@@ -228,6 +233,7 @@ export function replaceSnapshot(snapshot: {
     budgets: snapshot.budgets ?? [],
     playbooks: snapshot.playbooks ?? [],
     shared_links: snapshot.shared_links ?? [],
+    mail: snapshot.mail ?? null,
     auto_review: snapshot.auto_review ?? { is_enabled: true, rules: [] },
     attention: snapshot.attention ?? emptyAttention(),
     providers: snapshot.providers ?? [],

@@ -174,7 +174,7 @@ func paletteChats(m *mainWindow) []paletteItem {
 func paletteSettings(m *mainWindow) []paletteItem {
 	device := store.Device(m.settingsDeviceID)
 	var panes, entries []paletteItem
-	for _, pane := range model.SettingsPanes {
+	for _, pane := range store.ListedPanes() {
 		pane := pane
 		panes = append(panes, paletteItem{symbol: pane.Symbol(), title: pane.Title(), keywords: []string{L("Settings")}, run: func() { m.showSettings(pane) }})
 		for _, setting := range entriesIn(pane, device) {

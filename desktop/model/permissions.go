@@ -154,6 +154,14 @@ func (t AccessTool) Shown() string {
 func (s *Store) BotAccessCatalog(id string, done func(AccessCatalog, error)) {
 	if s.IsMock {
 		catalog := MockAccessCatalog()
+		if s.Mail != nil && s.Mail.Address != nil {
+			// The account's address is a connection of its own, built into every Runner.
+			email := AccessPlugin{ID: MailConnectionID, Name: "Email", Tools: []AccessTool{
+				{Name: "email", Title: "Read and wait for email", Capability: "read"},
+				{Name: "send_email", Title: "Send email", Capability: "write"},
+			}}
+			catalog.Connections = slices.Insert(catalog.Connections, 2, email)
+		}
 		s.post(func() { done(catalog, nil) })
 		return
 	}

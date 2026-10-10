@@ -17,7 +17,7 @@ use crate::AppState;
 #[cfg(test)]
 mod tests;
 
-const MAX_BLOB_BYTES: usize = 4 * 1024 * 1024;
+pub(crate) const MAX_BLOB_BYTES: usize = 4 * 1024 * 1024;
 /// A 100 MiB attachment plus its 24-byte nonce and 16-byte authentication tag.
 const MAX_FILE_BLOB_BYTES: usize = 100 * 1024 * 1024 + 40;
 /// Room for a non-file blob as base64url inside its JSON body.
@@ -43,11 +43,25 @@ pub struct ApiError {
     message: String,
     /// Seconds a rate-limited caller should wait; becomes the `Retry-After` header.
     retry_after: Option<u64>,
+    /// A word a client can branch on, beside the message: `taken`, `reserved`, …
+    code: Option<&'static str>,
 }
 
 impl ApiError {
     fn new(status: StatusCode, message: &str) -> Self {
-        ApiError { status, message: message.into(), retry_after: None }
+        ApiError { status, message: message.into(), retry_after: None, code: None }
+    }
+    pub fn coded(status: StatusCode, message: &str, code: &'static str) -> Self {
+        ApiError { code: Some(code), ..Self::new(status, message) }
+    }
+    pub fn retry_after(self, seconds: u64) -> Self {
+        ApiError { retry_after: Some(seconds), ..self }
+    }
+    pub fn status(&self) -> StatusCode {
+        self.status
+    }
+    pub fn code(&self) -> Option<&'static str> {
+        self.code
     }
     pub fn bad_request(message: &str) -> Self {
         Self::new(StatusCode::BAD_REQUEST, message)
@@ -91,7 +105,11 @@ impl From<rusqlite::Error> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let mut response = (self.status, Json(json!({ "error": self.message }))).into_response();
+        let body = match self.code {
+            Some(code) => json!({ "error": self.message, "code": code }),
+            None => json!({ "error": self.message }),
+        };
+        let mut response = (self.status, Json(body)).into_response();
         if let Some(seconds) = self.retry_after {
             response.headers_mut().insert(axum::http::header::RETRY_AFTER, seconds.into());
         }
@@ -154,6 +172,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/pair/{nonce}", axum::routing::delete(delete_pairing))
         .route("/v1/pair/{nonce}/request", get(get_pair_request))
         .route("/v1/pair/{nonce}/reply", post(post_pair_reply))
+        .merge(crate::mail::routes())
         .merge(public)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(axum::middleware::from_fn_with_state(state.clone(), require_protocol))

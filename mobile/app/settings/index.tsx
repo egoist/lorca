@@ -2,7 +2,7 @@ import * as Application from "expo-application";
 import { AlertDialog, Column, Host, OutlinedTextField, RadioButton, Row as ComposeRow, Text as ComposeText, TextButton } from "@expo/ui/jetpack-compose";
 import { clickable, fillMaxWidth, padding } from "@expo/ui/jetpack-compose/modifiers";
 import { Stack, useRouter } from "expo-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ActivityIndicator, Alert, Platform, ScrollView, StyleSheet, Text, View } from "react-native";
 import { engine } from "../../src/core/engine";
 import { loadPrefs } from "../../src/core/prefs";
@@ -55,6 +55,7 @@ export default function SettingsScreen() {
   const autoReview = useStore((s) => s.auto_review);
   const providers = useStore((s) => s.providers);
   const sharedLinks = useStore((s) => s.shared_links);
+  const mail = useStore((s) => s.mail);
   const catalog = withCustomModels(useStore((s) => s.models), providers);
   const thisDevice = devices.find((d) => d.is_this_device);
   const [name, setName] = useState(thisDevice?.name ?? "");
@@ -65,6 +66,11 @@ export default function SettingsScreen() {
   const appLanguage = useLanguage();
   const updates = useUpdates();
   const [dailyChecks, setDailyChecksShown] = useState(() => loadPrefs().update_checks !== false);
+
+  // Whether the relay offers email, and the address another Device may have changed meanwhile.
+  useEffect(() => {
+    engine.refreshMail().catch(() => {});
+  }, []);
 
   // The Mac app's pop-up: Automatic with the language it resolves to, a separator, then every
   // language the recognizer knows, by name.
@@ -364,6 +370,15 @@ export default function SettingsScreen() {
         )}
 
         <Section>
+          {mail?.available ? (
+            <Row
+              title={t("Email")}
+              subtitle={mail.address?.email}
+              detail={mail.address?.state === "suspended" ? t("Suspended") : undefined}
+              chevron
+              onPress={() => router.push("/settings/email")}
+            />
+          ) : null}
           <Row title={t("Shared Links")} detail={sharedLinks.length ? String(sharedLinks.length) : undefined} chevron onPress={() => router.push("/settings/shared-links")} />
         </Section>
 

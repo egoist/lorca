@@ -38,4 +38,6 @@ uuid.workspace = true
 webpki-roots.workspace = true
 
 [dev-dependencies]
-lorca = { path = "../cli", default-features = false }
+# The Runner's side of mail (its inbox and email tools) is in the end-to-end test.
+lorca = { path = "../cli", default-features = false, features = ["runner"] }
+lorca-agent = { path = "../agent" }

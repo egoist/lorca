@@ -239,6 +239,10 @@ func (st *botAccessSheet) pluginRow(c *ui.Context, k *card, plugin model.AccessP
 			ui.Row(c).Width(18).Shrink(0).Justify(ui.Center).TextColor(p.Label2).Children(func() {
 				// A named account (Gmail · Work) has its service's mark.
 				symbolName, markID := "puzzlepiece.extension", plugin.ID
+				if plugin.ID == model.MailConnectionID {
+					// The account's email address is built in, not an installed plugin.
+					symbolName = "envelope"
+				}
 				if st.runner != nil {
 					for _, installed := range st.runner.Plugins {
 						if installed.ID == plugin.ID {
