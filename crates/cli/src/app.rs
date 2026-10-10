@@ -54,6 +54,9 @@ impl Slot {
     }
 }
 
+/// The longest name the account can give a Device.
+pub const MAX_DEVICE_NAME_CHARS: usize = 64;
+
 /// The process's in-memory projection of the local SQLite tables.
 #[derive(Debug, Clone, Default)]
 pub struct State {
@@ -66,6 +69,8 @@ pub struct State {
     pub workflows: Vec<crate::workflows::Setup>,
     pub auto_review: AutoReview,
     pub shared_links: Vec<crate::templates::links::SharedLink>,
+    /// The names the account gives its Devices, by machine pubkey, from the roster.
+    pub device_names: std::collections::BTreeMap<String, String>,
     pub last_seq: i64,
     /// Chats deleted here whose blobs the relay still has to drop.
     pub group_deletes: Vec<String>,
@@ -584,24 +589,25 @@ impl App {
         Ok(())
     }
 
-    /// Renames this Device; the roster hears through the machine blob.
-    pub fn rename_device(&self, name: &str) -> anyhow::Result<()> {
+    /// Gives a Device, this one or another, the name every paired Device shows it as. Blank, or
+    /// the name its own machine goes by, takes that name back.
+    pub fn set_device_name(&self, id: &str, name: &str) -> anyhow::Result<()> {
         let name = name.trim();
-        if name.is_empty() {
-            anyhow::bail!("Give the Device a name");
+        if name.chars().count() > MAX_DEVICE_NAME_CHARS {
+            anyhow::bail!("Keep the name to {MAX_DEVICE_NAME_CHARS} characters");
         }
         {
-            let mut machine = self.machine.lock().unwrap();
-            let Some(file) = machine.as_mut() else { anyhow::bail!("No identity on this Device") };
-            file.name = name.to_string();
+            let mut state = self.state.lock().unwrap();
+            let Some(device) = state.devices.iter().find(|d| d.id == id) else { anyhow::bail!("Unknown Device") };
+            if name.is_empty() || name == device.name {
+                if state.device_names.remove(id).is_none() {
+                    return Ok(());
+                }
+            } else if state.device_names.insert(id.to_string(), name.to_string()).as_deref() == Some(name) {
+                return Ok(());
+            }
         }
-        self.save_machine()?;
-        if let Some(device) = self.local_device() {
-            upsert_device(&mut self.state.lock().unwrap().devices, device);
-        }
-        self.save_state();
-        self.push_machine_blob_if_changed();
-        self.emit(self.roster_summary());
+        self.roster_changed(true);
         Ok(())
     }
 
@@ -743,6 +749,7 @@ impl App {
                 routines: state.routines.clone(),
                 auto_review: state.auto_review.clone(),
                 shared_links: state.shared_links.clone(),
+                device_names: state.device_names.clone(),
                 updated_at: config::now_secs(),
             }
         };
@@ -883,8 +890,14 @@ impl App {
         self.state.lock().unwrap().chats.iter().find(|c| c.meta.id == id).cloned()
     }
 
+    /// A Device as the account knows it, under the name the account gave it, if any.
     pub fn device(&self, id: &str) -> Option<Device> {
-        self.state.lock().unwrap().devices.iter().find(|d| d.id == id).cloned()
+        let state = self.state.lock().unwrap();
+        let mut device = state.devices.iter().find(|d| d.id == id).cloned()?;
+        if let Some(name) = state.device_names.get(id) {
+            device.name = name.clone();
+        }
+        Some(device)
     }
 
     /// A chat's name as the apps show it: a group's title, else its members' names; a direct
@@ -2070,8 +2083,9 @@ impl App {
 
     fn devices_out(&self, state: &State) -> Vec<Value> {
         let this_id = self.this_device_id();
+        let name = |device: &Device| state.device_names.get(&device.id).unwrap_or(&device.name).clone();
         let mut devices: Vec<&Device> = state.devices.iter().collect();
-        devices.sort_by_key(|d| (Some(d.id.clone()) != this_id, d.name.to_lowercase()));
+        devices.sort_by_key(|d| (Some(d.id.clone()) != this_id, name(d).to_lowercase()));
         let mut out: Vec<Value> = devices
             .into_iter()
             .map(|device| {
@@ -2080,7 +2094,8 @@ impl App {
                 let status = if is_this || state.device_online.contains(&device.id) { "online" } else { "offline" };
                 json!({
                     "id": device.id,
-                    "name": device.name,
+                    "name": name(device),
+                    "machine_name": device.name,
                     "model": device.model,
                     "os": device.os,
                     "os_version": device.os_version,
@@ -2423,6 +2438,37 @@ mod tests {
         assert!(app.delete_section(&customers.id).is_err());
         app.mute_chat("b", None).unwrap();
         assert!(!app.chat("b").unwrap().meta.is_muted(0.0));
+    }
+
+    #[test]
+    fn a_device_name_shows_everywhere_and_survives_a_restart() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        app.state.lock().unwrap().devices.push(Device { id: "runner".into(), name: "MacBook Air".into(), os: "macos".into(), ..Default::default() });
+        let row = |app: &App| {
+            let state = app.state.lock().unwrap();
+            app.devices_out(&state).into_iter().find(|d| d["id"] == "runner").unwrap()
+        };
+
+        app.set_device_name("runner", "  Build box ").unwrap();
+        assert_eq!((row(app)["name"].as_str(), row(app)["machine_name"].as_str()), (Some("Build box"), Some("MacBook Air")));
+        assert_eq!(app.device("runner").unwrap().name, "Build box");
+        assert!(app.set_device_name("runner", &"x".repeat(MAX_DEVICE_NAME_CHARS + 1)).is_err());
+        assert!(app.set_device_name("nobody", "Box").is_err());
+
+        app.save_state_now();
+        let reloaded = App::load(Config { home: scratch.1.clone(), port: 0 }).unwrap();
+        assert_eq!(reloaded.device("runner").unwrap().name, "Build box");
+
+        // The machine's own name, like a blank one, takes the name the account gave back.
+        app.set_device_name("runner", "MacBook Air").unwrap();
+        assert!(app.state.lock().unwrap().device_names.is_empty());
+        app.set_device_name("runner", "Build box").unwrap();
+        app.set_device_name("runner", " ").unwrap();
+        assert_eq!(row(app)["name"], "MacBook Air");
+        app.save_state_now();
+        let reloaded = App::load(Config { home: scratch.1.clone(), port: 0 }).unwrap();
+        assert!(reloaded.state.lock().unwrap().device_names.is_empty());
     }
 
     #[test]

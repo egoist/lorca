@@ -298,7 +298,7 @@ pub fn set_auto(app: &Arc<App>, on: bool) -> Result<Value, String> {
 
 /// Why a Device's CLI does not update itself.
 fn not_self_updating(app: &App) -> String {
-    let name = app.local_device().map(|d| d.name).unwrap_or_else(|| "This Device".into());
+    let name = app.this_device_id().and_then(|id| app.device(&id)).map(|d| d.name).unwrap_or_else(|| "This Device".into());
     format!("Lorca on {name} updates with the app that installed it.")
 }
 

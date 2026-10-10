@@ -48,7 +48,10 @@ export interface RelayProblem {
 export interface Device {
   /// The machine signing public key, base64url.
   id: string;
+  /// What the Device shows as: the name the account gave it, else the one its machine goes by.
   name: string;
+  /// The name the machine goes by, which a name the account gives the Device stands in for.
+  machine_name?: string;
   model: string;
   os: string;
   os_version: string;

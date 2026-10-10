@@ -1120,10 +1120,6 @@ class Engine {
 
   // MARK: - This phone
 
-  async renameDevice(name: string) {
-    await core.request("device.rename", { name });
-  }
-
   /// Joins the identity the pairing string names. The core posts the request (`pair.posted`
   /// marks that) and waits for the other Device to accept; `signal` aborts the wait in the core too,
   /// which answers "Pairing cancelled".
@@ -1144,6 +1140,12 @@ class Engine {
     onProgress?.({ phase: "done" });
     core.wake();
     void registerForPushes();
+  }
+
+  /// Names a Device, this phone or another, on every paired Device; blank takes back the name its
+  /// machine goes by.
+  async setDeviceName(id: string, name: string) {
+    await core.request("device.set_name", { id, name });
   }
 
   /// Unpairs another Device. The core has the relay drop its key; the Device wipes its copy

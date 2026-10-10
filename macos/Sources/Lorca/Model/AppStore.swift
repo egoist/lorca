@@ -2401,6 +2401,28 @@ final class AppStore {
         return try await client.request("device.service_status", ["id": id], as: Wire.ServiceStatus.self)
     }
 
+    /// Names a Device on every paired Device; blank takes back the name its machine goes by. The
+    /// name shows at once and goes back if the CLI refuses it.
+    func setDeviceName(_ name: String, for id: Device.ID) async throws {
+        guard let index = devices.firstIndex(where: { $0.id == id }) else { return }
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let before = devices[index]
+        if before.machineName.isEmpty { devices[index].machineName = before.name }
+        devices[index].name = name.isEmpty ? devices[index].machineName : name
+        guard devices[index].name != before.name else { return }
+        emit(.rosterChanged)
+        if isMock { return }
+        do {
+            _ = try await client.request("device.set_name", ["id": id, "name": name])
+        } catch {
+            if let index = devices.firstIndex(where: { $0.id == id }) {
+                devices[index] = before
+                emit(.rosterChanged)
+            }
+            throw error
+        }
+    }
+
     func unpairDevice(_ id: Device.ID) async throws {
         if !isMock {
             _ = try await client.request("device.unpair", ["id": id])

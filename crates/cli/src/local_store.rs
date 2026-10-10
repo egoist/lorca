@@ -114,6 +114,10 @@ impl LocalStore {
                  id       TEXT PRIMARY KEY NOT NULL,
                  position INTEGER NOT NULL
              );
+             CREATE TABLE IF NOT EXISTS device_names (
+                 id   TEXT PRIMARY KEY NOT NULL,
+                 name TEXT NOT NULL
+             );
              CREATE TABLE IF NOT EXISTS device_seen (
                  id      TEXT PRIMARY KEY NOT NULL,
                  seen_at INTEGER NOT NULL
@@ -232,6 +236,7 @@ impl LocalStore {
             workflows: load_json_table(&connection, "workflow_setups")?,
             auto_review,
             shared_links: load_json_table(&connection, "shared_links")?,
+            device_names: load_device_names(&connection)?,
             last_seq,
             group_deletes: load_ordered_ids(&connection, "group_deletes")?,
             blob_deletes: load_ordered_ids(&connection, "blob_deletes")?,
@@ -1211,6 +1216,7 @@ impl LocalStore {
             "group_deletes",
             "blob_deletes",
             "device_seen",
+            "device_names",
             "applied_blobs",
             "messages",
             "chat_history",
@@ -1373,6 +1379,7 @@ fn save_state_tx(tx: &Transaction<'_>, state: &State) -> anyhow::Result<()> {
     sync_ordered_ids(tx, "blob_deletes", &state.blob_deletes)?;
     sync_ordered_ids(tx, "applied_blobs", &state.applied_blob_ids)?;
     sync_device_seen(tx, &state.device_seen)?;
+    sync_device_names(tx, &state.device_names)?;
     Ok(())
 }
 
@@ -1560,6 +1567,24 @@ fn sync_device_seen(
     delete_missing_from(tx, "device_seen", existing.keys(), &retained)
 }
 
+fn sync_device_names(tx: &Transaction<'_>, names: &std::collections::BTreeMap<String, String>) -> anyhow::Result<()> {
+    let existing: std::collections::HashMap<String, String> = {
+        let mut statement = tx.prepare("SELECT id, name FROM device_names")?;
+        let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    for (id, name) in names {
+        if existing.get(id) != Some(name) {
+            tx.execute(
+                "INSERT INTO device_names (id, name) VALUES (?1, ?2)
+                 ON CONFLICT(id) DO UPDATE SET name = excluded.name",
+                params![id, name],
+            )?;
+        }
+    }
+    delete_missing_from(tx, "device_names", existing.keys(), &names.keys().cloned().collect())
+}
+
 fn delete_missing_from<'a>(
     tx: &Transaction<'_>,
     table: &str,
@@ -1611,6 +1636,12 @@ fn load_device_turns(
 
 fn load_device_watching(connection: &Connection) -> anyhow::Result<std::collections::HashMap<String, String>> {
     let mut statement = connection.prepare("SELECT id, chat_id FROM device_watching")?;
+    let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+}
+
+fn load_device_names(connection: &Connection) -> anyhow::Result<std::collections::BTreeMap<String, String>> {
+    let mut statement = connection.prepare("SELECT id, name FROM device_names")?;
     let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
     rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
 }

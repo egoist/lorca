@@ -680,7 +680,7 @@ pub async fn unpair_device(app: &Arc<App>, id: &str) -> Result<(), String> {
         Err(error) if error.is_unknown_machine() => {}
         Err(error) => return Err(error.to_string()),
     }
-    {
+    let named = {
         let mut state = app.state.lock().unwrap();
         state.devices.retain(|d| d.id != id);
         state.device_seen.remove(id);
@@ -688,8 +688,13 @@ pub async fn unpair_device(app: &Arc<App>, id: &str) -> Result<(), String> {
         state.turns_online.remove(id);
         state.listed_machines.remove(id);
         state.unknown_machines.remove(id);
-    }
+        state.device_names.remove(id).is_some()
+    };
     app.save_state();
+    // The name the account gave it goes with it, from every Device's roster.
+    if named {
+        app.push_roster();
+    }
     app.emit(app.roster_summary());
     app.set_device_turns(id, Vec::new());
     app.turns_changed();
@@ -927,6 +932,7 @@ fn apply_roster(app: &Arc<App>, mut roster: RosterBlob) {
         state.routines = roster.routines;
         state.auto_review = roster.auto_review;
         state.shared_links = roster.shared_links;
+        state.device_names = roster.device_names;
         state.sections = roster.sections;
         let incoming_ids: Vec<String> = roster.chats.iter().map(|c| c.id.clone()).collect();
         removed = state.chats.iter().filter(|c| !incoming_ids.contains(&c.meta.id)).map(|c| c.meta.id.clone()).collect();

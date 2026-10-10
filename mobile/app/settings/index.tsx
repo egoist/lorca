@@ -147,9 +147,13 @@ export default function SettingsScreen() {
     a.id === thisId ? -1 : b.id === thisId ? 1 : Number(!!a.unknown) - Number(!!b.unknown) || a.name.localeCompare(b.name),
   );
 
+  // Blank takes back the name the phone itself goes by.
   function commitName() {
-    if (thisDevice && name.trim() && name.trim() !== thisDevice.name)
-      void engine.renameDevice(name);
+    if (!thisDevice) return;
+    const trimmed = name.trim();
+    if (!trimmed) setName(thisDevice.machine_name ?? thisDevice.name);
+    if (trimmed === thisDevice.name) return;
+    engine.setDeviceName(thisDevice.id, trimmed).catch((error: unknown) => alert(t("Couldn't rename it"), error instanceof Error ? error.message : String(error)));
   }
 
   function addRule() {
@@ -246,6 +250,7 @@ export default function SettingsScreen() {
           <FieldRow
             label={t("Name")}
             value={name}
+            placeholder={thisDevice?.machine_name ?? thisDevice?.name}
             onChangeText={setName}
             onBlur={commitName}
             onSubmitEditing={commitName}

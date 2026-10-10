@@ -78,6 +78,7 @@ type WireDeviceUpdate struct {
 type WireDevice struct {
 	ID           string             `json:"id"`
 	Name         string             `json:"name"`
+	MachineName  *string            `json:"machine_name"`
 	Model        string             `json:"model"`
 	OS           string             `json:"os"`
 	OSVersion    string             `json:"os_version"`
@@ -742,6 +743,7 @@ func ToDevice(wire WireDevice) *Device {
 		LastSeen:     seconds(wire.LastSeen),
 		MachineKey:   wire.MachineKey,
 		Version:      str(wire.Version),
+		MachineName:  str(wire.MachineName),
 	}
 	switch device.OS {
 	case OSMacOS, OSLinux, OSWindows, OSIOS, OSIPadOS, OSAndroid:
