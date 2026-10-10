@@ -183,6 +183,32 @@ async fn an_empty_answer_keeps_the_card_waiting() {
     assert!(list(app).unwrap().is_empty(), "nothing is kept for a card nobody waits on");
 }
 
+/// Stop ends a card's wait: it reads Dismissed, the bot hears it was stopped rather than refused,
+/// and an answer after it keeps nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stop_ends_the_wait_and_keeps_nothing() {
+    let (scratch, bot, chat_id) = runner();
+    let app = &scratch.0;
+    let call = tool(app, &bot, &chat_id);
+    let cancel = CancellationToken::new();
+    let stop = cancel.clone();
+    let args = json!({ "use": "command", "why": "Deploy.", "secrets": [{ "name": "DEPLOY_KEY", "label": "Deploy key" }] });
+    let running = tokio::spawn(async move { call.execute("call", args, stop, Arc::new(|_| {})).await });
+    let id = loop {
+        if let Some(id) = app.pending_permissions.lock().unwrap().keys().next().cloned() {
+            break id;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+    cancel.cancel();
+    let error = running.await.unwrap().unwrap_err();
+    assert_eq!(error.0, "Stopped before the user answered, so Deploy key was not saved.");
+    assert!(matches!(&app.message(&chat_id, &id).unwrap().body, Body::Permission { decision, .. } if decision == "dismissed"));
+    let late = crate::api::dispatch(app, "chats.permission", json!({ "chat_id": chat_id, "message_id": id, "decision": "allow", "values": { "DEPLOY_KEY": "late-value" } })).await;
+    assert_eq!(late.unwrap_err(), "This request is no longer waiting for an answer.");
+    assert!(list(app).unwrap().is_empty());
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_plugin_setting_goes_to_the_plugins_own_secrets() {
     let (scratch, bot, chat_id) = runner();

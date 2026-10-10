@@ -651,6 +651,8 @@ impl Tool for RequestSecret {
                 };
                 Ok(ToolResult::text(format!("The user saved {names}. {how}")).with_details(json!({ "summary": format!("Saved {labels}") })))
             }
+            // Stop ends the wait too: the user stopped the turn, they did not refuse.
+            Decision::Denied if cancel.is_cancelled() => Err(ToolError(format!("Stopped before the user answered, so {labels} was not saved."))),
             Decision::Denied => Err(ToolError(format!("The user did not give {labels} now. Do not ask again unless they bring it up."))),
             Decision::Expired => Err("Nobody answered the secret request in time. Say what you needed and stop.".into()),
             Decision::Dismissed => Ok(mcp::dismissed_call(format!("The user sent a new message instead of answering, so {labels} was not saved. Follow that message."))),
