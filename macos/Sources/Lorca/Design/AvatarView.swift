@@ -20,6 +20,8 @@ final class AvatarView: NSView {
         case image(NSImage)
         case you
         case system
+        /// Someone outside Lorca, by the first letter of their name.
+        case contact(String)
     }
 
     var content: Content = .system {
@@ -155,6 +157,14 @@ final class AvatarView: NSView {
             NSColor.quaternaryLabelColor.setFill()
             path.fill()
             renderSymbol("gearshape.fill", in: box, color: .white, scale: 0.48)
+
+        case let .contact(name):
+            NSGradient(starting: NSColor.systemGray.blended(withFraction: 0.25, of: .white) ?? .systemGray, ending: .systemGray)?.draw(in: path, angle: -90)
+            let initial = name.trimmingCharacters(in: .whitespaces).first.map { String($0).uppercased() } ?? "?"
+            let font = NSFont.systemFont(ofSize: box.width * 0.46, weight: .semibold)
+            let text = NSAttributedString(string: initial, attributes: [.font: font, .foregroundColor: NSColor.white])
+            let size = text.size()
+            text.draw(at: NSPoint(x: box.midX - size.width / 2, y: box.midY - size.height / 2))
         }
     }
 
@@ -174,6 +184,7 @@ final class AvatarView: NSView {
         switch author {
         case .you: .you
         case .system: .system
+        case let .contact(name): .contact(name)
         case let .bot(id):
             store.bot(id).map { content(for: $0, store: store) } ?? .system
         }

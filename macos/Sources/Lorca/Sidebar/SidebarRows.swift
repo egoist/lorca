@@ -192,6 +192,7 @@ extension SettingsPane {
         case .bots: L("Bots")
         case .providers: L("Providers")
         case .plugins: L("Plugins")
+        case .secrets: L("Secrets")
         case .device: L("Devices")
         }
     }
@@ -205,6 +206,7 @@ extension SettingsPane {
         case .bots: "person.2"
         case .providers: "key"
         case .plugins: "puzzlepiece.extension"
+        case .secrets: "lock"
         case .device: "desktopcomputer"
         }
     }

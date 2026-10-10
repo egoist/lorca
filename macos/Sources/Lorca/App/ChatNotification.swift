@@ -16,12 +16,27 @@ struct ChatNotification: Equatable {
         messageID = message.id
         switch message.body {
         // An access request is the bot's to explain in its reply, which notifies on its own.
+        case let .permission(request) where request.isPending && request.isSecret:
+            kind = .permission
+            body = L("Asks for %@", request.summary)
         case let .permission(request) where request.isPending && !request.isAccess:
             kind = .permission
             body = L("Confirmation needed: %@", request.summary)
         case let .tool(tool) where tool.run?.state == .asking:
             kind = .permission
             body = L("Confirmation needed: %@", "$ \(tool.run?.firstLine ?? "")")
+        case let .tool(tool) where tool.agent?.state == .asking:
+            guard let agent = tool.agent, let question = agent.question else { return nil }
+            kind = .permission
+            switch question.kind {
+            case .start: body = L("Confirmation needed: %@", L("Start %@", agent.name))
+            case .command:
+                let line = question.command?.split(separator: "\n").first.map(String.init) ?? ""
+                body = L("Confirmation needed: %@", "\(agent.name): $ \(line)")
+            case .choices, .text:
+                let line = question.text.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.last { !$0.isEmpty } ?? ""
+                body = "\(L("%@ asks", agent.name)): \(line)"
+            }
         case let .text(text):
             switch message.state {
             case let .failed(error):

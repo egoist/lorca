@@ -53,9 +53,17 @@ func TestSidebarSectionsFoldMoveMuteAndHide(t *testing.T) {
 		pr := prefs.get()
 		return rowNames(sidebarRows(store.Chats, store.Sections, pr.ShowsHiddenChats, pr.CollapsesOtherChats))
 	}
-	want := []string{"chat-relay", "[Product]", "chat-nova", "chat-launch", "[Engineering]", "chat-patch", "chat-ember", "[Chats]"}
-	if got := rows(); !slices.Equal(got[:len(want)], want) {
-		t.Fatalf("rows %q, want %q first", got, want)
+	// The demo's activity sets the order within a group; the groups and their chats are fixed.
+	got := rows()
+	product, engineering, chats := slices.Index(got, "[Product]"), slices.Index(got, "[Engineering]"), slices.Index(got, "[Chats]")
+	if got[0] != "chat-relay" || product != 1 || engineering != 4 || chats != 7 {
+		t.Fatalf("rows %q: want the pinned chat, then Product, Engineering, and Chats with two chats in each section", got)
+	}
+	if section := got[2:4]; !slices.Contains(section, "chat-nova") || !slices.Contains(section, "chat-launch") {
+		t.Fatalf("Product holds %q", section)
+	}
+	if section := got[5:7]; !slices.Contains(section, "chat-patch") || !slices.Contains(section, "chat-ember") {
+		t.Fatalf("Engineering holds %q", section)
 	}
 	if !tt.HasText("Product") || !tt.HasText(Lc("Chats", "no section")) {
 		t.Fatalf("no headers: %q", tt.Texts())

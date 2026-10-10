@@ -11,6 +11,7 @@ import { deviceIsOnline, useStore } from "../../src/core/store";
 import { workflow } from "../../src/core/workflows";
 import { t, tc, useLanguage } from "../../src/i18n";
 import { alert } from "../../src/ui/alert";
+import { listenSummary, serviceName } from "../../src/ui/channels";
 import { FieldRow, Row, Section, type MenuChoice } from "../../src/ui/forms";
 import { scheduleText } from "../../src/ui/format";
 import { usePaneWidth } from "../../src/ui/layout";
@@ -223,10 +224,18 @@ export default function WorkflowScreen() {
                 )}
               </Section>
             )}
-            {progress.routines.length > 0 && (
+            {(progress.routines.length > 0 || (progress.channels ?? []).length > 0) && (
               <Section title={t("Schedule")}>
                 {progress.routines.map((routine) => (
                   <Row key={routine.id} title={routine.name} subtitle={scheduleText(routine.schedule_text)} detail={routine.is_enabled ? t("On") : t("Off")} />
+                ))}
+                {(progress.channels ?? []).map((channel) => (
+                  <Row
+                    key={channel.id}
+                    title={channel.name}
+                    subtitle={`${serviceName(channel.service_id)} · ${listenSummary(channel.listen)}`}
+                    detail={channel.channel && channel.channel.state !== "paused" ? t("On") : t("Off")}
+                  />
                 ))}
                 {step?.kind === "decide" && <Row title={t("Turn On Schedule")} action disabled={busy} onPress={turnOn} />}
                 {step?.kind === "decide" && chatId && <Row title={t("Not Now")} action disabled={busy} onPress={() => router.dismissTo(`/chat/${chatId}`)} />}

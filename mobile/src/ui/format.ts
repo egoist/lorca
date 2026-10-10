@@ -5,6 +5,7 @@ import type { Body, Bot, Chat, Message, Routine } from "../core/model";
 import { attachmentSummary, isSentMessage } from "../core/model";
 import type { StoreState } from "../core/store";
 import { language, t } from "../i18n";
+import { draftTitle } from "./drafts";
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const WEEKDAYS_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -175,6 +176,9 @@ export function preview(chat: Chat, bots: Map<string, Bot>): string {
             : t("{who} wants to use {plugin}", { who, plugin });
       break;
     }
+    case "draft":
+      body = draftTitle(shown.body.draft, shown.author.kind === "bot" ? (bots.get(shown.author.bot_id)?.name ?? t("A bot")) : t("A bot"));
+      break;
   }
   const flattened = body.replace(/\n/g, " ").replace(/\*\*/g, "").replace(/`/g, "").trim();
   if (chat.kind === "group" && shown.author.kind === "bot" && shown.body.kind === "text") {

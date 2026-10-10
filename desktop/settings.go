@@ -29,6 +29,7 @@ type settingsPageState struct {
 
 	mcp     settingsMcpState
 	service settingsServiceState
+	secrets settingsSecretsState
 }
 
 const (
@@ -108,6 +109,10 @@ func (m *mainWindow) settingsPage(c *ui.Context, pane model.SettingsPane) {
 		// So does the Devices pane for the Runner's service.
 		m.settings.service.asked = ""
 	}
+	if pane != model.PaneSecrets {
+		// And the Secrets pane for the Runner's secrets.
+		m.settings.secrets.deviceID = ""
+	}
 	switch pane {
 	case model.PaneGeneral:
 		s.general(c)
@@ -119,6 +124,8 @@ func (m *mainWindow) settingsPage(c *ui.Context, pane model.SettingsPane) {
 		s.sharedLinks(c)
 	case model.PanePlugins:
 		s.plugins(c, m)
+	case model.PaneSecrets:
+		s.secrets(c, m)
 	case model.PaneBots:
 		s.bots(c, m)
 	case model.PaneDevice:

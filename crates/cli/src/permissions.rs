@@ -57,6 +57,10 @@ pub struct BotPermissions {
     pub filesystem: FilesystemAccess,
     #[serde(default = "enabled")]
     pub shell: bool,
+    /// Whether an email or Slack message the bot writes in a chat waits as a draft card for the
+    /// user to send ([`crate::drafts`]). Off, the bot calls the service's tool itself.
+    #[serde(default = "enabled")]
+    pub drafts: bool,
 }
 
 fn enabled() -> bool {
@@ -65,8 +69,13 @@ fn enabled() -> bool {
 
 impl Default for BotPermissions {
     fn default() -> Self {
-        Self { connections: None, filesystem: FilesystemAccess::Write, shell: true }
+        Self { connections: None, filesystem: FilesystemAccess::Write, shell: true, drafts: true }
     }
+}
+
+/// Whether `bot` drafts messages for the user to send: on unless its Access turns it off.
+pub fn drafts_messages(bot: &Bot) -> bool {
+    bot.permissions.as_ref().is_none_or(|permissions| permissions.drafts)
 }
 
 impl BotPermissions {
@@ -90,7 +99,7 @@ impl BotPermissions {
     }
 
     fn local_denial(&self, tool: &str) -> Option<String> {
-        if matches!(tool, "bash" | "bash_input" | "bash_output") && !self.shell {
+        if matches!(tool, "bash" | "bash_input" | "bash_output" | "coding_agent") && !self.shell {
             return Some("shell commands are off for this bot".into());
         }
         if matches!(tool, "read" | "grep" | "find" | "ls") && self.filesystem == FilesystemAccess::None {
@@ -253,7 +262,7 @@ pub fn refuse(app: &Arc<App>, chat_id: &str, bot: &Bot, denied: AccessDenied) ->
             }
             None => {
                 let what = match denied.tool.as_str() {
-                    "bash" | "bash_input" | "bash_output" => "Shell commands",
+                    "bash" | "bash_input" | "bash_output" | "coding_agent" => "Shell commands",
                     "write" | "edit" => "Changing files",
                     _ => "Reading files",
                 };
@@ -275,6 +284,7 @@ pub fn refuse(app: &Arc<App>, chat_id: &str, bot: &Bot, denied: AccessDenied) ->
                 rule: None,
                 code: None,
                 link: None,
+                secret: None,
             },
         );
         app.upsert_message(message, true);

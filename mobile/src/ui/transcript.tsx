@@ -14,18 +14,20 @@ import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSequence, with
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import { ShimmerView } from "../../modules/lorca-core/ShimmerView";
-import { canBeQuoted, isLive, isSentMessage, showsCard, type Author, type Body, type Bot, type Chat, type CommandRun, type Message } from "../core/model";
+import { agentIsOpen, agentIsRunning, agentName, agentPlace, agentStarted, canBeQuoted, isLive, isSentMessage, showsCard, showsSpeakers, type AgentRun, type Author, type Body, type Bot, type Chat, type CommandRun, type Message } from "../core/model";
 import { engine } from "../core/engine";
 import { useStore } from "../core/store";
-import { language, t, useLanguage } from "../i18n";
+import { language, t, tc, useLanguage } from "../i18n";
 import { AttachmentBlock } from "./attachments";
-import { BotAvatar } from "./Avatar";
+import { BotAvatar, ContactAvatar } from "./Avatar";
 import { daySeparator, firstLine, workingActivity } from "./format";
 import { Markdown } from "./Markdown";
 import { Symbol } from "./Symbol";
 import { usePaneWidth } from "./layout";
-import { Font, usePalette } from "./theme";
+import { accentColor, Font, usePalette } from "./theme";
 import { alert } from "./alert";
+import { draftStateWord, draftTitle, fileSize, sendable, type DraftBody } from "./drafts";
+import { secretCaption, secretTitle } from "./secrets";
 
 export const SEPARATOR_GAP_SECS = 15 * 60;
 const AVATAR = 28;
@@ -44,6 +46,8 @@ export type Row =
   | { key: string; type: "notice"; text: string; groupStart: boolean }
   | { key: string; type: "permission"; message: Message; body: Extract<Body, { kind: "permission" }>; bot: Bot | undefined; groupStart: boolean }
   | { key: string; type: "command"; message: Message; run: CommandRun; bot: Bot | undefined; groupStart: boolean }
+  | { key: string; type: "agent"; message: Message; agent: AgentRun; bot: Bot | undefined; groupStart: boolean }
+  | { key: string; type: "draft"; message: Message; body: DraftBody; bot: Bot | undefined; groupStart: boolean }
   | { key: string; type: "working"; bots: Bot[] }
   | { key: string; type: "status"; text: string };
 
@@ -52,7 +56,7 @@ export function buildRows(chat: Chat, bots: Map<string, Bot>, workingBotIds: str
   const rows: Row[] = [];
   let previous: Message | null = null;
   let previousAuthorKey: string | null = null;
-  const shown = chat.messages.filter((m) => m.body.kind !== "tool" || showsCard(m.body) || isSentMessage(m.body));
+  const shown = chat.messages.filter((m) => m.body.kind !== "tool" || !!m.body.agent || showsCard(m.body) || isSentMessage(m.body));
   for (let i = 0; i < shown.length; i++) {
     const message = shown[i];
     const separated = !previous || message.created_at - previous.created_at >= SEPARATOR_GAP_SECS;
@@ -60,12 +64,12 @@ export function buildRows(chat: Chat, bots: Map<string, Bot>, workingBotIds: str
       rows.push({ key: `day-${message.id}`, type: "day", at: message.created_at });
       previousAuthorKey = null;
     }
-    const authorKey = message.author.kind === "bot" ? `bot:${message.author.bot_id}` : message.author.kind;
+    const authorKey = keyOf(message.author);
     const groupStart = separated || authorKey !== previousAuthorKey;
     switch (message.body.kind) {
       case "text": {
         const next = shown[i + 1];
-        const nextKey = next ? (next.author.kind === "bot" ? `bot:${next.author.bot_id}` : next.author.kind) : null;
+        const nextKey = next ? keyOf(next.author) : null;
         const nextSeparated = next ? next.created_at - message.created_at >= SEPARATOR_GAP_SECS : true;
         const groupEnd = nextSeparated || nextKey !== authorKey || next?.body.kind !== "text";
         rows.push({
@@ -74,13 +78,16 @@ export function buildRows(chat: Chat, bots: Map<string, Bot>, workingBotIds: str
           message,
           groupStart,
           groupEnd,
-          showsName: chat.kind === "group" && message.author.kind === "bot" && groupStart,
+          showsName: showsSpeakers(chat) && (message.author.kind === "bot" || message.author.kind === "contact") && groupStart,
         });
         previousAuthorKey = authorKey;
         break;
       }
       case "tool":
-        if (message.body.run) {
+        if (message.body.agent) {
+          const bot = message.author.kind === "bot" ? bots.get(message.author.bot_id) : undefined;
+          rows.push({ key: message.id, type: "agent", message, agent: message.body.agent, bot, groupStart });
+        } else if (message.body.run) {
           const bot = message.author.kind === "bot" ? bots.get(message.author.bot_id) : undefined;
           rows.push({ key: message.id, type: "command", message, run: message.body.run, bot, groupStart });
         } else {
@@ -108,6 +115,10 @@ export function buildRows(chat: Chat, bots: Map<string, Bot>, workingBotIds: str
         break;
       case "permission":
         rows.push({ key: message.id, type: "permission", message, body: message.body, bot: message.author.kind === "bot" ? bots.get(message.author.bot_id) : undefined, groupStart });
+        previousAuthorKey = null;
+        break;
+      case "draft":
+        rows.push({ key: message.id, type: "draft", message, body: message.body, bot: message.author.kind === "bot" ? bots.get(message.author.bot_id) : undefined, groupStart });
         previousAuthorKey = null;
         break;
     }
@@ -165,7 +176,15 @@ const REPLY_SWIPE = 56;
 export function quoteAuthorName(author: Author, bots: Map<string, Bot>): string {
   if (author.kind === "you") return t("You");
   if (author.kind === "bot") return bots.get(author.bot_id)?.name ?? t("Bot");
+  if (author.kind === "contact") return author.name;
   return "Lorca";
+}
+
+/// Who a run of bubbles belongs to: the user, one bot, or one person outside Lorca.
+function keyOf(author: Author): string {
+  if (author.kind === "bot") return `bot:${author.bot_id}`;
+  if (author.kind === "contact") return `contact:${author.name}`;
+  return author.kind;
 }
 
 /// How far from the screen's left edge a drag stays the system's back gesture.
@@ -250,6 +269,7 @@ export const MessageRow = memo(function MessageRow({
   const pulsing = useAnimatedStyle(() => ({ opacity: pulse.value }));
   const isYou = message.author.kind === "you";
   const bot = message.author.kind === "bot" ? bots.get(message.author.bot_id) : undefined;
+  const contact = message.author.kind === "contact" ? message.author.name : undefined;
   const text = message.body.kind === "text" ? message.body.text : "";
   const attachments = message.body.kind === "text" ? (message.body.attachments ?? []) : [];
   const failed = message.state.kind === "failed";
@@ -267,11 +287,15 @@ export const MessageRow = memo(function MessageRow({
     </Animated.View>
     <Animated.View style={swipe.follow}>
     <View style={[styles.messageRow, { paddingTop: groupStart ? 14 : 3 }, isYou ? styles.messageRowYou : styles.messageRowBot]}>
-      {showsAvatar && <View style={{ width: AVATAR + GUTTER, alignSelf: "flex-end" }}>{groupEnd && <BotAvatar bot={bot} size={AVATAR} />}</View>}
+      {showsAvatar && (
+        <View style={{ width: AVATAR + GUTTER, alignSelf: "flex-end" }}>
+          {groupEnd && (contact !== undefined ? <ContactAvatar name={contact} size={AVATAR} /> : <BotAvatar bot={bot} size={AVATAR} />)}
+        </View>
+      )}
       <View style={[styles.bubbleColumn, { maxWidth: columnWidth }, isYou && styles.bubbleColumnYou]}>
         {showsName && (
           <Text style={[styles.author, { color: p.secondaryLabel }]} numberOfLines={1}>
-            {bot?.name ?? t("Bot")}
+            {contact ?? bot?.name ?? t("Bot")}
           </Text>
         )}
         {quote && (
@@ -382,7 +406,63 @@ export const NoticeRow = memo(function NoticeRow({ row }: { row: Extract<Row, { 
 /// call; an Always allow keeps its rule. A bot's Access refusing a call asks for more access: Edit
 /// Access… opens the bot's Access, and Dismiss puts the request away; neither runs the call. In a
 /// group the card sits in the bubbles' column, the bot's avatar beside its bottom edge.
-export const PermissionRow = memo(function PermissionRow({ row, isGroup, onDecide }: { row: Extract<Row, { type: "permission" }>; isGroup: boolean; onDecide: (message: Message, decision: "allow" | "always" | "deny") => void }) {
+export const PermissionRow = memo(function PermissionRow({ row, isGroup, onDecide, onFill }: { row: Extract<Row, { type: "permission" }>; isGroup: boolean; onDecide: (message: Message, decision: "allow" | "always" | "deny") => void; onFill: (message: Message) => void }) {
+  if (row.body.tool === "secret" && row.body.secret) return <SecretRow row={row} isGroup={isGroup} onDecide={onDecide} onFill={onFill} />;
+  return <AskRow row={row} isGroup={isGroup} onDecide={onDecide} />;
+});
+
+/// A bot asking for a secret, as the Mac's card: who asks and where it goes, why, Fill In, which
+/// opens `SecretSheet` with a field for each value, and Not now, then that the value stays on the
+/// Runner and the bot never sees it. Once answered, the answer and what was asked for: "Saved · npm
+/// token". In a group the card sits in the bubbles' column, the bot's avatar beside its bottom edge.
+function SecretRow({ row, isGroup, onDecide, onFill }: { row: Extract<Row, { type: "permission" }>; isGroup: boolean; onDecide: (message: Message, decision: "allow" | "always" | "deny") => void; onFill: (message: Message) => void }) {
+  useLanguage();
+  const p = usePalette();
+  const runner = useStore((s) => s.devices.find((d) => d.id === row.bot?.runner_id)?.name) ?? t("its Runner");
+  const showsAvatar = isGroup && row.message.author.kind === "bot";
+  const body = row.body;
+  const pending = body.decision === "pending";
+  const who = row.bot?.name ?? t("The bot");
+  const title = secretTitle(body, who);
+  const caption = secretCaption(body);
+  return (
+    <View style={[styles.messageRow, { paddingTop: row.groupStart ? 14 : 6 }]}>
+      {showsAvatar && (
+        <View style={{ width: AVATAR + GUTTER, alignSelf: "flex-end" }}>
+          <BotAvatar bot={row.bot} size={AVATAR} />
+        </View>
+      )}
+      <View style={[styles.permission, { backgroundColor: p.cell, borderColor: p.separator }]}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <Symbol name="key" size={16} color={pending ? p.tint : p.secondaryLabel} />
+          <Text style={[styles.permissionTitle, { color: p.label }]} numberOfLines={2}>
+            {title}
+          </Text>
+        </View>
+        {caption ? (
+          <Text style={[pending ? styles.reasonText : styles.caption, { color: p.secondaryLabel }]} numberOfLines={4}>
+            {caption}
+          </Text>
+        ) : null}
+        {pending ? (
+          <>
+            <View style={{ flexDirection: "row", gap: 8, marginTop: 4 }}>
+              <Pressable onPress={() => onFill(row.message)} style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill }]} accessibilityRole="button">
+                <Text style={{ color: p.tint, fontSize: 13, fontWeight: "600" }}>{t("Fill In")}</Text>
+              </Pressable>
+              <Pressable onPress={() => onDecide(row.message, "deny")} style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill }]} accessibilityRole="button">
+                <Text style={{ color: p.label, fontSize: 13, fontWeight: "600" }}>{t("Not now")}</Text>
+              </Pressable>
+            </View>
+            <Text style={[styles.ruleNote, { color: p.secondaryLabel }]}>{t("Saved on {runner}. {who} never sees it.", { runner, who })}</Text>
+          </>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+const AskRow = memo(function AskRow({ row, isGroup, onDecide }: { row: Extract<Row, { type: "permission" }>; isGroup: boolean; onDecide: (message: Message, decision: "allow" | "always" | "deny") => void }) {
   useLanguage();
   const p = usePalette();
   const [copied, setCopied] = useState(false);
@@ -515,6 +595,115 @@ export const PermissionRow = memo(function PermissionRow({ row, isGroup, onDecid
   );
 });
 
+/// An email or Slack message a bot wrote, as a card: who drafted it and the account it goes out
+/// from, To and Cc, the subject, the start of the text, and the attachments; while it waits, Send,
+/// Always Send on a Slack card (which also has the bot send its next messages directly), and
+/// Discard. A tap on the card opens the draft to edit, as Mail's compose sheet. Once sent or
+/// discarded, how it ended on the title's line. In a group the card sits in the bubbles' column,
+/// the bot's avatar beside its bottom edge.
+export const DraftRow = memo(function DraftRow({ row, isGroup }: { row: Extract<Row, { type: "draft" }>; isGroup: boolean }) {
+  useLanguage();
+  const p = usePalette();
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const showsAvatar = isGroup && row.message.author.kind === "bot";
+  const card = row.body;
+  const draft = card.draft;
+  const pending = card.state === "pending";
+  const state = draftStateWord(card.state);
+  const title = draftTitle(draft, row.bot?.name ?? t("The bot"));
+  const open = () => router.push({ pathname: "/draft/[id]", params: { id: row.message.id, chat: row.message.chat_id } });
+  const act = async (failure: string, request: () => Promise<unknown>) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await request();
+    } catch (error) {
+      alert(failure, error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const send = (always: boolean) => act(t("Couldn't send this draft"), () => engine.sendDraft(row.message.chat_id, row.message.id, draft, always));
+  const header = (label: string, values?: string[]) =>
+    values && values.length > 0 ? (
+      <Text style={[styles.draftHeader, { color: p.secondaryLabel }]} numberOfLines={1}>
+        {label} <Text style={{ color: p.label }}>{values.join(", ")}</Text>
+      </Text>
+    ) : null;
+  const buttons: [string, () => void, boolean][] = [
+    [t("Send"), () => void send(false), true],
+    ...(card.direct ? [[t("Always Send"), () => void send(true), true] as [string, () => void, boolean]] : []),
+    [t("Discard"), () => void act(t("Couldn't discard this draft"), () => engine.discardDraft(row.message.chat_id, row.message.id)), false],
+  ];
+  return (
+    <View style={[styles.messageRow, { paddingTop: row.groupStart ? 14 : 6 }]}>
+      {showsAvatar && (
+        <View style={{ width: AVATAR + GUTTER, alignSelf: "flex-end" }}>
+          <BotAvatar bot={row.bot} size={AVATAR} />
+        </View>
+      )}
+      <Pressable
+        onPress={open}
+        accessibilityRole="button"
+        accessibilityHint={pending ? t("Opens the draft to edit") : undefined}
+        style={({ pressed }) => [styles.permission, { backgroundColor: pressed ? p.fill : p.cell, borderColor: p.separator }]}
+      >
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <Symbol name={draft.kind === "email" ? "envelope" : "bubble.left"} size={16} color={p.tint} />
+          <Text style={[styles.permissionTitle, { color: p.label, flex: 1 }]} numberOfLines={2}>
+            {title}
+          </Text>
+          {state ? (
+            <Text style={[styles.caption, { color: card.state === "failed" ? p.red : card.state === "uncertain" ? accentColor("orange", p.dark) : p.secondaryLabel }]}>{state}</Text>
+          ) : null}
+        </View>
+        <Text style={[styles.caption, { color: p.secondaryLabel, marginTop: -4 }]} numberOfLines={1}>
+          {card.account}
+        </Text>
+        <View style={{ gap: 2 }}>
+          {header(t("To"), draft.to)}
+          {header(t("Cc"), draft.cc)}
+          {header(t("Bcc"), draft.bcc)}
+        </View>
+        {draft.subject ? (
+          <Text style={[styles.draftSubject, { color: p.label }]} numberOfLines={2}>
+            {draft.subject}
+          </Text>
+        ) : null}
+        <Text style={[styles.reasonText, { color: p.label }]} numberOfLines={8}>
+          {draft.body}
+        </Text>
+        {(draft.attachments ?? []).map((file, index) => (
+          <View key={`${file.name}-${index}`} style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+            <Symbol name="paperclip" size={13} color={p.secondaryLabel} />
+            <Text style={[styles.reasonText, { color: p.label, flexShrink: 1 }]} numberOfLines={1}>
+              {file.name}
+            </Text>
+            {file.size > 0 ? <Text style={[styles.caption, { color: p.secondaryLabel }]}>{fileSize(file.size)}</Text> : null}
+          </View>
+        ))}
+        {card.note ? <Text style={[styles.ruleNote, { color: card.state === "failed" ? p.red : accentColor("orange", p.dark) }]}>{card.note}</Text> : null}
+        {pending ? (
+          <View style={{ flexDirection: "row", gap: 8, marginTop: 4 }}>
+            {buttons.map(([label, onPress, tinted]) => (
+              <Pressable
+                key={label}
+                onPress={onPress}
+                disabled={busy || (tinted && !sendable(draft))}
+                style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill, opacity: busy ? 0.5 : 1 }]}
+              >
+                <Text style={{ color: tinted ? p.tint : p.label, fontSize: 13, fontWeight: "600" }}>{label}</Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
+        {pending && card.direct ? <Text style={[styles.ruleNote, { color: p.secondaryLabel }]}>{t("Always Send also sends this bot's next Slack messages directly.")}</Text> : null}
+      </Pressable>
+    </View>
+  );
+});
+
 /// A command's card, while the command needs the user (`showsCard`). While Auto-review asks to run
 /// it: who wants to, the command on one line in a code block that opens the whole command on tap,
 /// why, the answers, and the rule Always allow adds. Once the bot handed the running command over:
@@ -630,6 +819,215 @@ export const CommandRow = memo(function CommandRow({
   );
 });
 
+/// How a coding agent stands, in a word or two.
+export function agentStatus(agent: AgentRun): string {
+  switch (agent.state) {
+    case "checking":
+    case "starting":
+      return tc("Starting", "coding agent");
+    case "asking":
+      return tc("Needs you", "coding agent");
+    case "working":
+      return agent.stalled ? tc("Quiet", "coding agent") : tc("Working", "coding agent");
+    case "idle":
+      return tc("Done", "coding agent");
+    case "exited":
+      return tc("Ended", "coding agent");
+    case "failed":
+      return tc("Failed", "coding agent");
+    case "denied":
+      return tc("Not allowed", "coding agent");
+    case "expired":
+      return tc("No answer", "coding agent");
+    case "dismissed":
+      return tc("Dismissed", "coding agent");
+    default:
+      return tc("Stopped", "coding agent");
+  }
+}
+
+/// "Chef wants to start Claude Code on Workbench", "Claude Code wants to run a command", "Claude
+/// Code asks", or the agent's name.
+export function agentTitle(agent: AgentRun, who: string): string {
+  const name = agentName(agent);
+  switch (agent.question?.kind) {
+    case "start":
+      return agent.device ? t("{who} wants to start {agent} on {device}", { who, agent: name, device: agent.device }) : t("{who} wants to start {agent}", { who, agent: name });
+    case "command":
+      return t("{agent} wants to run a command", { agent: name });
+    case "choices":
+    case "text":
+      return t("{agent} asks", { agent: name });
+    default:
+      return name;
+  }
+}
+
+/// The line under the task: how it stands and where it works, or how it ended.
+export function agentDetail(agent: AgentRun): string {
+  if (agent.question) return "";
+  let parts = [agentStatus(agent)];
+  if (agent.state === "failed" && agent.outcome) parts = [t("Failed: {outcome}", { outcome: agent.outcome })];
+  const place = agentPlace(agent);
+  if (place && agent.state !== "denied") parts.push(place);
+  const host = agent.host === "herdr" ? "Herdr" : agent.host === "luvus" ? "Luvus" : "";
+  if (host && agentIsOpen(agent)) parts.push(t("in {host}", { host }));
+  return parts.join(" · ");
+}
+
+/// A coding agent's card, on the row of the call that started it, from Auto-review's question to
+/// how it ended: the agent's name with Stop while it runs, what it was asked, how it stands and
+/// where it works, and while it works its last lines. When it asks: Allow once, Always allow, and
+/// Deny before it starts or runs a command; a button per choice its pane offers; or Answer, which
+/// opens the answer sheet. A tap on what it works on opens its transcript.
+export const AgentRow = memo(function AgentRow({
+  row,
+  isGroup,
+  onDecide,
+  onChoose,
+  onAnswer,
+  onStop,
+}: {
+  row: Extract<Row, { type: "agent" }>;
+  isGroup: boolean;
+  onDecide: (message: Message, decision: "allow" | "always" | "deny") => void;
+  onChoose: (message: Message, choice: number) => Promise<void>;
+  onAnswer: (message: Message) => void;
+  onStop: (message: Message) => Promise<void>;
+}) {
+  useLanguage();
+  const p = usePalette();
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const { agent } = row;
+  const question = agent.question;
+  const showsAvatar = isGroup && row.message.author.kind === "bot";
+  const who = row.bot?.name ?? t("The bot");
+  const name = agentName(agent);
+  // A new question clears what the last answer or Stop said.
+  useEffect(() => setError(null), [question, agent.state]);
+  const run = async (work: () => Promise<void>) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await work();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const detail = agentDetail(agent);
+  const output = !question && (agent.state === "starting" || agent.state === "working") ? (agent.output ?? "").split("\n").filter(Boolean).join("\n") : "";
+  const decisions: [string, "allow" | "always" | "deny"][] = question?.rule
+    ? [[t("Allow once"), "allow"], [t("Always allow"), "always"], [t("Deny"), "deny"]]
+    : [[t("Allow once"), "allow"], [t("Deny"), "deny"]];
+  const openTranscript = () => {
+    const place = agentPlace(agent);
+    router.push({ pathname: "/agent/[id]", params: { id: row.message.id, chat: row.message.chat_id, title: place ? `${name} · ${place}` : name } });
+  };
+  const body = (
+    <>
+      {agent.task ? (
+        <Text style={[styles.agentTask, { color: p.label }]} numberOfLines={2}>
+          {agent.task}
+        </Text>
+      ) : null}
+      {detail ? (
+        <Text style={[styles.agentDetail, { color: p.secondaryLabel }]} numberOfLines={1}>
+          {detail}
+        </Text>
+      ) : null}
+      {output ? <OutputBlock text={output} /> : null}
+    </>
+  );
+  return (
+    <View style={[styles.messageRow, { paddingTop: row.groupStart ? 14 : 6 }]}>
+      {showsAvatar && (
+        <View style={{ width: AVATAR + GUTTER, alignSelf: "flex-end" }}>
+          <BotAvatar bot={row.bot} size={AVATAR} />
+        </View>
+      )}
+      <View style={[styles.permission, { backgroundColor: p.cell, borderColor: p.separator }]}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <Symbol name="chevron.left.forwardslash.chevron.right" size={15} color={p.tint} />
+          <Text style={[styles.permissionTitle, { color: p.label, flex: 1 }]} numberOfLines={2}>
+            {agentTitle(agent, who)}
+          </Text>
+          {agentIsRunning(agent) ? (
+            <Pressable
+              disabled={busy}
+              onPress={() => void run(() => onStop(row.message))}
+              hitSlop={6}
+              style={({ pressed }) => [styles.headerButton, { backgroundColor: pressed ? p.separator : p.fill, opacity: busy ? 0.5 : 1 }]}
+              accessibilityRole="button"
+            >
+              <Text style={{ color: p.label, fontSize: 13, fontWeight: "600" }}>{t("Stop")}</Text>
+            </Pressable>
+          ) : null}
+        </View>
+        {agentStarted(agent) ? (
+          <Pressable onPress={openTranscript} style={({ pressed }) => ({ opacity: pressed ? 0.6 : 1 })} accessibilityRole="button" accessibilityHint={t("Show the transcript")}>
+            {body}
+          </Pressable>
+        ) : (
+          body
+        )}
+        {question?.kind === "command" && question.command ? (
+          <Pressable
+            onPress={() => router.push({ pathname: "/command/[id]", params: { id: row.message.id, chat: row.message.chat_id, title: t("{who}'s command", { who: name }) } })}
+            style={({ pressed }) => [styles.command, { backgroundColor: p.code, opacity: pressed ? 0.6 : 1 }]}
+            accessibilityRole="button"
+            accessibilityLabel={t("Show the full command")}
+          >
+            <Text style={[styles.commandText, { color: p.label }]} numberOfLines={1}>
+              {`$ ${firstLine(question.command)}`}
+            </Text>
+          </Pressable>
+        ) : null}
+        {(question?.kind === "choices" || question?.kind === "text") && question.text ? <OutputBlock text={question.text} /> : null}
+        {question && (question.kind === "start" || question.kind === "command") && question.reason ? <Text style={[styles.reasonText, { color: p.secondaryLabel }]}>{question.reason}</Text> : null}
+        {error ? <Text style={[styles.reasonText, { color: p.red }]}>{error}</Text> : null}
+        {question && (question.kind === "start" || question.kind === "command") ? (
+          <View style={{ flexDirection: "row", gap: 8, marginTop: 4 }}>
+            {decisions.map(([label, decision]) => (
+              <Pressable key={decision} onPress={() => onDecide(row.message, decision)} style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill }]}>
+                <Text style={{ color: decision === "deny" ? p.label : p.tint, fontSize: 13, fontWeight: "600" }}>{label}</Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
+        {question?.kind === "choices" ? (
+          <View style={{ gap: 6, marginTop: 4 }}>
+            {(question.choices ?? []).map((choice, index) => (
+              <Pressable
+                key={`${index}-${choice}`}
+                disabled={busy}
+                onPress={() => void run(() => onChoose(row.message, index))}
+                style={({ pressed }) => [styles.choiceButton, { backgroundColor: pressed ? p.separator : p.fill, opacity: busy ? 0.5 : 1 }]}
+                accessibilityRole="button"
+              >
+                <Text style={{ color: p.tint, fontSize: 14, fontWeight: "600" }} numberOfLines={2}>
+                  {choice}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
+        {question?.kind === "text" ? (
+          <View style={{ flexDirection: "row", marginTop: 4 }}>
+            <Pressable onPress={() => onAnswer(row.message)} style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill }]} accessibilityRole="button">
+              <Text style={{ color: p.tint, fontSize: 13, fontWeight: "600" }}>{t("Answer")}</Text>
+            </Pressable>
+          </View>
+        ) : null}
+        {question && (question.kind === "start" || question.kind === "command") && question.rule ? <Text style={[styles.ruleNote, { color: p.secondaryLabel }]}>{t("Always allow adds the rule “{rule}”.", { rule: question.rule })}</Text> : null}
+      </View>
+    </View>
+  );
+});
+
 /// A running command's last lines: a code block like the command's that grows to six lines and
 /// then scrolls, the newest line in view. An edge with more lines past it fades out: Android
 /// draws that itself, iOS gets a gradient in the block's color.
@@ -736,6 +1134,11 @@ const styles = StyleSheet.create({
   permission: { flex: 1, borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12, paddingVertical: 10, gap: 6, maxWidth: 420 },
   permissionTitle: { fontSize: 14, fontWeight: "600", flexShrink: 1 },
   permissionButton: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8 },
+  choiceButton: { paddingHorizontal: 12, paddingVertical: 9, borderRadius: 8 },
+  agentTask: { fontSize: 14, lineHeight: 19, marginTop: 6 },
+  agentDetail: { fontSize: 12, marginTop: 3 },
+  draftHeader: { fontSize: 13, lineHeight: 18 },
+  draftSubject: { fontSize: 14, fontWeight: "600", lineHeight: 19 },
   headerButton: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 7 },
   command: { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7, marginTop: 2 },
   commandText: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 12.5, lineHeight: 17 },

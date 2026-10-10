@@ -39,11 +39,27 @@ func notificationFor(message *model.Message) *chatNotification {
 	body := message.Body
 	switch {
 	// An access request is the bot's to explain in its reply, which notifies on its own.
+	case body.Kind == model.BodyPermission && body.Request.IsPending() && body.Request.IsSecret():
+		base.kind, base.body = notifyPermission, L("Asks for %@", body.Request.Summary)
+		return &base
 	case body.Kind == model.BodyPermission && body.Request.IsPending() && !body.Request.IsAccess():
 		base.kind, base.body = notifyPermission, L("Confirmation needed: %@", body.Request.Summary)
 		return &base
 	case body.Kind == model.BodyTool && body.Tool.Run != nil && body.Tool.Run.State == model.CommandAsking:
 		base.kind, base.body = notifyPermission, L("Confirmation needed: %@", "$ "+model.FirstLine(body.Tool.Run.Command))
+		return &base
+	case body.Kind == model.BodyTool && body.Tool.Agent != nil && body.Tool.Agent.State == model.AgentAsking && body.Tool.Agent.Question != nil:
+		agent := body.Tool.Agent
+		base.kind = notifyPermission
+		switch q := agent.Question; q.Kind {
+		case "start":
+			base.body = L("Confirmation needed: %@", L("Start %@", agent.Name()))
+		case "command":
+			base.body = L("Confirmation needed: %@", agent.Name()+": $ "+model.FirstLine(q.Command))
+		default:
+			lines := strings.Split(strings.TrimSpace(q.Text), "\n")
+			base.body = L("%@ asks", agent.Name()) + ": " + strings.TrimSpace(lines[len(lines)-1])
+		}
 		return &base
 	case body.Kind == model.BodyText:
 		if message.State.Kind == model.StateFailed {
@@ -186,7 +202,8 @@ func allowsNotification(notification *chatNotification) bool {
 func asks(message *model.Message) bool {
 	body := message.Body
 	return body.Kind == model.BodyPermission && body.Request.IsPending() ||
-		body.Kind == model.BodyTool && body.Tool.Run != nil && body.Tool.Run.State == model.CommandAsking
+		body.Kind == model.BodyTool && body.Tool.Run != nil && body.Tool.Run.State == model.CommandAsking ||
+		body.Kind == model.BodyTool && body.Tool.Agent != nil && body.Tool.Agent.State == model.AgentAsking
 }
 
 func (n *notifier) rememberPermissions() {
@@ -277,7 +294,7 @@ func (n *notifier) post(notification *chatNotification, chatID string) {
 		title = bot.Name
 	}
 	subtitle := ""
-	if !chat.IsDM() {
+	if !chat.IsBotDM() {
 		subtitle = store.Title(chat)
 	}
 	body := strings.Join(strings.FieldsFunc(notification.body, func(r rune) bool { return r == '\n' || r == '\r' }), " ")

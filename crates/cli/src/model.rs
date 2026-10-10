@@ -47,6 +47,9 @@ pub struct Device {
     /// Plugins installed on that Runner, with their setup state. Secrets stay on the Runner.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugins: Vec<PluginStatus>,
+    /// The channels this Runner's bots listen on, with their state. Tokens stay on the Runner.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channels: Vec<crate::channels::ChannelStatus>,
     /// The `lorca` this Device runs, as `lorca --version` says it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub version: String,
@@ -234,6 +237,9 @@ pub enum Author {
     You,
     Bot { bot_id: String },
     System,
+    /// Someone outside Lorca writing in a channel's conversation (a Telegram group, a Slack
+    /// thread). Their words are data for the bot, never the user's instructions or approval.
+    Contact { name: String },
 }
 
 /// A file sent with a message. Its bytes travel as a `file` blob whose id is this id,
@@ -301,6 +307,10 @@ pub enum Body {
         /// `bash` row has one; the apps show it in place of the row.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         run: Option<CommandRun>,
+        /// The card of the coding agent a `coding_agent` call started, for as long as the agent
+        /// runs and after: the apps show it in place of the row.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent: Option<AgentRun>,
     },
     Handoff {
         from: String,
@@ -341,7 +351,83 @@ pub enum Body {
         link: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         code: Option<String>,
+        /// A secret request (`tool` = `secret`): the values the bot asks for and where they go.
+        /// The answer never comes back into the card: it is sealed to the bot's Runner.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        secret: Option<SecretAsk>,
     },
+    /// An email or Slack message the bot wrote in the chat, waiting for the user to send it: the
+    /// chat's view of its review item (`review-status-<review id>`), rewritten as it changes.
+    Draft {
+        review_id: String,
+        /// The item's version, which an edit, Send, and Discard name.
+        version: u64,
+        /// The item's state: `pending`, `approved`, `executing`, `succeeded`, `failed`,
+        /// `rejected`, `cancelled`, or `uncertain`.
+        state: String,
+        plugin_id: String,
+        /// The account it goes out from: "Gmail · Work".
+        account: String,
+        draft: MessageDraft,
+        /// Why it was not sent, or why it needs another look.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+        /// Whether, with drafts off, the bot sends such a message itself: false for a mail
+        /// server that only makes drafts, which keeps them in the account's Drafts.
+        #[serde(default)]
+        direct: bool,
+    },
+}
+
+/// A message a bot wrote to people, as its draft card shows and edits it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct MessageDraft {
+    /// `email` or `slack`.
+    #[serde(default)]
+    pub kind: String,
+    /// Email addresses, or the Slack channel or person's id.
+    #[serde(default)]
+    pub to: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cc: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bcc: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub subject: String,
+    #[serde(default)]
+    pub body: String,
+    /// The files it carries, by name; an edit keeps the ones it still names.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<DraftAttachment>,
+    /// What it answers: the email's id, or the Slack thread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct DraftAttachment {
+    pub name: String,
+    #[serde(default)]
+    pub size: u64,
+}
+
+/// What a secret request asks for: one or more named values, and where the Runner uses them.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct SecretAsk {
+    /// `browser` (typed into a sign-in page of `site` in the bot's Browser), `command` (an
+    /// environment variable of the bot's commands), or `plugin` (a setting of the card's plugin).
+    #[serde(rename = "use")]
+    pub target: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site: Option<String>,
+    pub fields: Vec<SecretField>,
+}
+
+/// One value a secret request asks for: the name the bot uses it by, and what the card calls it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct SecretField {
+    pub name: String,
+    pub label: String,
 }
 
 /// A message quoted by the user's reply: who wrote it and how it opens, kept with the reply, so
@@ -386,6 +472,95 @@ impl ReplyTo {
         }
         Some(ReplyTo { message_id: message.id.clone(), author: message.author.clone(), text: line })
     }
+}
+
+/// A coding agent (Claude Code or Codex) a bot runs on its Runner, as the card on the
+/// `coding_agent` row that started it shows it (`crate::coding`): Auto-review's question before
+/// it starts, what it works on and where, how it stands, its last lines, and what it asks.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct AgentRun {
+    /// The bot's handle for it, across turns: `agent-3f9a2c1d`.
+    pub id: String,
+    /// `claude` (Claude Code) or `codex`.
+    pub kind: String,
+    /// `herdr` or `luvus` when it runs in a pane of that terminal host on the Runner, where the
+    /// user can watch it and type into it; none when Lorca runs it on its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// What it was asked: the prompt's first line.
+    pub task: String,
+    /// Where it works, from the home folder: the worktree Lorca made for it, or a folder that
+    /// is not a repository.
+    #[serde(default)]
+    pub folder: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// `checking` (Auto-review is judging the start), `asking` (a `question` waits for the
+    /// user), `starting`, `working`, `idle` (done with what it was asked; it takes a follow-up).
+    /// Once it ended: `exited`, `failed`, `stopped`, `denied` (not allowed to start), `expired`
+    /// (nobody answered in time), or `dismissed` (the user wrote instead of answering).
+    pub state: String,
+    /// It is working, and has shown nothing new for a while.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stalled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question: Option<AgentQuestion>,
+    /// Its last lines, as its transcript shows them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
+    /// How it ended, in words: "Stopped", "Claude Code exited".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
+    /// The pull request it opened, when its transcript names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_request: Option<String>,
+    /// The Runner it runs on, by name: "Workbench".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    /// When it started, in Unix seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<f64>,
+}
+
+impl AgentRun {
+    /// It has not ended: it may still ask, work, or take a follow-up.
+    pub fn is_open(&self) -> bool {
+        matches!(self.state.as_str(), "checking" | "asking" | "starting" | "working" | "idle")
+    }
+}
+
+/// What a coding agent's card asks the user.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct AgentQuestion {
+    /// `start`: Auto-review asks before the agent starts. `command`: the agent wants to run
+    /// `command`. `choices`: its screen asks, with a menu of `choices`. `text`: its screen asks
+    /// for an answer to type. The first two are answered with `chats.permission`, the others
+    /// with `coding.answer`.
+    pub kind: String,
+    /// The question, as the agent's screen shows it (`choices`, `text`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub choices: Vec<String>,
+    /// Why Auto-review asked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The plain-language rule Always allow adds, which Auto-review proposed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<String>,
+}
+
+/// One line about what a coding agent's card asks, for a notification: "Claude Code: $ git push".
+pub fn agent_question_summary(agent: &AgentRun, question: &AgentQuestion) -> String {
+    let name = if agent.kind == "codex" { "Codex" } else { "Claude Code" };
+    let what = match question.kind.as_str() {
+        "start" => format!("start in {}", agent.folder),
+        "command" => format!("$ {}", question.command.as_deref().unwrap_or("").lines().next().unwrap_or("").trim()),
+        _ => question.text.lines().map(str::trim).filter(|line| !line.is_empty()).next_back().unwrap_or("").to_string(),
+    };
+    format!("{name}: {}", what.chars().take(180).collect::<String>())
 }
 
 /// A `bash` call as its card shows it: Auto-review checking it, the question it asks, the
@@ -494,6 +669,24 @@ pub struct Message {
     /// own notification policy, shared by the Runner and the apps.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notification: Option<crate::attention::Notification>,
+    /// The message's id on the channel a conversation mirrors: a Telegram message id or a
+    /// Slack `ts`. Set on a contact's message and on what the bot sent there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
+    /// The browser recording the user sent a bot with this message. The steps and screenshots
+    /// stay encrypted on the Runner that recorded them; that Runner shows them to the bot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recording: Option<RecordingRef>,
+}
+
+/// A recording of what the user did in one of a bot's browser profiles.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RecordingRef {
+    pub id: String,
+    pub bot_id: String,
+    /// The profile's name.
+    pub profile: String,
+    pub steps: usize,
 }
 
 /// How much of a tool call's detail the apps get: enough for the "Messaged ◉ X" marker.
@@ -542,6 +735,8 @@ impl Message {
             promoted_at: None,
             queued: false,
             output: None,
+            external_id: None,
+            recording: None,
         }
     }
 
@@ -573,6 +768,7 @@ impl Message {
                 let line = run.command.lines().next().unwrap_or("").trim();
                 Some(format!("$ {}", line.chars().take(180).collect::<String>()))
             }
+            Body::Tool { agent: Some(agent), .. } if agent.state == "asking" => agent.question.as_ref().map(|question| crate::model::agent_question_summary(agent, question)),
             _ => None,
         }
     }
@@ -608,6 +804,26 @@ pub struct ChatMeta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mute: Option<Mute>,
     pub created_at: f64,
+    /// A conversation a channel opened: a direct chat with its bot that mirrors one thread on
+    /// Telegram or Slack, named by `title`. The bot's own DM has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<ChatChannel>,
+}
+
+/// Where a channel's conversation happens outside Lorca.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChatChannel {
+    /// The channel (its event subscription) that opened the conversation.
+    pub channel_id: String,
+    /// `telegram` or `slack`.
+    pub service: String,
+    /// The plugin instance of the account the bot speaks through.
+    pub account_id: String,
+    /// The chat on the service: a Telegram chat id, a Slack channel id.
+    pub chat_id: String,
+    /// A Telegram forum topic or a Slack thread's `ts`, when the conversation is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
 }
 
 /// A chat's notifications are off until `until` (unix seconds), or until unmuted without one.
@@ -745,6 +961,13 @@ pub struct Routine {
     /// skips it. `last_run_at` and `last_outcome` count the runs, not the checks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check: Option<String>,
+    /// The pull request the routine watches, when it is a watch: the Runner reads it at each due
+    /// time, runs the bot when it changed, and ends the routine once it merges or closes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_request: Option<crate::routine_triggers::PullRequestWatch>,
+    /// The Calendar account whose events place the runs of a schedule around events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendar: Option<crate::routine_triggers::CalendarTrigger>,
     pub created_at: f64,
 }
 
@@ -770,7 +993,14 @@ impl Routine {
         if !self.is_enabled {
             return None;
         }
-        let next = crate::schedule::parse(&self.schedule).ok()?.next_after(since.max(self.anchor()), &self.timezone)?;
+        let schedule = crate::schedule::parse(&self.schedule).ok()?;
+        match &schedule {
+            // A one-time routine is due at its time until a run at or after it, by schedule or by hand.
+            crate::schedule::Schedule::Once(_) => return schedule.once_instant(&self.timezone).filter(|at| !crate::routine_triggers::once_taken(self, *at)),
+            crate::schedule::Schedule::Events(offset) => return crate::routine_triggers::next_event_run(self, *offset).map(|(due, _)| due),
+            _ => {}
+        }
+        let next = schedule.next_after(since.max(self.anchor()), &self.timezone)?;
         // After a failure that backs off, no sooner than the retry.
         let retry = self.health.as_ref().and_then(|health| health.retry_at()).unwrap_or(0.0);
         Some(next.max(retry as i64))
@@ -831,7 +1061,7 @@ impl ChatBlob {
         match self {
             // A command's card shows in the transcript, so like a message it keeps the place it
             // first took in the log however often it changes.
-            ChatBlob::Upsert { message } if matches!(message.body, Body::Tool { run: None, .. }) => crate::app::Slot::latest(relay_name(&message.id)),
+            ChatBlob::Upsert { message } if matches!(message.body, Body::Tool { run: None, agent: None, .. }) => crate::app::Slot::latest(relay_name(&message.id)),
             ChatBlob::Upsert { message } => crate::app::Slot::first_and_latest(relay_name(&message.id)),
             ChatBlob::Remove { message_id, .. } => crate::app::Slot::latest(relay_name(message_id)),
             ChatBlob::ClearUnread { chat_id } => crate::app::Slot::latest(relay_name(&format!("read-{chat_id}"))),
@@ -890,8 +1120,8 @@ pub struct Job {
     pub task_context: Option<crate::tasks::Task>,
     /// `turn` for a user message in a DM, `room_turn` for one member's turn in a group,
     /// `message` for a teammate's message_bot, `routine` for a run of a routine, `command` for
-    /// a command the bot left running that ended, `event` for a service event an event
-    /// subscription's inbox admitted.
+    /// a command the bot left running that ended, `agent` for what a coding agent the bot runs
+    /// did, `event` for a service event an event subscription's inbox admitted.
     pub kind: String,
     pub trigger_message_id: String,
     /// A durable delegated request or the continuation that reads its report.
@@ -1207,6 +1437,7 @@ mod app_view_tests {
             name: "read".into(), summary: "Read a file".into(), detail: "x".repeat(5000), is_running: false,
             call_id: "call".into(), arguments: serde_json::json!({ "path": "big" }), result: Some("y".repeat(100_000)), is_error: false, description: None, target_bot_id: None, script_command: None,
             run: None,
+            agent: None,
         });
         let Body::Tool { detail, arguments, result, summary, .. } = tool.for_app().body else { panic!() };
         assert_eq!((detail.len(), arguments.is_null(), result, summary.as_str()), (400, true, None, "Read a file"));
@@ -1216,7 +1447,7 @@ mod app_view_tests {
     fn permission_cards_drop_the_reviewed_payload() {
         let permission = Message::new("c", Author::Bot { bot_id: "b".into() }, Body::Permission {
             plugin_id: "computer".into(), plugin_name: "Mac".into(), tool: "bash".into(), summary: "Run a command".into(),
-            arguments: serde_json::json!({ "command": "secret" }), decision: "pending".into(), reason: None, rule: None, command: None, link: None, code: None,
+            arguments: serde_json::json!({ "command": "secret" }), decision: "pending".into(), reason: None, rule: None, command: None, link: None, code: None, secret: None,
         });
         let app = permission.for_app();
         let Body::Permission { arguments, summary, command, .. } = &app.body else { panic!() };

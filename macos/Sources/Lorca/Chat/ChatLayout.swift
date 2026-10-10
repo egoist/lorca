@@ -329,7 +329,9 @@ final class ChatLayout {
         let width = min(PermissionCellView.width, tableWidth - indent - ChatMetrics.horizontalInset)
         var entry = entry(for: message)
         if let card = entry.card, card.width == width { return card.height }
-        let height = PermissionCellView.height(for: request, rowWidth: tableWidth, indent: indent)
+        let height = request.isSecret
+            ? SecretCellView.height(for: request, rowWidth: tableWidth, indent: indent)
+            : PermissionCellView.height(for: request, rowWidth: tableWidth, indent: indent)
         entry.card = (width, height)
         cache[message.id] = entry
         return height
@@ -341,6 +343,17 @@ final class ChatLayout {
         var entry = entry(for: message)
         if let card = entry.card, card.width == width { return card.height }
         let height = CommandCellView.height(for: run, rowWidth: tableWidth, indent: indent)
+        entry.card = (width, height)
+        cache[message.id] = entry
+        return height
+    }
+
+    /// A coding agent's card, for the `coding_agent` row that started it.
+    private func agentHeight(for message: Message, agent: AgentRun, tableWidth: CGFloat, indent: CGFloat) -> CGFloat {
+        let width = min(AgentCellView.width, tableWidth - indent - ChatMetrics.horizontalInset)
+        var entry = entry(for: message)
+        if let card = entry.card, card.width == width { return card.height }
+        let height = AgentCellView.height(for: agent, rowWidth: tableWidth, indent: indent)
         entry.card = (width, height)
         cache[message.id] = entry
         return height
@@ -397,8 +410,12 @@ final class ChatLayout {
                 let metrics = metrics(for: message, showsAvatar: showsAvatar, groupStart: groupStart, tableWidth: tableWidth)
                 return top + metrics.rowHeight
 
-            // Tool calls never show but as a message_bot marker or a command's card.
+            // Tool calls never show but as a message_bot marker, a command's card, or a coding
+            // agent's card.
             case let .tool(tool):
+                if let agent = tool.agent {
+                    return top + agentHeight(for: message, agent: agent, tableWidth: tableWidth, indent: indent)
+                }
                 if let run = tool.run {
                     return top + commandHeight(for: message, run: run, tableWidth: tableWidth, indent: indent)
                 }
@@ -412,6 +429,10 @@ final class ChatLayout {
 
             case let .permission(request):
                 return top + cardHeight(for: message, request: request, tableWidth: tableWidth, indent: indent)
+
+            // Its height changes as the user leaves out a file, so it is not cached.
+            case let .draft(card):
+                return top + DraftCellView.height(for: card, rowWidth: tableWidth, indent: indent)
             }
         }
     }

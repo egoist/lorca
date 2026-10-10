@@ -11,14 +11,20 @@ const menu = (state: BrowserProfile["state"], busy = false) =>
 
 test("a profile's state reads as the Mac's", () => {
   expect(["stopped", "bot", "taking_over", "human"].map((state) => profileStateWord(profile(state as BrowserProfile["state"])))).toEqual(["Closed", "Open", "Taking over…", "You have control"]);
+  expect(profileStateWord({ ...profile("human"), recording: true })).toBe("Recording");
 });
 
 test("the phone never opens a window; it takes over, hands back, and closes", () => {
-  expect(menu("stopped")).toEqual(["Open on Workbench (disabled)", "Delete…"]);
-  expect(menu("bot")).toEqual(["Take Over", "Take Screenshot", "Close Browser", "Delete…"]);
+  expect(menu("stopped")).toEqual(["Open on Workbench (disabled)", "Record on Workbench (disabled)", "Delete…"]);
+  expect(menu("bot")).toEqual(["Take Over", "Record", "Take Screenshot", "Close Browser", "Delete…"]);
   expect(menu("taking_over")).toEqual(["Close Browser", "Delete…"]);
-  expect(menu("human")).toEqual(["Return to Bot", "Take Screenshot", "Close Browser", "Delete…"]);
+  expect(menu("human")).toEqual(["Return to Bot", "Record", "Take Screenshot", "Close Browser", "Delete…"]);
   // While an action runs, Close Browser still works.
-  expect(menu("human", true)).toEqual(["Return to Bot (disabled)", "Take Screenshot (disabled)", "Close Browser", "Delete… (disabled)"]);
-  expect(profileActions(profile("bot"), "Workbench", false, false).some((action) => action.id === "screenshot")).toBe(false);
+  expect(menu("human", true)).toEqual(["Return to Bot (disabled)", "Record (disabled)", "Take Screenshot (disabled)", "Close Browser", "Delete… (disabled)"]);
+  expect(profileActions(profile("bot"), "Workbench", false, false).some((action) => action.id === "screenshot" || action.id === "record")).toBe(false);
+});
+
+test("a recording starts where the window is open, and stops from here", () => {
+  const recording = { ...profile("human"), recording: true };
+  expect(profileActions(recording, "Workbench", true, false).map((action) => action.title)).toEqual(["Stop Recording", "Take Screenshot", "Close Browser", "Delete…"]);
 });

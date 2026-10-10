@@ -69,15 +69,32 @@ pub fn send_user_message(
     if let Some(id) = message_id.filter(|id| !id.is_empty()) {
         message.id = id;
     }
+    admit_user_message(app, &chat, message, &mentions, replied_bot.as_deref())
+}
+
+/// The user's message with what they recorded in one of `bot_id`'s browser profiles, addressed
+/// to that bot: the bot reads the recording with it.
+pub fn send_recording(app: Arc<App>, chat_id: &str, bot_id: &str, text: &str, recording: RecordingRef) -> anyhow::Result<Message> {
+    let chat = app.chat(chat_id).ok_or_else(|| anyhow::anyhow!("Unknown chat"))?;
+    if !chat.meta.bot_ids.iter().any(|id| id == bot_id) {
+        anyhow::bail!("The bot isn't in this chat");
+    }
+    let mentions = if chat.meta.is_group() { vec![bot_id.to_string()] } else { Vec::new() };
+    let mut message = Message::new(chat_id, Author::You, Body::Text { text: text.trim().to_string(), attachments: Vec::new(), mentions: mentions.clone(), reply_to: None });
+    message.recording = Some(recording);
+    admit_user_message(app, &chat, message, &mentions, None)
+}
+
+fn admit_user_message(app: Arc<App>, chat: &Chat, message: Message, mentions: &[String], replied_bot: Option<&str>) -> anyhow::Result<Message> {
     app.upsert_message(message.clone(), true);
     #[cfg(feature = "runner")]
     crate::turns::hear_user_message(&app, &message);
 
     if chat.meta.is_group() {
-        let members = turn_order(&chat.meta, &app, &mentions, replied_bot.as_deref());
-        start_room(app.clone(), chat_id.to_string(), message.id.clone(), members);
+        let members = turn_order(&chat.meta, &app, mentions, replied_bot);
+        start_room(app.clone(), chat.meta.id.clone(), message.id.clone(), members);
     } else if let Some(bot) = chat.meta.bot_ids.first().and_then(|id| app.bot(id)) {
-        start_turn(&app, user_turn_job(&app, chat_id, &bot.id, &message.id));
+        start_turn(&app, user_turn_job(&app, &chat.meta.id, &bot.id, &message.id));
     }
     Ok(message)
 }
@@ -96,9 +113,13 @@ pub fn greet_new_bot(app: &Arc<App>, chat_id: &str, bot_id: &str, text: &str, se
 /// Runner currently doing that work. This is the hard Stop path; ordinary messages steer and
 /// do not call it.
 pub fn cancel_chat(app: &Arc<App>, chat_id: &str) {
-    // A command left waiting for input in this chat stops too, turn or no turn.
+    // A command left waiting for input in this chat stops too, turn or no turn, and so do the
+    // coding agents its bots run.
     #[cfg(feature = "runner")]
-    app.shell_sessions.stop_chat(chat_id);
+    {
+        app.shell_sessions.stop_chat(chat_id);
+        app.coding_agents.stop_chat(app, chat_id);
+    }
     for (job_id, runner_id) in app.cancel_chat(chat_id) {
         let Some(runner) = app.device(&runner_id).filter(|runner| !runner.box_pubkey.is_empty()) else { continue };
         match crate::crypto::seal_json(&runner.box_pubkey, &JobCancel { job_id: job_id.clone() }) {
@@ -154,6 +175,12 @@ pub fn command_job(app: &App, chat_id: &str, bot_id: &str, card_id: &str) -> Job
         setup: None,
         created_at: now_secs(),
     }
+}
+
+/// The turn in which a bot hears what a coding agent it runs did (`coding::wake`):
+/// `trigger_message_id` is the agent's card.
+pub fn agent_job(app: &App, chat_id: &str, bot_id: &str, card_id: &str) -> Job {
+    Job { kind: "agent".into(), ..command_job(app, chat_id, bot_id, card_id) }
 }
 
 /// Members in chat order, with the ones the message mentions first, then the one whose message
@@ -633,7 +660,7 @@ pub fn spawn_local_job(app: Arc<App>, job: Job, remote_blob_id: Option<String>) 
         // An event turn settles its delivery; it is not a run of the routine it targets.
         if job.kind == "event" {
             #[cfg(feature = "runner")]
-            if let Err(error) = crate::event_triggers::finished(&app, &job, outcome) {
+            if let Err(error) = crate::event_triggers::finished(&app, &job, outcome, cancel.is_cancelled() && !crate::handoffs::stopped_at_limits(&app, &job)) {
                 tracing::error!(%error, "recording the event turn outcome");
             }
         } else if let Some(id) = &job.routine_id {
@@ -698,6 +725,9 @@ async fn run_job_started(app: &Arc<App>, job: Job, cancel: CancellationToken) ->
     if let Err(error) = crate::handoffs::finish_job(app, &job, outcome, report_cancel.is_cancelled()) {
         tracing::error!(%error, job_id = %job.id, "reporting handoff outcome");
     }
+    if report_cancel.is_cancelled() {
+        crate::handoffs::stop_handed_off(app, &job);
+    }
     finish_job(app, &job.id);
     outcome
 }
@@ -758,7 +788,7 @@ mod tests {
                 section_id: None,
                 is_hidden: false,
                 mute: None,
-                created_at: 1.0,
+                created_at: 1.0, channel: None,
             },
             unread_count: 0,
             usage: None,
@@ -899,7 +929,7 @@ mod tests {
             os: "macos".into(),
             os_version: String::new(),
             box_pubkey: runner_keys.box_pubkey(),
-            plugins: Vec::new(),
+            plugins: Vec::new(), channels: Vec::new(),
             version: String::new(),
             update: None,
             updated_at: 1,
@@ -1014,7 +1044,7 @@ mod tests {
             os: "macos".into(),
             os_version: String::new(),
             box_pubkey: mac_keys.box_pubkey(),
-            plugins: Vec::new(),
+            plugins: Vec::new(), channels: Vec::new(),
             version: String::new(),
             update: None,
             updated_at: 1,
@@ -1045,7 +1075,7 @@ mod tests {
             os: "macos".into(),
             os_version: "26.0".into(),
             box_pubkey: String::new(),
-            plugins: Vec::new(),
+            plugins: Vec::new(), channels: Vec::new(),
             version: String::new(),
             update: None,
             updated_at: 1,

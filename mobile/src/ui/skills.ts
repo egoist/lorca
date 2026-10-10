@@ -38,7 +38,10 @@ export function skillScopeLine(scope: PlaybookScope, isDraft: boolean, names: { 
 /// What happened at a step of a skill's history, in a word or three.
 export function historyWord(step: PlaybookRevision, steps: PlaybookRevision[]): string {
   if (step.status === "deleted") return t("Deleted");
-  if (step.status === "draft") return step.provenance.kind === "corrections" ? t("Drafted from corrections") : t("Drafted from a chat");
+  if (step.status === "draft") {
+    if (step.provenance.kind === "corrections") return t("Drafted from corrections");
+    return step.provenance.kind === "recording" ? t("Drafted from a recording") : t("Drafted from a chat");
+  }
   if (step.provenance.kind === "edit" && step.revision > 1) return steps.some((before) => before.revision === step.revision - 1 && before.status === "draft") ? t("Saved") : t("Edited");
   return t("Created");
 }

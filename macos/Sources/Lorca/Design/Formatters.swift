@@ -65,6 +65,39 @@ enum Format {
     static func isSameDay(_ lhs: Date, _ rhs: Date) -> Bool {
         Calendar.current.isDate(lhs, inSameDayAs: rhs)
     }
+    /// A one-time routine's date and time on its own clock: "Once on Oct 12 at 9:00 AM", with
+    /// the year when it is not this one.
+    static func once(_ date: Date, in zone: TimeZone) -> String {
+        var calendar = Calendar.current
+        calendar.timeZone = zone
+        let thisYear = calendar.component(.year, from: date) == calendar.component(.year, from: Date())
+        let day = formatter(thisYear ? "MMMd" : "yMMMd")
+        let clock = formatter("jmm")
+        day.timeZone = zone
+        clock.timeZone = zone
+        return L("Once on %@ at %@", day.string(from: date), clock.string(from: date))
+    }
+
+    /// A time around calendar events: "15 minutes before each event", "When events matching
+    /// “Customer” end".
+    static func aroundEvents(minutes: Int, after: Bool, matching: String?) -> String {
+        let span: String =
+            if minutes == 60 { L("1 hour") }
+            else if minutes > 60 && minutes % 60 == 0 { L("%d hours", minutes / 60) }
+            else if minutes == 1 { L("1 minute") }
+            else { L("%d minutes", minutes) }
+        switch (matching, after, minutes) {
+        case (nil, false, 0): return L("When each event starts")
+        case (nil, true, 0): return L("When each event ends")
+        case (nil, false, _): return L("%@ before each event", span)
+        case (nil, true, _): return L("%@ after each event ends", span)
+        case (let words?, false, 0): return L("When events matching “%@” start", words)
+        case (let words?, true, 0): return L("When events matching “%@” end", words)
+        case (let words?, false, _): return L("%@ before events matching “%@”", span, words)
+        case (let words?, true, _): return L("%@ after events matching “%@” end", span, words)
+        }
+    }
+
     /// The CLI words a schedule in English ("Weekdays at 9:00 AM and 5:30 PM", "Every 2 hours",
     /// "On the 1st and 15th of every month at 9:00 AM"); in Chinese the same sentence is rebuilt
     /// from its parts, as the phone does (`scheduleText` in `mobile/src/ui/format.ts`). A

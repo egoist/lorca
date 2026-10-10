@@ -14,6 +14,8 @@ The CLI's methods, from any Device:
 
 Every app lists the chats by the same rule. The pinned chats come first. Then each section's header with its chats that are neither pinned nor hidden, newest activity first; a section with no chats still shows its header, so a chat can be put in it. Then Chats (未分组), the chats in no section or in a section since deleted, shown only while it has any. Last comes Hidden, shown only while a chat is hidden. An account without sections sees one list with no header, as before sections existed.
 
+A [channel's](channels.md) conversation, a chat of its own for each Telegram chat or Slack thread, starts in the section its bot's direct chat is in and with that chat's mute, so a bot filed and quieted once stays filed and quiet as people write to it.
+
 A section folds on every Device: its header's fold control writes `collapsed`. Chats and Hidden fold on each Device alone, and Hidden starts folded. A chat opened from the palette, a notification, or search shows its row, so its group unfolds; folding a group around the chat on screen leaves the chat open.
 
 ## Hidden chats
@@ -24,13 +26,13 @@ A section folds on every Device: its header's fold control writes `collapsed`. C
 
 `chats.mute { chat_id, muted, until? }` sets a chat's `mute`: `{ until }` in Unix seconds, or `{}` until it is unmuted. A chat is muted while its mute has no `until` or the time has not come, by each Device's clock; a mute that ran out stays in the roster and changes nothing.
 
-A muted chat alerts nowhere. The Runner sends no phone push for it, whatever the push is about: a reply, a failure, a question, a coordinator's brief (`push::should_notify`). The Mac app and the Windows and Linux app post no notification for it and leave it out of the Dock or taskbar badge. Its unread count is kept, and its row shows a crossed-out bell beside the stamp.
+A muted chat alerts nowhere. The Runner sends no phone push for it, whatever the push is about: a reply, a failure, a question (a permission card, a command's card, a [coding agent](coding-agents.md)'s card, a [secret request](secrets.md)), a coordinator's brief or urgent escalation (`push::should_notify`); the turns an event or a channel's message starts are no exception. Attention still lists what a muted chat raises, so muting quiets a chat without hiding what waits in it. The Mac app and the Windows and Linux app post no notification for it and leave it out of the Dock or taskbar badge. Its unread count is kept, and its row shows a crossed-out bell beside the stamp.
 
 ## The chat in front on a computer
 
 A desktop app tells its CLI which chat the user has in front (`ui.watching { chat_id | null }`). The Mac app names one while it is frontmost with the chat in its main window, the screen is awake and unlocked, and the user gave some input in the last five minutes; it looks again every 15 seconds while it names one, and when the screen locks or sleeps. The Windows and Linux app names one while its main window has the focus. Either names none once it disconnects.
 
-The CLI keeps the chat for itself (a reply that finishes there counts as read and clears on every Device) and, half a second after the app settles on it, puts it in its `machine` blob as `watching`, so a run through the sidebar goes up once. Every other Device keeps each computer's `watching` (SQLite `device_watching`, so a restart does not forget it). Before a Runner pushes, it checks that neither its own app nor any computer the relay lists online (`device_online`) has the chat in front (`App::is_watched_anywhere`), the same check it makes again after the three-second read grace and before each retry ([Notifications](runtime.md#notifications)). A computer the relay lists offline stops counting, whatever its last blob said.
+The CLI keeps the chat for itself (a reply that finishes there counts as read and clears on every Device) and, half a second after the app settles on it, puts it in its `machine` blob as `watching`, so a run through the sidebar goes up once. Every other Device keeps each computer's `watching` (SQLite `device_watching`, so a restart does not forget it). Before a Runner pushes, it checks that neither its own app nor any computer the relay lists online (`device_online`) has the chat in front (`App::is_watched_anywhere`), the same check it makes again after the three-second read grace and before each retry ([Notifications](notifications.md)). A computer the relay lists offline stops counting, whatever its last blob said.
 
 ## In the apps
 

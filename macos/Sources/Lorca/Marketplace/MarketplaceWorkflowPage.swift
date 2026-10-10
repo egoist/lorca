@@ -264,12 +264,21 @@ final class MarketplaceWorkflowPage: MarketplacePage {
         renderSetup(progress, locked: locked)
         renderAccounts(progress, locked: locked)
         renderSample(progress)
-        scheduleCard.isHidden = progress.routines.isEmpty
+        let channels = progress.channels ?? []
+        scheduleCard.isHidden = progress.routines.isEmpty && channels.isEmpty
         scheduleCard.setRows(progress.routines.map { routine in
             let row = StatusRow()
             row.configure(
                 symbol: routine.isEnabled ? "clock" : "pause.circle", title: routine.name, subtitle: Format.schedule(routine.scheduleText),
                 state: routine.isEnabled ? L("On") : L("Off"))
+            return row
+        } + channels.map { channel in
+            // What the workflow listens to once it is on.
+            let row = StatusRow()
+            let service = channel.serviceId == "slack" ? "Slack" : "Telegram"
+            row.configure(
+                symbol: "paperplane", image: PluginLogo.tile(for: channel.serviceId, size: 18), title: channel.name,
+                subtitle: "\(service) · \(channel.listen.toModel().summary)", state: channel.isOn ? L("On") : L("Off"))
             return row
         })
         let isSetUp = !setup.botIds.isEmpty || setup.sample != nil

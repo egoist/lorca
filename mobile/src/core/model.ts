@@ -59,6 +59,8 @@ export interface Device {
   last_seen: number;
   /// Plugins installed on that Runner, with their setup state.
   plugins?: PluginStatus[];
+  /// The channels its bots listen on.
+  channels?: ChannelStatus[];
   /// The `lorca` that Device runs, as `lorca --version` says it.
   version?: string;
   /// Only on a Runner whose CLI replaces itself (installed with lorca.app's script).
@@ -93,6 +95,8 @@ export interface BrowserProfile {
   name: string;
   state: "stopped" | "bot" | "taking_over" | "human";
   revision: number;
+  /// The user records a workflow in it for the bot to learn, with the browser in hand.
+  recording?: boolean;
 }
 
 export interface PluginStatus {
@@ -166,6 +170,8 @@ export interface BotPermissions {
   connections?: Record<string, { capabilities: string[]; tools?: string[] }>;
   filesystem?: "none" | "read" | "write";
   shell?: boolean;
+  /** Whether the bot's emails and Slack messages wait in the chat as drafts for the user to send; on unless false. */
+  drafts?: boolean;
 }
 
 /// A recurring task a bot runs on a schedule in its direct chat, as the roster carries it, with
@@ -198,6 +204,12 @@ export interface Routine {
   /** The script the Runner runs at each due time before the bot does; `next_run_at` is then the next check. */
   check?: string | null;
   created_at: number;
+  /** When a one-time routine runs; its Runner removes it after that run. */
+  once_at?: number | null;
+  /** The pull request a watch reads at each due time, until it merges or closes. */
+  pull_request?: { repo: string; number: number; title?: string; url?: string } | null;
+  /** The calendar events a routine around events runs before or after: so many minutes before they start, or after they end. */
+  calendar?: { account?: string; matching?: string | null; minutes?: number | null; after?: boolean | null; next_event?: { title?: string; start?: number; end?: number } | null } | null;
 }
 
 /// How a routine's checks and runs have gone, as its Runner records them.
@@ -212,7 +224,8 @@ export interface RoutineHealth {
   model?: { status?: string | null; authentication_failures?: number };
 }
 
-export type Author = { kind: "you" } | { kind: "bot"; bot_id: string } | { kind: "system" };
+/// `contact` is someone outside Lorca, in a channel's conversation.
+export type Author = { kind: "you" } | { kind: "bot"; bot_id: string } | { kind: "system" } | { kind: "contact"; name: string };
 
 export interface ChatSearchResults {
   chats: { chat_id: string; snippet: string }[];
@@ -272,13 +285,57 @@ export type Body =
       script_command?: string;
       /** A bash call's card, from Auto-review's question to how the command ended. */
       run?: CommandRun;
+      /** The card of the coding agent a coding_agent call started, shown from the start. */
+      agent?: AgentRun;
     }
   | { kind: "handoff"; from: string; to: string; reason: string }
   | { kind: "notice"; text: string; routine_id?: string }
   /// The bot asks before a plugin or shell action, or before installing a plugin (`tool` is `install`).
   /// `rule` is the rule Always allow adds, which Auto-review proposed for a shell command (`plugin_id` is `computer`);
   /// `command` is that command in full, where `summary` is its first line.
-  | { kind: "permission"; plugin_id: string; plugin_name: string; tool: string; summary: string; decision: "pending" | "allowed" | "always" | "denied" | "expired" | "dismissed" | "connected" | "failed"; reason?: string; rule?: string; command?: string; link?: string; code?: string };
+  | { kind: "permission"; plugin_id: string; plugin_name: string; tool: string; summary: string; decision: "pending" | "allowed" | "always" | "denied" | "expired" | "dismissed" | "connected" | "failed"; reason?: string; rule?: string; command?: string; link?: string; code?: string; secret?: SecretAsk }
+  /// An email or Slack message the bot wrote in the chat, waiting for the user to send it: the
+  /// chat's view of its review item, whose `version` Send and Discard name. `note` says why it
+  /// was not sent or needs another look; `direct` is whether, with drafts off, the bot sends such
+  /// messages itself (Slack), where Gmail only keeps drafts.
+  | { kind: "draft"; review_id: string; version: number; state: ReviewState; plugin_id: string; account: string; draft: MessageDraft; note?: string; direct?: boolean };
+
+/// The parts of a message a bot wrote, as its draft card shows and edits them.
+export interface MessageDraft {
+  /** `email` or `slack`. */
+  kind: string;
+  /** Email addresses, or the Slack channel or person. */
+  to: string[];
+  cc?: string[];
+  bcc?: string[];
+  subject?: string;
+  body: string;
+  /** The files it carries; an edit keeps the ones it still names. */
+  attachments?: { name: string; size: number }[];
+  /** What it answers: an email's id or a Slack thread. */
+  reply?: string;
+}
+
+/// What a secret request asks for (a permission card with `tool` `secret`): the values the bot
+/// names, and where its Runner uses them. The card takes the values; they go sealed to the Runner
+/// and never come back.
+export interface SecretAsk {
+  /** `browser` (typed into a sign-in page of `site` in the bot's Browser), `command` (an environment variable of its commands), or `plugin` (a setting of the card's plugin). */
+  use: "browser" | "command" | "plugin";
+  site?: string;
+  fields: { name: string; label: string }[];
+}
+
+/// A secret kept on a Runner for one of its bots, as Settings lists it: never its value.
+export interface SavedSecret {
+  id: string;
+  bot_id: string;
+  name: string;
+  label: string;
+  use: SecretAsk["use"];
+  site?: string;
+  updated_at: number;
+}
 
 /// Where a bash call's command stands: Auto-review checking it, the question it asks, the command
 /// running in its terminal, what the command asks, and that it ended. While it asks, its card takes
@@ -310,6 +367,67 @@ export interface CommandRun {
   reason?: string;
   /** The rule Always allow adds. */
   rule?: string;
+}
+
+/// A coding agent a bot runs on its Runner, Claude Code or Codex, as the card of the call that
+/// started it shows it: Auto-review's question before it starts, what it works on and where, how it
+/// stands, its last lines, and what it asks. A question about starting it or a command it wants to
+/// run is answered like a command's (`chats.permission`); one its pane asks, with a choice or text
+/// (`coding.answer`). Stop is `coding.stop`; its transcript, `coding.transcript`.
+export interface AgentRun {
+  id: string;
+  /** `claude` or `codex`. */
+  kind: string;
+  /** `herdr` or `luvus` when it runs in a pane of that terminal host on its Runner. */
+  host?: string;
+  task: string;
+  /** Where it works, from the home folder. */
+  folder?: string;
+  branch?: string;
+  state: "checking" | "asking" | "starting" | "working" | "idle" | "exited" | "failed" | "stopped" | "denied" | "expired" | "dismissed";
+  /** Working, with nothing new for a while. */
+  stalled?: boolean;
+  question?: AgentQuestion;
+  output?: string;
+  outcome?: string;
+  device?: string;
+  started_at?: number;
+}
+
+/// What a coding agent's card asks: whether it may start (`start`) or run a command (`command`),
+/// or what its pane asks, with a menu of choices (`choices`) or for text (`text`).
+export interface AgentQuestion {
+  kind: "start" | "command" | "choices" | "text";
+  text?: string;
+  command?: string;
+  choices?: string[];
+  reason?: string;
+  rule?: string;
+}
+
+/// Its product's name, which is not translated.
+export function agentName(agent: AgentRun): string {
+  return agent.kind === "codex" ? "Codex" : "Claude Code";
+}
+
+export function agentIsOpen(agent: AgentRun): boolean {
+  return ["checking", "asking", "starting", "working", "idle"].includes(agent.state);
+}
+
+/// Stop ends it: not while Auto-review decides whether it may start, and not once it is done,
+/// waiting for a follow-up.
+export function agentIsRunning(agent: AgentRun): boolean {
+  return agentIsOpen(agent) && agent.state !== "checking" && agent.state !== "idle" && agent.question?.kind !== "start";
+}
+
+/// It started, so it has a transcript to read.
+export function agentStarted(agent: AgentRun): boolean {
+  return !["checking", "denied", "expired", "dismissed"].includes(agent.state) && agent.question?.kind !== "start";
+}
+
+/// Where it works, in a word: its branch, else its folder's name.
+export function agentPlace(agent: AgentRun): string {
+  return agent.branch ?? (agent.folder ?? "").split("/").filter(Boolean).pop() ?? "";
 }
 
 export function isLive(run: CommandRun): boolean {
@@ -496,6 +614,55 @@ export interface ChatMeta {
   /// Set while the chat's alerts are off on every Device: until `until` (seconds), or until unmuted.
   mute?: { until?: number | null } | null;
   created_at: number;
+  /// A conversation a channel keeps: one Telegram chat or topic, or one Slack thread, named by
+  /// `title`. The bot's own DM has none.
+  channel?: ChatChannel | null;
+}
+
+/// Where a channel's conversation happens.
+export interface ChatChannel {
+  channel_id: string;
+  service: string;
+  account_id: string;
+  chat_id: string;
+  thread_id?: string | null;
+}
+
+/// What a channel takes.
+export interface ChannelListen {
+  every?: boolean;
+  mentions?: boolean;
+  replies?: boolean;
+  tags?: string[];
+}
+
+/// A bot listening on a Telegram or Slack account, as its Runner advertises it.
+export interface ChannelStatus {
+  id: string;
+  bot_id: string;
+  name: string;
+  /// `telegram` or `slack`.
+  service: string;
+  account_id: string;
+  chats?: { id: string; title?: string }[];
+  listen: ChannelListen;
+  task: string;
+  /// `listening`, `paused`, `held` (a message's turn didn't finish, so later ones wait), or
+  /// `offline` (the account can't be read now).
+  state: "listening" | "paused" | "held" | "offline";
+  detail?: string;
+  held_delivery?: string | null;
+}
+
+/// The one DM a bot has with the user: a direct chat that is not a channel's conversation.
+export function isBotDM(chat: ChatMeta): boolean {
+  return chat.kind === "dm" && !chat.channel;
+}
+
+/// A transcript with more than one speaker on the bots' side: a group, or a channel's
+/// conversation with the people there.
+export function showsSpeakers(chat: ChatMeta): boolean {
+  return chat.kind === "group" || !!chat.channel;
 }
 
 /// A named group of chats in the chat list. Every Device shows the same sections, in the same
@@ -956,6 +1123,8 @@ export interface ReviewItem {
   state: ReviewState;
   outcome?: { summary: string; result?: { text?: string } | null; message_id: string } | null;
   created_at: number;
+  /** An email or Slack message: its draft card in the chat is where it is decided. */
+  is_message?: boolean;
 }
 
 export type ReviewPayload =
@@ -1230,4 +1399,11 @@ export function skillScopeOf(chat: ChatMeta): PlaybookScope | undefined {
 /// What the core answers when a skill being saved changed on another Device first.
 export function isStaleSkill(error: string): boolean {
   return error.includes("changed since");
+}
+
+/// Whether two drafts say the same: an unchanged card sends without an edit.
+export function sameDraft(a: MessageDraft, b: MessageDraft): boolean {
+  const list = (values?: string[]) => (values ?? []).join("\n");
+  const files = (draft: MessageDraft) => (draft.attachments ?? []).map((file) => file.name).join("\n");
+  return list(a.to) === list(b.to) && list(a.cc) === list(b.cc) && list(a.bcc) === list(b.bcc) && (a.subject ?? "") === (b.subject ?? "") && a.body === b.body && files(a) === files(b);
 }

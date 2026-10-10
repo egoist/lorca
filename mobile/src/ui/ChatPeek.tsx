@@ -3,7 +3,7 @@
 
 import { useMemo } from "react";
 import { StyleSheet, Text, View } from "react-native";
-import type { Bot, Chat } from "../core/model";
+import { showsSpeakers, type Bot, type Chat } from "../core/model";
 import { t, useLanguage } from "../i18n";
 import { AvatarCluster } from "./Avatar";
 import { usePalette } from "./theme";
@@ -33,7 +33,7 @@ export function ChatPeek({ chat, bots, title }: { chat: Chat; bots: Map<string, 
                 case "day":
                   return <DayRow key={row.key} at={row.at} />;
                 case "message":
-                  return <MessageRow key={row.key} row={row} bots={bots} isGroup={chat.kind === "group"} />;
+                  return <MessageRow key={row.key} row={row} bots={bots} isGroup={showsSpeakers(chat)} />;
                 case "marker":
                   return <MarkerRow key={row.key} row={row} />;
                 case "notice":

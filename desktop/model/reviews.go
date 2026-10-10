@@ -148,6 +148,8 @@ type ReviewItem struct {
 	State         string              `json:"state"`
 	Outcome       *ReviewOutcome      `json:"outcome"`
 	CreatedAt     float64             `json:"created_at"`
+	// IsMessage is an email or Slack message: its draft card in the chat is where it is decided.
+	IsMessage bool `json:"is_message,omitempty"`
 }
 
 func (r ReviewItem) Pending() bool { return r.State == "pending" }
@@ -229,11 +231,11 @@ func (s *Store) Review(id string) *ReviewItem {
 }
 
 // OpenReviewsFor is what a chat's bots left for the user that waits or runs, oldest first. How
-// each ended stays in the chat.
+// each ended stays in the chat, and a message waits on its draft card there instead.
 func (s *Store) OpenReviewsFor(chatID string) []ReviewItem {
 	var out []ReviewItem
 	for _, item := range s.Reviews {
-		if item.Origin.ChatID == chatID && item.Open() {
+		if item.Origin.ChatID == chatID && item.Open() && !item.IsMessage {
 			out = append(out, item.Clone())
 		}
 	}

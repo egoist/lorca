@@ -40,17 +40,26 @@ pub async fn before_tool_call(
     }
     let command = ctx.args.get("command").and_then(Value::as_str).unwrap_or("");
     let workdir = std::fs::canonicalize(workdir).unwrap_or_else(|_| workdir.to_path_buf());
+    // A command given saved secrets is always reviewed, knowing which: it holds credentials.
+    let secrets = crate::secrets::named_in(ctx.args);
     if app.auto_review().is_enabled
+        && secrets.is_empty()
         && (read_only(command) || stays_in_lorca(command, &workdir, &lorca_folders(app), dirs::home_dir().as_deref()))
     {
         return None;
     }
     let runner_id = app.this_device_id().unwrap_or_else(|| bot.runner_id.clone());
     let runner_name = app.device(&runner_id).map(|device| device.name).unwrap_or_else(|| "this Runner".into());
-    let description = format!(
+    let mut description = format!(
         "Run this shell command as the user on {runner_name}, with full filesystem, process, credential, and network access. Working directory: {}.",
         home_relative(&workdir)
     );
+    if !secrets.is_empty() {
+        description.push_str(&format!(
+            " It runs with the user's saved secrets {} in its environment, which the user gave this bot for its commands; sending one anywhere but the service it is for leaks it.",
+            secrets.iter().map(|name| format!("${name}")).collect::<Vec<_>>().join(", ")
+        ));
+    }
     // The reviewer judges the command, not the bot's own account of what it does.
     let mut args = ctx.args.clone();
     if let Some(fields) = args.as_object_mut() {
@@ -78,7 +87,7 @@ pub async fn before_tool_call(
         let staged = crate::review_execution::stage_call(app, bot, chat_id, trigger, &ctx.tool_call.id,
             crate::review_queue::ReviewPayload::Shell { arguments: ctx.args.clone() },
             crate::review_queue::ReviewTarget { account: runner_name.clone(), resource: home_relative(&workdir) },
-            reason.as_deref()).await;
+            reason.as_deref(), ctx.cancel).await;
         let status = match staged {
             Ok(item) => format!("Staged review {} (version {}). The user can edit and approve it later; the exact call resumes on this Runner. Do not retry it now.", item.id, item.version),
             Err(error) => format!("Could not stage the action for review: {error}. Report the proposed action."),
@@ -188,6 +197,13 @@ async fn review_input(app: &Arc<App>, chat_id: &str, trigger: &Trigger, bot: &Bo
         Decision::Expired => Some(blocked("Nobody answered the permission request for bash_input in time. Say what you needed and stop.".into())),
         Decision::Dismissed => Some(dismissed("The user sent a new message instead of answering, so that input was not typed. Follow that message.")),
     }
+}
+
+/// Whether a command runs without a review while Auto-review is on: the parser proves it only
+/// reads, or it stays in Lorca's own folders, run from `workdir`. A coding agent's commands
+/// (`crate::coding`) take the same fast path as the bot's own.
+pub(crate) fn needs_no_review(app: &App, command: &str, workdir: &Path) -> bool {
+    read_only(command) || stays_in_lorca(command, workdir, &lorca_folders(app), dirs::home_dir().as_deref())
 }
 
 /// A call that does not run, with why: the model reads it, and a script it came from ends.

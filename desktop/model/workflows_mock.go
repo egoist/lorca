@@ -26,11 +26,15 @@ func demoWorkflowPacks() []WorkflowPack {
 			Description: "Select repositories and a GitHub connection, then review a summary before enabling a weekday routine.",
 			Questions:   []WorkflowQuestion{{ID: "repositories", Label: "Repositories", Placeholder: "owner/repo, owner/another-repo"}},
 			Connections: []WorkflowRequirement{{ServiceID: "github", Name: "GitHub"}}},
+		{ID: "feedback-collector", Name: "Feedback collector", SymbolName: "tray.and.arrow.down", Outcome: "Turn feedback in your Telegram group into GitHub issues, with a digest each morning.",
+			Description: "A bot listens in a Telegram community for #feedback, mentions, and replies to it, files or updates GitHub issues, thanks people in their thread, and writes you a daily digest.",
+			Questions:   []WorkflowQuestion{{ID: "repository", Label: "Repository", Placeholder: "acme/app"}},
+			Connections: []WorkflowRequirement{{ServiceID: "telegram", Name: "Telegram"}, {ServiceID: "github", Name: "GitHub"}}},
 	}
 }
 
-var demoWorkflowSpecialists = map[string]string{"meeting-preparation": "Meeting Preparer", "inbox-triage": "Inbox Triager", "repository-monitoring": "Repository Monitor"}
-var demoWorkflowRoutines = map[string]string{"meeting-preparation": "Prepare upcoming meetings", "inbox-triage": "Triage the selected inbox", "repository-monitoring": "Monitor selected repositories"}
+var demoWorkflowSpecialists = map[string]string{"meeting-preparation": "Meeting Preparer", "inbox-triage": "Inbox Triager", "repository-monitoring": "Repository Monitor", "feedback-collector": "Feedback Collector"}
+var demoWorkflowRoutines = map[string]string{"meeting-preparation": "Prepare upcoming meetings", "inbox-triage": "Triage the selected inbox", "repository-monitoring": "Monitor selected repositories", "feedback-collector": "Feedback digest"}
 
 const demoWorkflowSample = `**example/workflow-demo** has two pull requests waiting on you and one new issue.
 
@@ -162,6 +166,14 @@ func (s *Store) demoWorkflowProgress(setup *demoSetup) WorkflowProgress {
 	if setup.botID != "" {
 		progress.Setup.BotIDs["specialist"] = setup.botID
 		progress.Routines = []WorkflowRoutine{{ID: "demo-routine", Name: demoWorkflowRoutines[setup.packID], ScheduleText: "Weekdays at 9:00 AM", IsEnabled: setup.routineOn}}
+		if setup.packID == "feedback-collector" {
+			listen := ChannelListen{Mentions: true, Replies: true, Tags: []string{"feedback"}}
+			channel := WorkflowChannel{ID: "community", Name: "Community feedback", ServiceID: "telegram", Listen: listen}
+			if setup.routineOn {
+				channel.Channel = &WireChannel{ID: "demo-channel", BotID: setup.botID, Name: channel.Name, Service: "telegram", Listen: listen, State: string(ChannelListening)}
+			}
+			progress.Channels = []WorkflowChannel{channel}
+		}
 	}
 	if setup.sample != "" {
 		progress.Setup.Sample = &WorkflowSample{JobID: "demo-job", ChatID: s.DM(setup.botID), BotID: setup.botID, State: setup.sample}

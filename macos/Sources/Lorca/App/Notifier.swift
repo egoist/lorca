@@ -117,6 +117,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             switch message.body {
             case let .permission(request) where request.isPending: message.id
             case let .tool(tool) where tool.run?.state == .asking: message.id
+            case let .tool(tool) where tool.agent?.state == .asking: message.id
             default: nil
             }
         })
@@ -137,6 +138,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         switch message.body {
         case let .permission(request): asks = request.isPending
         case let .tool(tool) where tool.run != nil: asks = tool.run?.state == .asking
+        case let .tool(tool) where tool.agent != nil: asks = tool.agent?.state == .asking
         default: return
         }
         guard asks else { clearPermission(messageID); return }
@@ -192,7 +194,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
         let content = UNMutableNotificationContent()
         content.title = store.bot(notification.botID)?.name ?? store.title(for: chat)
-        if !chat.isDM { content.subtitle = store.title(for: chat) }
+        if !chat.isBotDM { content.subtitle = store.title(for: chat) }
         content.body = String(notification.body.split(whereSeparator: \.isNewline).joined(separator: " ").prefix(280))
         content.sound = .default
         content.threadIdentifier = chatID

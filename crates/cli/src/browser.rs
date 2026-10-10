@@ -9,8 +9,9 @@ use std::sync::Arc;
 
 #[cfg(feature = "runner")]
 mod runner;
+pub mod steps;
 #[cfg(feature = "runner")]
-pub use runner::{publish_image, review_call, SessionTool, Sessions};
+pub use runner::{publish_image, recording_content, review_call, SessionTool, Sessions};
 
 pub const PLUGIN_ID: &str = "playwright";
 
@@ -59,6 +60,13 @@ pub async fn serve(app: &Arc<App>, method: &str, params: &Value, remote: bool) -
             let chat_id = params["chat_id"].as_str().ok_or("missing chat_id")?;
             let message = sessions.screenshot(app, bot_id, id, chat_id).await?;
             return Ok(json!({ "message_id": message.id }));
+        }
+        // Another Device starts a recording only in a browser open on the Runner's screen.
+        "browser.record" => sessions.record(app, bot_id, id, !remote).await?,
+        "browser.stop_recording" => {
+            let chat_id = params["chat_id"].as_str().ok_or("missing chat_id")?;
+            let (session, message) = sessions.stop_recording(app, bot_id, id, chat_id, params["text"].as_str().unwrap_or_default()).await?;
+            return Ok(json!({ "session": session, "message_id": message.map(|message| message.id) }));
         }
         _ => return Err(format!("Unknown method {method}")),
     };

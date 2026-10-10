@@ -193,6 +193,7 @@ final class RootSplitViewController: NSSplitViewController {
     private func makeInspector() -> InspectorViewController {
         let controller = InspectorViewController()
         controller.onOpenDevice = { [weak self] id in self?.openDevice(id) }
+        controller.onOpenChat = { [weak self] chatID in self?.open(chatID) }
         controller.onShowMessage = { [weak self] chatID, messageID in
             self?.open(chatID)
             self?.chatController?.reveal(loading: messageID)
@@ -445,6 +446,7 @@ final class RootSplitViewController: NSSplitViewController {
             case .bots: BotsSettingsViewController()
             case .providers: ProvidersSettingsViewController()
             case .plugins: PluginsSettingsViewController()
+            case .secrets: SecretsSettingsViewController()
             case .device: AboutDeviceSettingsViewController()
             }
         if let controller = controller as? DevicePaneViewController {
@@ -667,7 +669,7 @@ final class RootSplitViewController: NSSplitViewController {
         }
         let alert = NSAlert()
         alert.messageText = L("Delete \"%@\"?", store.title(for: chat))
-        let deletesBot = chat.isDM && chat.botIDs.first.flatMap(store.bot) != nil
+        let deletesBot = chat.isBotDM && chat.botIDs.first.flatMap(store.bot) != nil
         alert.informativeText = deletesBot
             ? L("The bot, its routines, and this direct chat are removed from this Device and from paired Devices.")
             : L("The transcript is removed from this Device and from paired Devices.")
@@ -716,7 +718,7 @@ extension RootSplitViewController: NSMenuItemValidation {
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(deleteChat(_:)) {
             guard case let .chat(id) = selection, let chat = store.chat(id) else { return false }
-            menuItem.title = chat.isDM ? L("Delete Bot") : L("Delete Chat")
+            menuItem.title = chat.isBotDM ? L("Delete Bot") : L("Delete Chat")
             return true
         }
         if menuItem.action == #selector(addBotToChat(_:)) {

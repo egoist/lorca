@@ -569,4 +569,4 @@ pub fn serve(app: &Arc<App>, method: &str, params: &Value) -> Result<Value, Stri
 #[cfg(feature = "runner")]
 mod runtime;
 #[cfg(feature = "runner")]
-pub use runtime::{current, for_job, for_routine, wrap_provider, BudgetContext};
+pub use runtime::{current, for_job, for_routine, wrap_provider, BudgetContext, RuntimeHold};

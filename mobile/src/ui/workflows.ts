@@ -2,7 +2,7 @@
 // in the Mac's words and by its rules: the account a service uses, each account row's state or the
 // one thing to do about it, and the next step.
 
-import type { PluginStatus } from "../core/model";
+import type { ChannelListen, ChannelStatus, PluginStatus } from "../core/model";
 import { t } from "../i18n";
 import { pluginStateWord } from "./plugins";
 
@@ -42,6 +42,8 @@ export interface WorkflowProgress {
   /// The bot setup uses for each specialist, or none while it would add one, and the Runner's bots.
   specialists: { id: string; name: string; selected_id: string | null; choices: { id: string; name: string }[] }[];
   routines: { id: string; name: string; schedule_text: string; is_enabled: boolean }[];
+  /// What the workflow listens to once it is on, with the Runner's channel then.
+  channels?: { id: string; name: string; service_id: string; listen: ChannelListen; channel: ChannelStatus | null }[];
   sample_messages: { id: string; body: { text?: string } }[];
   is_running: boolean;
 }

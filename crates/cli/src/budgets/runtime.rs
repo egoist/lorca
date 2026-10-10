@@ -21,6 +21,26 @@ pub struct BudgetContext {
     keys: Vec<String>,
 }
 
+/// Run time that counts while it is held (`BudgetContext::hold`).
+pub struct RuntimeHold {
+    context: BudgetContext,
+    remaining: Option<Duration>,
+}
+
+impl RuntimeHold {
+    /// How long until a time limit stops the work, when one applies.
+    pub fn deadline(&self) -> Option<Duration> {
+        self.remaining
+    }
+}
+
+impl Drop for RuntimeHold {
+    /// The time counts, and a scope whose time it used up stops, as at a turn's deadline.
+    fn drop(&mut self) {
+        self.context.end_runtime(true);
+    }
+}
+
 pub fn current() -> Option<BudgetContext> {
     CURRENT.try_with(Clone::clone).ok()
 }
@@ -228,6 +248,20 @@ impl BudgetContext {
         } else {
             Ok(answer)
         }
+    }
+
+    /// Work this turn handed on that goes on past it, a coding agent's: run time in the scopes
+    /// the turn counts toward that are still kept, from now until the hold drops. Refused when a
+    /// limit is used up already.
+    pub fn hold(&self) -> Result<RuntimeHold, String> {
+        let keys = if self.keys.is_empty() {
+            Vec::new()
+        } else {
+            self.app.budgets.change(&self.app, |ledger| Ok(self.keys.iter().filter(|key| ledger.records.contains_key(*key)).cloned().collect()))?
+        };
+        let context = BudgetContext { app: self.app.clone(), keys };
+        let remaining = context.start_runtime()?;
+        Ok(RuntimeHold { context, remaining })
     }
 
     pub fn connector_call(&self) -> Result<(), String> {

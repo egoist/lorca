@@ -281,6 +281,7 @@ func (s *pluginSheet) view(c *ui.Context, sh *sheet) {
 	result := sheetFrame(c, sheetOptions{Title: s.name(), Subtitle: strings.Join(parts, " "), Width: 520, Confirm: L("Done"), NoCancel: true}, func() {
 		s.statusSection(c)
 		if s.profiles != nil {
+			s.profiles.dismiss = sh.dismiss
 			s.profiles.view(c)
 		}
 		s.signInSection(c)

@@ -602,6 +602,7 @@ async fn restart_when_idle(app: Arc<App>, version: String) {
         }
         if !patient() {
             app.shell_sessions.shutdown(&app);
+            app.coding_agents.shutdown(&app).await;
         }
         app.save_state_now();
         let Some(error) = restart_if_idle(&app, &version, patient()) else { continue };
@@ -618,7 +619,7 @@ async fn restart_when_idle(app: Arc<App>, version: String) {
 /// and the restart replaces the process; answers why it could not.
 fn restart_if_idle(app: &App, version: &str, patient: bool) -> Option<String> {
     let jobs = app.running_jobs.lock().unwrap();
-    if !jobs.values().all(|job| job.runner_id.is_some()) || (patient && !app.shell_sessions.is_empty()) {
+    if !jobs.values().all(|job| job.runner_id.is_some()) || (patient && (!app.shell_sessions.is_empty() || app.coding_agents.is_busy())) {
         return None;
     }
     tracing::info!(%version, "restarting into the new release");
@@ -626,9 +627,10 @@ fn restart_if_idle(app: &App, version: &str, patient: bool) -> Option<String> {
 }
 
 /// No turn of this Runner's own in flight (a job sent to another Runner waits there, and the
-/// new process picks up its wait), and, while `patient`, no command a bot left running.
+/// new process picks up its wait), and, while `patient`, no command a bot left running and no
+/// coding agent Lorca runs at work.
 fn is_idle(app: &App, patient: bool) -> bool {
-    app.running_jobs.lock().unwrap().values().all(|job| job.runner_id.is_some()) && (!patient || app.shell_sessions.is_empty())
+    app.running_jobs.lock().unwrap().values().all(|job| job.runner_id.is_some()) && (!patient || (app.shell_sessions.is_empty() && !app.coding_agents.is_busy()))
 }
 
 /// Starts the binary now in place with this process's arguments. Returns only when it could not.

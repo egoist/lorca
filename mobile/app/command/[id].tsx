@@ -17,7 +17,8 @@ export default function CommandScreen() {
   const p = usePalette();
   const message = useChat(chatId)?.messages.find((m) => m.id === id);
   const body = message?.body;
-  const command = body?.kind === "permission" ? (body.command ?? body.summary.replace(/^\$ /, "")) : body?.kind === "tool" ? (body.run?.command ?? "") : "";
+  const command =
+    body?.kind === "permission" ? (body.command ?? body.summary.replace(/^\$ /, "")) : body?.kind === "tool" ? (body.run?.command ?? body.agent?.question?.command ?? "") : "";
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return;

@@ -80,10 +80,20 @@ final class SidebarSectionTests: XCTestCase {
                 }
             }
         }
-        XCTAssertEqual(rows(), [
-            "chat-relay", "[Product]", "chat-nova", "chat-launch", "[Engineering]", "chat-patch", "chat-ember",
-            "[Chats]", "chat-quill", "chat-scout",
-        ])
+        /// The rows by group, "" for those above the first header; within a group, the store's order.
+        func groups() -> [(String, Set<String>)] {
+            rows().reduce(into: [("", Set<String>())]) { groups, row in
+                if row.hasPrefix("[") { groups.append((row, [])) } else { groups[groups.count - 1].1.insert(row) }
+            }
+        }
+        func members(_ header: String) -> Set<String> { groups().first { $0.0 == header }?.1 ?? [] }
+        let loose = Set(store.chats.filter { !$0.isPinned && $0.sectionID == nil && !$0.isHidden }.map(\.id))
+        XCTAssertEqual(groups().map(\.0), ["", "[Product]", "[Engineering]", "[Chats]"])
+        XCTAssertEqual(members(""), ["chat-relay"])
+        XCTAssertEqual(members("[Product]"), ["chat-nova", "chat-launch"])
+        XCTAssertEqual(members("[Engineering]"), ["chat-patch", "chat-ember"])
+        XCTAssertEqual(members("[Chats]"), loose)
+        XCTAssertTrue(loose.isSuperset(of: ["chat-quill", "chat-scout"]))
         try capture(outline, window: window, name: "mac-sidebar-sections")
 
         // A header is a group row, which folds through the Show/Hide control AppKit shows on hover.
@@ -97,16 +107,17 @@ final class SidebarSectionTests: XCTestCase {
         XCTAssertEqual(store.section("section-product")?.isCollapsed, true)
         XCTAssertEqual(rows().prefix(3), ["chat-relay", "[Product]", "[Engineering]"])
         store.setSectionCollapsed("section-product", false)
-        XCTAssertEqual(rows()[2], "chat-nova")
+        XCTAssertEqual(members("[Product]"), ["chat-nova", "chat-launch"])
 
         // A chat moved to a section comes off the pinned rows; one hidden goes to a folded Hidden.
         store.moveChat("chat-relay", toSection: "section-engineering")
         store.setHidden("chat-quill", true)
         store.mute("chat-scout", until: Date().addingTimeInterval(3600))
-        XCTAssertEqual(rows(), [
-            "[Product]", "chat-nova", "chat-launch", "[Engineering]", "chat-relay", "chat-patch", "chat-ember",
-            "[Chats]", "chat-scout", "[Hidden]",
-        ])
+        XCTAssertEqual(groups().map(\.0), ["", "[Product]", "[Engineering]", "[Chats]", "[Hidden]"])
+        XCTAssertEqual(members(""), [])
+        XCTAssertEqual(members("[Engineering]"), ["chat-relay", "chat-patch", "chat-ember"])
+        XCTAssertEqual(members("[Chats]"), loose.subtracting(["chat-quill"]))
+        XCTAssertEqual(members("[Hidden]"), [], "Hidden starts folded")
         XCTAssertEqual(store.chat("chat-relay")?.isPinned, false)
 
         // Opening a hidden chat some other way unfolds Hidden to show its row, selected.
@@ -133,10 +144,11 @@ final class SidebarSectionTests: XCTestCase {
         XCTAssertEqual(store.sections.map(\.name), ["Product", "Engineering", "Customers"])
         store.moveSection("section-engineering", to: 0)
         store.deleteSection("section-product")
-        XCTAssertEqual(rows(), [
-            "[Engineering]", "chat-relay", "chat-ember", "[Customers]", "chat-patch",
-            "[Chats]", "chat-nova", "chat-scout", "chat-launch", "[Hidden]", "chat-quill",
-        ])
+        XCTAssertEqual(groups().map(\.0), ["", "[Engineering]", "[Customers]", "[Chats]", "[Hidden]"])
+        XCTAssertEqual(members("[Engineering]"), ["chat-relay", "chat-ember"])
+        XCTAssertEqual(members("[Customers]"), ["chat-patch"])
+        XCTAssertEqual(members("[Chats]"), loose.subtracting(["chat-quill"]).union(["chat-nova", "chat-launch"]))
+        XCTAssertEqual(members("[Hidden]"), ["chat-quill"])
         Preferences.showsHiddenChats = false
     }
 

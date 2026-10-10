@@ -4,7 +4,7 @@ The bot's Runner enforces limits in `crates/cli/src/budgets.rs` and its `runtime
 
 ## Scopes and accounting
 
-Limits apply to three scopes:
+Limits apply to three scopes: A [coding agent](coding-agents.md#when-it-is-done)'s run time while it works counts toward the scopes of the turn that gave it the work, and a time limit reached stops it.
 
 - `chat`: the limits each new turn in that DM starts with. Changing them affects later turns.
 - `job`: one turn, under its existing Job id. Turns in a chat with limits get a record with the chat's limits copied in; a turn in a chat without limits has no record.
@@ -59,6 +59,8 @@ The macOS app and the Windows and Linux app show the same things, and the phone 
 - **Plugins**: the plugin sheet's Status has a Call limit row ("60 a minute", or "Waiting until 5:40 AM" while the service asked to slow down) that opens the Call Limit sheet: calls every n seconds and at once, with Applies to (this account, or all of the service's accounts) only for an account whose service has others.
 
 On the Mac these are `BudgetViewController`, `ConnectorLimitsViewController`, and `DisclosureRow`; in `desktop/` they are `sheet_budget.go`, `sheet_connector_limits.go`, `disclosureRow`, and `model/budgets.go`. Both apps' demo data has limits, a turn stopped at its token limit, and a routine stopped at its spending limit. On the phone, a plugin's screen sets its account's call limit from menus; the service-wide limit is set on a computer.
+
+On the phone (`app/chat-info/limits.tsx`, `src/ui/limits.ts`): Details' Runs with ends with a Limits row: the DM's limits, or Limit reached in orange when its newest turn stopped. A task's screen and a routine's screen have the same row; a routine that stopped leads its row and its screen with Limit reached and drops Run Now. A routine's screen and its row in Details are in [Routines](routines.md#the-apps). The row slides in the Limits screen: a stopped card with Resume, the five limits as fields (empty for none, dollars and minutes), and what the work used, with the limit it reached in orange. Save in the toolbar sets the limits; Resume saves them, then goes on, asking first when it would grant the limits again in full. `budgets` comes from the snapshot and `budgets.changed`.
 
 ## Shared connector admission
 

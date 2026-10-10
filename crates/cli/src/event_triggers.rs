@@ -25,9 +25,7 @@ const INBOX_KIND: &str = "event_inbox";
 // Why a subscription's work is held, in its health. Each clears when its cause does.
 const AUTH_PROBLEM: &str = "Gateway authentication failed; reconnect and export a fresh route";
 const FAILED_PROBLEM: &str = "Event turn stopped or failed; inspect the chat before retrying";
-#[cfg(feature = "runner")]
 const AWAY_PROBLEM: &str = "Waiting for the user: nobody has written in seven days";
-#[cfg(feature = "runner")]
 const TARGET_PROBLEM: &str = "Target bot or routine is unavailable on this Runner";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -64,6 +62,16 @@ pub struct SubscriptionConfig {
     pub is_enabled: bool,
     #[serde(default)]
     pub expires_at: Option<i64>,
+    /// A channel's account, chats, and filter, when `source` is `telegram` or `slack`: the
+    /// Runner reads the service itself ([`crate::channels`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<crate::channels::ChannelSpec>,
+}
+
+impl SubscriptionConfig {
+    pub fn is_channel(&self) -> bool {
+        crate::channels::service_of(&self.source).is_some()
+    }
 }
 
 fn enabled() -> bool {
@@ -167,6 +175,9 @@ pub struct EventTask {
     pub name: String,
     pub prompt: String,
     pub data: String,
+    /// A channel's turn: the contact's message in the conversation that started it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
 }
 
 fn dek(app: &App) -> anyhow::Result<[u8; 32]> {
@@ -288,8 +299,13 @@ fn local_target(app: &App, config: &SubscriptionConfig) -> anyhow::Result<()> {
 
 fn validate_config(app: &App, config: &SubscriptionConfig) -> anyhow::Result<()> {
     local_target(app, config)?;
-    if config.source != "gateway_hmac" {
-        bail!("source must be gateway_hmac");
+    if config.is_channel() {
+        #[cfg(feature = "runner")]
+        crate::channels::validate(app, config)?;
+        #[cfg(not(feature = "runner"))]
+        bail!("Channels run on a Runner");
+    } else if config.source != "gateway_hmac" || config.channel.is_some() {
+        bail!("source must be gateway_hmac, telegram, or slack");
     }
     if config.name.trim().is_empty()
         || config.name.chars().count() > 60
@@ -360,6 +376,9 @@ pub fn serve(app: &Arc<App>, method: &str, body: &Value) -> anyhow::Result<Value
             let db = app.store.connection.lock().unwrap();
             subscription(&db, &key, id)?
         };
+        if sub.config.is_channel() && matches!(method, "events.reconnect" | "events.route") {
+            bail!("A channel reads its service itself and has no gateway");
+        }
         if method == "events.reconnect" {
             sub.config.expires_at = body["expires_at"].as_i64();
             validate_config(app, &sub.config)?;
@@ -402,7 +421,8 @@ pub fn serve(app: &Arc<App>, method: &str, body: &Value) -> anyhow::Result<Value
             let mut sub = subscription(&tx, &key, id)?;
             if method == "events.update" {
                 let config: SubscriptionConfig = serde_json::from_value(body["config"].clone())?;
-                if config.bot_id != sub.config.bot_id || config.routine_id != sub.config.routine_id
+                if config.bot_id != sub.config.bot_id || config.routine_id != sub.config.routine_id || config.source != sub.config.source
+                    || config.channel.as_ref().map(|c| &c.account_id) != sub.config.channel.as_ref().map(|c| &c.account_id)
                 {
                     bail!("Create another subscription to change its target");
                 }
@@ -493,7 +513,93 @@ pub fn serve(app: &Arc<App>, method: &str, body: &Value) -> anyhow::Result<Value
         crate::attention::settle(app, &source, &held_prefix(id));
         crate::attention::settle(app, &source, &auth_prefix(id));
     }
+    if method != "events.list" {
+        channels_changed(app);
+    }
     Ok(reply)
+}
+
+/// What every Device shows of this Runner's channels follows a change of theirs.
+fn channels_changed(app: &App) {
+    #[cfg(feature = "runner")]
+    crate::channels::refresh(app);
+    #[cfg(not(feature = "runner"))]
+    let _ = app;
+}
+
+/// A channel's subscription as the apps and the bot see it: its configuration, and the delivery
+/// that holds it when one failed or was interrupted.
+pub struct ChannelView {
+    pub id: String,
+    pub config: SubscriptionConfig,
+    pub held: Option<String>,
+    /// Why its work waits with no delivery to settle: a week without the user, or a bot that
+    /// left this Runner.
+    pub waiting: Option<&'static str>,
+}
+
+/// This Runner's channels.
+pub fn channel_views(app: &App) -> anyhow::Result<Vec<ChannelView>> {
+    let key = dek(app)?;
+    let db = app.store.connection.lock().unwrap();
+    let mut views = Vec::new();
+    for sub in subscriptions(&db, &key)?.into_iter().filter(|sub| sub.config.is_channel()) {
+        let held = deliveries_of(&db, &key, &sub.id)?
+            .into_iter()
+            .find(|d| matches!(d.state, DeliveryState::Failed | DeliveryState::Uncertain))
+            .map(|d| d.id);
+        let waiting = match sub.health.problem.as_deref() {
+            Some(AWAY_PROBLEM) => Some("Nobody has written in Lorca for a week, so messages wait until you do."),
+            Some(TARGET_PROBLEM) => Some("Its bot is no longer on this Runner. Remove the channel and ask the bot to set it up again."),
+            _ => None,
+        };
+        views.push(ChannelView { id: sub.id, config: sub.config, held, waiting });
+    }
+    Ok(views)
+}
+
+/// The channels of an account by id, or every channel with an empty `account_id`, each with
+/// when it last started listening (created or resumed), in Unix seconds.
+pub fn channel_configs(app: &App, account_id: &str) -> anyhow::Result<Vec<(String, SubscriptionConfig, i64)>> {
+    let Some(key) = app.dek() else { return Ok(Vec::new()) };
+    let db = app.store.connection.lock().unwrap();
+    Ok(subscriptions(&db, &key)?
+        .into_iter()
+        .filter(|sub| sub.config.channel.as_ref().is_some_and(|spec| account_id.is_empty() || spec.account_id == account_id))
+        .map(|sub| (sub.id, sub.config, sub.enabled_at))
+        .collect())
+}
+
+pub fn channel_config(app: &App, id: &str) -> anyhow::Result<SubscriptionConfig> {
+    let key = dek(app)?;
+    let db = app.store.connection.lock().unwrap();
+    Ok(subscription(&db, &key, id)?.config)
+}
+
+/// A channel's message into its inbox: the Runner read it from the service itself, so it signs
+/// the delivery with the subscription's own secret and receives it as a gateway's.
+pub fn receive_local(app: &App, subscription_id: &str, delivery_id: &str, event_type: &str, payload: Value) -> anyhow::Result<Value> {
+    let key = dek(app)?;
+    let sub = {
+        let db = app.store.connection.lock().unwrap();
+        subscription(&db, &key, subscription_id)?
+    };
+    let mut event = Envelope {
+        version: 1,
+        subscription_id: sub.id.clone(),
+        generation: sub.generation,
+        delivery_id: delivery_id.chars().take(256).collect(),
+        occurred_at: now_unix(),
+        event_type: event_type.to_string(),
+        payload: payload.to_string(),
+        signature: String::new(),
+    };
+    event.sign(&sub.secret)?;
+    let receipt = receive(app, event)?;
+    if receipt["status"] == "rejected" {
+        bail!("The channel refused its own message");
+    }
+    Ok(receipt)
 }
 
 fn clear_problem(sub: &mut Subscription, problem: &str) {
@@ -550,7 +656,19 @@ fn report_held(app: &App, sub_id: &str) {
         };
         crate::attention::raise(app, &prefix, fresh, report, Some(&sub.config.bot_id));
     };
+    let bot = app.bot(&sub.config.bot_id).map(|bot| bot.name).unwrap_or_else(|| "the bot".into());
     match &held {
+        Some(item) if sub.config.is_channel() => raise(
+            held_prefix(&sub.id),
+            &item.id,
+            format!("Channel on hold: {}", sub.config.name),
+            if item.state == DeliveryState::Uncertain {
+                "Lorca stopped during a message’s turn, which may have acted already, so later messages wait."
+            } else {
+                "A message’s turn didn’t finish, so later messages wait."
+            },
+            format!("Read the conversation, then try the message again or skip it from the channel in {bot}’s details."),
+        ),
         Some(item) => raise(
             held_prefix(&sub.id),
             &item.id,
@@ -575,6 +693,7 @@ fn report_held(app: &App, sub_id: &str) {
     } else {
         crate::attention::settle(app, &source, &auth_prefix(&sub.id));
     }
+    channels_changed(app);
 }
 
 /// Manage another Runner through the existing encrypted request/response path.
@@ -785,11 +904,14 @@ pub fn task_for_job(app: &App, job: &crate::model::Job) -> anyhow::Result<EventT
 
 /// Settles the delivery behind a finished event turn. A turn held behind the chat lock put its
 /// delivery back to pending, and only the Job the inbox admitted settles its delivery.
+/// `stopped` is the user's Stop: a channel's message the user stopped is settled, and the
+/// channel goes on to the next.
 #[cfg(feature = "runner")]
 pub fn finished(
     app: &App,
     job: &crate::model::Job,
     outcome: crate::runtime::TurnOutcome,
+    stopped: bool,
 ) -> anyhow::Result<()> {
     let key = dek(app)?;
     let mut db = app.store.connection.lock().unwrap();
@@ -799,7 +921,8 @@ pub fn finished(
         return Ok(());
     }
     let mut sub = subscription(&tx, &key, &item.envelope.subscription_id)?;
-    let success = outcome != crate::runtime::TurnOutcome::Skipped;
+    let stopped = stopped && sub.config.is_channel();
+    let success = stopped || outcome != crate::runtime::TurnOutcome::Skipped;
     item.state = if success {
         DeliveryState::Done
     } else {
@@ -807,6 +930,7 @@ pub fn finished(
     };
     sub.health.last_outcome = Some(
         match outcome {
+            _ if stopped => "stopped",
             crate::runtime::TurnOutcome::Sent => "sent",
             crate::runtime::TurnOutcome::Pass => "pass",
             _ => "error",
@@ -814,7 +938,9 @@ pub fn finished(
         .into(),
     );
     if success {
-        sub.health.last_success_at = Some(now_unix());
+        if !stopped {
+            sub.health.last_success_at = Some(now_unix());
+        }
         item.envelope.payload.clear();
         item.task = None;
     } else {
@@ -878,11 +1004,18 @@ fn purge(app: &App) -> anyhow::Result<()> {
 /// edit that landed since this tick read it is kept.
 #[cfg(feature = "runner")]
 fn hold(app: &App, key: &[u8; 32], id: &str, problem: Option<&str>) -> anyhow::Result<()> {
-    let db = app.store.connection.lock().unwrap();
-    let mut sub = subscription(&db, key, id)?;
-    if sub.health.problem.as_deref() != problem {
-        sub.health.problem = problem.map(str::to_string);
-        save_subscription(&db, key, &sub)?;
+    let changed = {
+        let db = app.store.connection.lock().unwrap();
+        let mut sub = subscription(&db, key, id)?;
+        let changed = sub.health.problem.as_deref() != problem;
+        if changed {
+            sub.health.problem = problem.map(str::to_string);
+            save_subscription(&db, key, &sub)?;
+        }
+        changed && sub.config.is_channel()
+    };
+    if changed {
+        channels_changed(app);
     }
     Ok(())
 }
@@ -928,7 +1061,18 @@ pub fn tick(app: &Arc<App>) -> anyhow::Result<()> {
                 continue;
             }
         }
-        let dm = app.dm_with(&sub.config.bot_id, None)?;
+        // A channel's message runs in its conversation, found among the channel's conversations
+        // as the roster has them before the store lock, since roster state is taken first; other
+        // events run in the bot's DM.
+        let dm = if sub.config.is_channel() { None } else { Some(app.dm_with(&sub.config.bot_id, None)?) };
+        let conversations: Vec<String> = if dm.is_none() {
+            app.state.lock().unwrap().chats.iter()
+                .filter(|chat| chat.meta.channel.as_ref().is_some_and(|c| c.channel_id == sub.id) && chat.meta.bot_ids.contains(&sub.config.bot_id))
+                .map(|chat| chat.meta.id.clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
         let requested_by = app.this_device_id().unwrap_or_default();
         let mut db = app.store.connection.lock().unwrap();
         let tx = db.transaction()?;
@@ -954,16 +1098,31 @@ pub fn tick(app: &Arc<App>) -> anyhow::Result<()> {
         else {
             continue;
         };
+        let (chat_id, message_id, data) = match &dm {
+            Some(dm) => (dm.meta.id.clone(), None, event_cue(&item.envelope)),
+            None => match conversation_of(&conversations, &item.envelope) {
+                Some((chat_id, message_id, data)) => (chat_id, Some(message_id), data),
+                // The user deleted the conversation: the message goes with it.
+                None => {
+                    item.state = DeliveryState::Done;
+                    item.envelope.payload.clear();
+                    save_delivery(&tx, &key, item)?;
+                    tx.commit()?;
+                    continue;
+                }
+            },
+        };
         item.state = DeliveryState::Running;
         item.task = Some(EventTask {
             name: sub.config.name.clone(),
             prompt: sub.config.prompt.clone(),
-            data: event_cue(&item.envelope),
+            data,
+            message_id,
         });
         save_delivery(&tx, &key, item)?;
         let job = crate::model::Job {
             id: format!("event-{}", item.id),
-            chat_id: dm.meta.id,
+            chat_id,
             bot_id: sub.config.bot_id.clone(),
             kind: "event".into(),
             trigger_message_id: item.id.clone(),
@@ -985,6 +1144,16 @@ pub fn tick(app: &Arc<App>) -> anyhow::Result<()> {
         crate::runtime::start_turn(app, job);
     }
     Ok(())
+}
+
+/// A channel's delivery: its conversation, the contact's message there, and the turn's closing
+/// note. The conversation must still be one of the channel's with its bot in it, `conversations`.
+#[cfg(feature = "runner")]
+fn conversation_of(conversations: &[String], event: &Envelope) -> Option<(String, String, String)> {
+    let payload: Value = serde_json::from_str(&event.payload).ok()?;
+    let chat_id = conversations.iter().find(|id| Some(id.as_str()) == payload["chat_id"].as_str())?;
+    let message_id = payload["message_id"].as_str()?.to_string();
+    Some((chat_id.clone(), message_id, crate::channels::cue(payload["external_id"].as_str().unwrap_or_default())))
 }
 
 pub fn event_cue(event: &Envelope) -> String {
@@ -1052,6 +1221,7 @@ mod tests {
             queue_policy: policy,
             is_enabled: true,
             expires_at: None,
+            channel: None,
         }
     }
     fn create(app: &Arc<App>, policy: QueuePolicy) -> (String, GatewayRoute) {
@@ -1385,7 +1555,7 @@ mod tests {
             "event data cannot replace its routine budget scope"
         );
         forged.id = "forged-event-job".into();
-        finished(&scratch.0, &forged, crate::runtime::TurnOutcome::Skipped).unwrap();
+        finished(&scratch.0, &forged, crate::runtime::TurnOutcome::Skipped, false).unwrap();
         assert_eq!(
             items(&scratch.0)[0].state,
             DeliveryState::Running,
@@ -1551,6 +1721,32 @@ mod tests {
         }
         let listed = &serve(&scratch.0, "events.list", &json!({})).unwrap()["subscriptions"][0];
         assert_ne!(listed["health"]["problem"], AWAY_PROBLEM);
+    }
+
+    #[cfg(feature = "runner")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_channel_waiting_for_the_user_says_so_with_nothing_to_settle() {
+        let scratch = scratch();
+        let app = &scratch.0;
+        let manifest = crate::marketplace::current(app).plugin("telegram").cloned().unwrap();
+        let account = crate::plugins::accounts::install(app, manifest, "marketplace", Some("Community")).unwrap();
+        crate::plugins::set_variables(app, &account.id, &[("TELEGRAM_BOT_TOKEN".to_string(), "1:abc".to_string())].into_iter().collect()).unwrap();
+        let bot = config(app, QueuePolicy::Fifo).bot_id;
+        let listen = crate::channels::Listen { tags: vec!["feedback".into()], ..Default::default() };
+        let channel = crate::channels::config_for(&bot, "telegram", "Feedback", "File it", crate::channels::ChannelSpec { account_id: account.id, chats: vec![], listen });
+        let id = serve(app, "events.create", &json!({ "config": channel })).unwrap()["id"].as_str().unwrap().to_string();
+        assert_eq!(app.channels.statuses()[0].state, "listening");
+        {
+            let key = app.dek().unwrap();
+            let db = app.store.connection.lock().unwrap();
+            let mut sub = subscription(&db, &key, &id).unwrap();
+            sub.enabled_at -= crate::routines::AWAY_AFTER_SECS + 60;
+            save_subscription(&db, &key, &sub).unwrap();
+        }
+        tick(app).unwrap();
+        let status = app.channels.statuses().remove(0);
+        assert_eq!(status.state, "held");
+        assert!(status.detail.contains("for a week") && status.held_delivery.is_none(), "{status:?}");
     }
 
     #[test]

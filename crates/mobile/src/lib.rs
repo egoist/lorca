@@ -245,6 +245,7 @@ mod tests {
                 is_hidden: false,
                 mute: None,
                 created_at: 1.0,
+                channel: None,
             },
             unread_count: 0,
             usage: None,
@@ -266,6 +267,7 @@ mod tests {
                 target_bot_id: None,
                 script_command: None,
                 run: None,
+                agent: None,
             },
         );
         let tool_id = tool.id.clone();

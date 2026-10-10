@@ -114,6 +114,10 @@ impl PlaybookContent {
                 resource.text = crate::memory::scrub(&resource.text);
             }
         }
+        // Recorded browser steps are checked as a run reads them.
+        if let Some(steps) = self.scripts.iter().find(|resource| resource.path == crate::browser::steps::PATH) {
+            crate::browser::steps::parse(&steps.text)?;
+        }
         if serde_json::to_vec(&self).map_err(|e| e.to_string())?.len() > MAX_CONTENT_BYTES {
             return Err("A skill's instructions and resources must fit in 64 KiB".into());
         }
@@ -756,6 +760,29 @@ pub fn read_for_turn(app: &App, scopes: &[Scope], path: &str) -> Result<String, 
         .ok_or("Resource not found in this playbook".into())
 }
 
+/// A saved skill this turn sees, by its name, id, or `playbook://` path: its name and the text
+/// of its resource at `path`.
+pub fn resource_for_turn(app: &App, scopes: &[Scope], skill: &str, path: &str) -> Result<(String, String), String> {
+    let skill = skill.trim();
+    let id = skill.strip_prefix("playbook://").map(|rest| rest.split('/').next().unwrap_or_default());
+    let library = app.playbooks.lock().unwrap();
+    let record = library
+        .records
+        .values()
+        .filter(|r| scopes.contains(&r.scope) && r.current().status == Status::Saved)
+        .find(|r| Some(r.id.as_str()) == id || r.id == skill || r.current().content.as_ref().is_some_and(|c| c.name == skill))
+        .ok_or_else(|| format!("No saved skill {skill} is available here. A draft is used once the user saves it."))?;
+    let content = record.current().content.as_ref().unwrap();
+    let text = content
+        .scripts
+        .iter()
+        .chain(&content.references)
+        .find(|r| r.path == path)
+        .map(|r| r.text.clone())
+        .ok_or_else(|| format!("The skill {} has no {path}.", content.name))?;
+    Ok((content.name.clone(), text))
+}
+
 /// Capture reads only explicitly selected completed text messages, never tool payloads,
 /// attachments, memory, or another chat. Message ids are retained as private provenance.
 pub fn selected_evidence(
@@ -816,13 +843,18 @@ pub fn selected_evidence(
                 .any(|m| matches!(&m.author, Author::Bot { .. })) => {}
         "corrections"
             if messages.len() >= 2 && messages.iter().all(|m| m.author == Author::You) => {}
+        "recording"
+            if messages
+                .iter()
+                .any(|m| m.recording.as_ref().is_some_and(|r| r.bot_id == bot_id)) => {}
         "workflow" => return Err("Select a completed bot reply as evidence of the workflow".into()),
+        "recording" => return Err("Cite the user's message with the recording".into()),
         "corrections" => {
             return Err(
                 "Select at least two user corrections to propose a standing instruction".into(),
             )
         }
-        _ => return Err("Capture kind must be workflow or corrections".into()),
+        _ => return Err("Capture kind must be workflow, corrections, or recording".into()),
     }
     Ok(messages)
 }

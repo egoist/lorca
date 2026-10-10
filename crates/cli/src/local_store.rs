@@ -102,6 +102,10 @@ impl LocalStore {
                  ciphertext BLOB NOT NULL
              );
              CREATE INDEX IF NOT EXISTS event_inbox_subscription ON event_inbox(subscription_id, position);
+             CREATE TABLE IF NOT EXISTS channel_accounts (
+                 id TEXT PRIMARY KEY NOT NULL,
+                 ciphertext BLOB NOT NULL
+             );
              CREATE TABLE IF NOT EXISTS group_deletes (
                  id       TEXT PRIMARY KEY NOT NULL,
                  position INTEGER NOT NULL
@@ -1203,6 +1207,7 @@ impl LocalStore {
             "sidebar_sections",
             "event_subscriptions",
             "event_inbox",
+            "channel_accounts",
             "group_deletes",
             "blob_deletes",
             "device_seen",
@@ -1415,6 +1420,7 @@ fn message_search_text(message: &Message) -> Option<String> {
         Body::Handoff { reason, .. } => reason.clone(),
         Body::Notice { text, .. } => text.clone(),
         Body::Permission { summary, .. } => summary.clone(),
+        Body::Draft { draft, .. } => format!("{} {} {}", draft.to.join(" "), draft.subject, draft.body),
         Body::Tool { .. } => return None,
     };
     let text = text.trim().to_string();
@@ -1632,6 +1638,7 @@ fn author_columns(author: &Author) -> (&'static str, Option<&str>) {
         Author::You => ("you", None),
         Author::Bot { bot_id } => ("bot", Some(bot_id)),
         Author::System => ("system", None),
+        Author::Contact { .. } => ("contact", None),
     }
 }
 
@@ -1642,6 +1649,7 @@ fn body_kind(body: &Body) -> &'static str {
         Body::Handoff { .. } => "handoff",
         Body::Notice { .. } => "notice",
         Body::Permission { .. } => "permission",
+        Body::Draft { .. } => "draft",
     }
 }
 
