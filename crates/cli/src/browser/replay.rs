@@ -70,7 +70,15 @@ pub async fn run(app: &Arc<App>, bot: &Bot, chat_id: &str, skill: &str, inputs: 
     let (name, steps) = skill_steps(app, &bot.id, chat_id, skill).map_err(ToolError)?;
     let steps = steps.with_inputs(inputs).map_err(ToolError)?;
     if let Some(index) = steps.steps.iter().position(|step| step.secret) {
-        return Err(ToolError(format!("Step {} of {name} types a password, which a skill doesn't keep. Ask the user to sign in in the {} browser, and leave that step out of the skill.", index + 1, steps.profile)));
+        return Err(ToolError(format!("Step {} of {name} types a password, which the recording didn't keep. Leave that sign-in out of the skill, since the {} profile keeps its sign-ins, or ask the user for the password with request_secret (use: browser) and make the step's value {{{{secret:NAME}}}}.", index + 1, steps.profile)));
+    }
+    // A saved secret the steps type must be this bot's, for its Browser; a run fills it in on its
+    // site as the bot's own Browser calls do.
+    let saved = crate::secrets::list(app).map_err(ToolError)?;
+    for secret in steps::secrets_named(&steps) {
+        if !saved.iter().any(|info| info.bot_id == bot.id && info.name == secret && info.target == crate::secrets::BROWSER) {
+            return Err(ToolError(format!("{name} types the secret {secret}, which isn't saved for your Browser. Ask the user for it with request_secret (use: browser).")));
+        }
     }
     let sessions = &app.browser_sessions;
     let profile = sessions
@@ -97,8 +105,8 @@ pub async fn run(app: &Arc<App>, bot: &Bot, chat_id: &str, skill: &str, inputs: 
         // browser until its server answers, up to ten seconds, as a Browser call does; one that
         // doesn't answer closes the browser, so nothing acts after the user gets it.
         let mut running = tokio::spawn({
-            let (server, step, cancel) = (input.server.clone(), step.clone(), cancel.clone());
-            async move { perform(&server, &step, &cancel).await }
+            let (app, bot, server, step, cancel) = (app.clone(), bot.clone(), input.server.clone(), step.clone(), cancel.clone());
+            async move { perform(&app, &bot, &server, &step, &cancel).await }
         });
         let outcome = tokio::select! {
             outcome = &mut running => outcome.unwrap_or_else(|error| Err(Halt::Mismatch(error.to_string()))),
@@ -122,7 +130,7 @@ pub async fn run(app: &Arc<App>, bot: &Bot, chat_id: &str, skill: &str, inputs: 
     Ok(ToolResult::text(format!("Ran the {total} steps of {name} in the {} browser.", profile.name)))
 }
 
-async fn perform(server: &Server, step: &Step, cancel: &CancellationToken) -> Result<(), Halt> {
+async fn perform(app: &App, bot: &Bot, server: &Server, step: &Step, cancel: &CancellationToken) -> Result<(), Halt> {
     if cancel.is_cancelled() {
         return Err(Halt::Stopped);
     }
@@ -134,7 +142,7 @@ async fn perform(server: &Server, step: &Step, cancel: &CancellationToken) -> Re
         Action::Press => {
             server.browser_call("browser_press_key", json!({ "key": step.key })).await.map_err(|error| Halt::Mismatch(first_line(&error)))?;
         }
-        _ => act(server, step, deadline, cancel).await?,
+        _ => act(app, bot, server, step, deadline, cancel).await?,
     }
     if let Some(expect) = &step.expect {
         expected(server, expect, deadline, cancel).await?;
@@ -144,13 +152,18 @@ async fn perform(server: &Server, step: &Step, cancel: &CancellationToken) -> Re
 
 /// The step's action on the first of its targets that is the element, looking again until the
 /// step's time is up: the page may still be loading.
-async fn act(server: &Server, step: &Step, deadline: Instant, cancel: &CancellationToken) -> Result<(), Halt> {
+async fn act(app: &App, bot: &Bot, server: &Server, step: &Step, deadline: Instant, cancel: &CancellationToken) -> Result<(), Halt> {
     let mut last = String::new();
     loop {
         for target in &step.targets {
             let result = match step.action {
                 Action::Click => server.browser_call("browser_click", json!({ "target": target })).await,
-                Action::Fill => server.browser_call("browser_type", json!({ "target": target, "text": step.value })).await,
+                Action::Fill => {
+                    // `{{secret:NAME}}` becomes the saved value only now, and only on its site.
+                    let page = async { current_page(server).await.map(|(_, url)| url).ok_or_else(|| "Lorca could not tell which page the browser shows, so it typed nothing.".to_string()) };
+                    let args = crate::secrets::fill_call(app, Some(bot), crate::browser::PLUGIN_ID, "browser_type", json!({ "target": target, "text": step.value }), page).await.map_err(Halt::Mismatch)?;
+                    server.browser_call("browser_type", args).await
+                }
                 Action::Select => server.browser_call("browser_select_option", json!({ "target": target, "values": step.values })).await,
                 Action::Check | Action::Uncheck => {
                     let field = json!({ "name": step.element.as_deref().unwrap_or("field"), "type": "checkbox", "target": target, "value": (step.action == Action::Check).to_string() });
@@ -236,6 +249,8 @@ async fn stop_here(app: &Arc<App>, bot: &Bot, chat_id: &str, input: &Input, skil
         Ok(result) => publish_image(app, &bot.id, chat_id, &input.name, &result).ok(),
         Err(_) => None,
     };
+    // What the browser said may echo what it typed.
+    let why = crate::secrets::Redactions::load(app).text(why).unwrap_or_else(|| why.to_string());
     let at = format!("{skill} stopped at step {} of {total} ({}): {why}.", index + 1, step.describe());
     app.notice(chat_id, at.clone());
     let text = format!(

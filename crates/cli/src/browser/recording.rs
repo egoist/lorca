@@ -186,17 +186,27 @@ impl Sessions {
 }
 
 /// What the recorder answered, checked: each step as a steps file takes it, typed text without
-/// the account's credentials, and the screenshots it took.
+/// the account's credentials, a value of a saved secret only as its `{{secret:NAME}}`, and the
+/// screenshots it took, less those of a page a saved secret was typed into in plain sight.
 fn recorded(app: &App, meta: &Session, raw: &Value, dir: &std::path::Path) -> Recording {
     use base64::Engine;
+    let redactions = crate::secrets::Redactions::load(app);
+    let mut secret_page: Option<String> = None;
     let steps = raw["steps"].as_array().into_iter().flatten().take(steps::MAX_STEPS).filter_map(|item| {
-        let step = step(app, item)?;
-        let shot = item["shot"].as_str().filter(|name| name.strip_prefix("step-").and_then(|n| n.strip_suffix(".jpg")).is_some_and(|n| n.parse::<u32>().is_ok())).and_then(|name| {
+        let (step, typed_secret) = step(app, &redactions, item)?;
+        let (at, after) = (page(&redactions, &item["page"]), page(&redactions, &item["after"]));
+        let here = at.as_ref().map(|page| page.url.clone());
+        if typed_secret {
+            secret_page = here.clone();
+        } else if secret_page.is_some() && here != secret_page {
+            secret_page = None;
+        }
+        let shot = item["shot"].as_str().filter(|_| secret_page.is_none()).filter(|name| name.strip_prefix("step-").and_then(|n| n.strip_suffix(".jpg")).is_some_and(|n| n.parse::<u32>().is_ok())).and_then(|name| {
             let path = dir.join(name);
             let size = std::fs::metadata(&path).ok()?.len();
             (size <= MAX_SHOT_BYTES).then(|| std::fs::read(&path).ok()).flatten()
         });
-        Some(Recorded { step, page: page(&item["page"]), after: page(&item["after"]), shot: shot.map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes)) })
+        Some(Recorded { step, page: at, after, shot: shot.map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes)) })
     });
     Recording {
         id: format!("rec-{}", uuid::Uuid::new_v4()),
@@ -210,18 +220,26 @@ fn recorded(app: &App, meta: &Session, raw: &Value, dir: &std::path::Path) -> Re
     }
 }
 
-fn page(value: &Value) -> Option<Page> {
-    let url = value["url"].as_str()?.chars().take(2000).collect::<String>();
-    (!url.is_empty()).then(|| Page { url, title: value["title"].as_str().unwrap_or_default().chars().take(200).collect() })
+/// `text` with each saved secret's value replaced by its placeholder.
+fn redacted(redactions: &crate::secrets::Redactions, text: String) -> String {
+    redactions.text(&text).unwrap_or(text)
 }
 
-/// One step the recorder sent, as a steps file takes it, or `None` when it isn't one.
-fn step(app: &App, item: &Value) -> Option<Step> {
+fn page(redactions: &crate::secrets::Redactions, value: &Value) -> Option<Page> {
+    let url = value["url"].as_str()?.chars().take(2000).collect::<String>();
+    (!url.is_empty()).then(|| Page { url: redacted(redactions, url), title: redacted(redactions, value["title"].as_str().unwrap_or_default().chars().take(200).collect()) })
+}
+
+/// One step the recorder sent, as a steps file takes it, and whether it typed a saved secret,
+/// or `None` when it isn't one.
+fn step(app: &App, redactions: &crate::secrets::Redactions, item: &Value) -> Option<(Step, bool)> {
     let action: Action = serde_json::from_value(item["action"].clone()).ok()?;
-    let text = |key: &str, max: usize| item[key].as_str().map(|text| text.chars().take(max).collect::<String>()).filter(|text| !text.is_empty());
+    let text = |key: &str, max: usize| item[key].as_str().map(|text| redacted(redactions, text.chars().take(max).collect::<String>())).filter(|text| !text.is_empty());
+    // A target that would find the element by a saved value finds nothing worth keeping.
     let list = |key: &str, max: usize, items: usize| -> Vec<String> {
-        item[key].as_array().into_iter().flatten().filter_map(Value::as_str).filter(|text| !text.contains('\n')).take(items).map(|text| text.chars().take(max).collect()).collect()
+        item[key].as_array().into_iter().flatten().filter_map(Value::as_str).filter(|text| !text.contains('\n') && redactions.text(text).is_none()).take(items).map(|text| text.chars().take(max).collect()).collect()
     };
+    let mut typed_secret = false;
     let mut step = Step {
         action,
         element: text("element", 200),
@@ -243,8 +261,13 @@ fn step(app: &App, item: &Value) -> Option<Step> {
             step.element = None;
         }
         Action::Fill => match item["value"].as_str() {
-            // What looks like a credential is kept as little as a password is.
-            Some(value) if item["secret"] != true && crate::playbooks::scrub(app, value) == value => step.value = Some(value.chars().take(2000).collect()),
+            // What looks like a credential is kept as little as a password is, and a saved
+            // secret's value as the placeholder a run fills in again.
+            Some(value) if item["secret"] != true && crate::playbooks::scrub(app, value) == value => {
+                let value: String = value.chars().take(2000).collect();
+                typed_secret = redactions.text(&value).is_some();
+                step.value = Some(redacted(redactions, value));
+            }
             _ => step.secret = true,
         },
         Action::Select => step.values = list("values", 200, 20),
@@ -257,7 +280,7 @@ fn step(app: &App, item: &Value) -> Option<Step> {
     }
     let file = Steps { profile: "recording".into(), inputs: BTreeMap::new(), steps: vec![step.clone()] };
     steps::parse(&serde_json::to_string(&file).ok()?).ok()?;
-    Some(step)
+    Some((step, typed_secret))
 }
 
 fn store(app: &App, recording: &Recording) -> Result<(), String> {
@@ -344,11 +367,13 @@ pub fn content(app: &App, message_id: &str, reference: &RecordingRef, images: bo
     text.push_str(&format!(
         "To learn it, call propose_playbook with kind \"recording\" and message_ids [\"{message_id}\"]: a skill whose scripts hold {} with these steps. \
         Put {{{{name}}}} where a value changes from run to run and list each in \"inputs\" with what it is; add an \"expect\" (url, title, or text) after a step whose result the next page or a screenshot shows; \
-        leave out steps that only sign in, since the profile keeps its sign-ins, and steps that type a password (secret), which the recording doesn't keep; you may drop \"element\" from a step or add a \"note\". \
+        leave out steps that only sign in, since the profile keeps its sign-ins; a step that types a password (secret: true) has no value in the recording, so when the workflow needs one each run, ask the user for it with request_secret (use: browser, its site) and make that step's value {{{{secret:NAME}}}}, as a value the user had saved already reads; you may drop \"element\" from a step or add a \"note\". \
         The instructions say what the workflow is for, when to use it, and to run it with browser_session {{ action: \"run\", skill, inputs }}. \
         Then ask the user about what the recording doesn't tell you, and whether it should run on a schedule (a routine that runs the skill).",
         steps::PATH,
     ));
+    // A secret saved since the recording was made is not shown either.
+    let text = redacted(&crate::secrets::Redactions::load(app), text);
     let mut parts = vec![ContentPart::text(text)];
     parts.extend(pictures);
     parts

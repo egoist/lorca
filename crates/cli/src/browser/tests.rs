@@ -671,3 +671,101 @@ async fn stop_ends_a_run_at_once_and_its_step_keeps_the_browser_until_it_answers
     let runtime = app.browser_sessions.owned(app, &owner.id, &session.id).unwrap();
     assert!(runtime.open_server().is_some(), "a call that answered in time leaves the browser open");
 }
+
+fn save_secret(app: &App, owner: &Bot, name: &str, site: &str, value: &str) {
+    let ask = crate::model::SecretAsk { target: crate::secrets::BROWSER.into(), site: Some(site.into()), fields: vec![crate::model::SecretField { name: name.into(), label: "Password".into() }] };
+    crate::secrets::keep(app, &owner.id, &ask, &std::collections::BTreeMap::from([(name.to_string(), value.to_string())])).unwrap();
+}
+
+#[tokio::test]
+async fn a_recording_keeps_a_saved_secret_only_as_its_placeholder() {
+    let scratch = setup();
+    let app = &scratch.0;
+    let owner = bot(app);
+    let chat_id = app.state.lock().unwrap().chats[0].meta.id.clone();
+    save_secret(app, &owner, "SHOP_PIN", "shop.example.com", "4242-secret-pin");
+    let home = scratch.1.clone();
+    let profile = Arc::new(Mutex::new(String::new()));
+    let seen = profile.clone();
+    let answer: crate::plugins::mcp::tests::BrowserAnswer = Arc::new(move |name, args| {
+        if name != "browser_run_code_unsafe" {
+            return Ok(text("ok"));
+        }
+        if args["code"].as_str().unwrap().contains(r#"recorder(page, "start""#) {
+            return Ok(text("{\"lorca\":1,\"started\":true}"));
+        }
+        let dir = home.join("browser/output").join(seen.lock().unwrap().as_str()).join("recording");
+        let mut jpeg = Vec::new();
+        image::DynamicImage::ImageRgb8(image::ImageBuffer::from_pixel(4, 4, image::Rgb([10, 20, 30]))).write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).unwrap();
+        for n in 1..=4 {
+            std::fs::write(dir.join(format!("step-{n}.jpg")), &jpeg).unwrap();
+        }
+        let shop = json!({ "url": "https://shop.example.com/checkout", "title": "Checkout" });
+        let steps = json!({ "lorca": 1, "steps": [
+            { "action": "fill", "element": "“PIN” textbox", "targets": ["getByLabel('PIN', { exact: true })", "getByText('4242-secret-pin', { exact: true })"], "value": "4242-secret-pin", "page": shop, "shot": "step-1.jpg" },
+            { "action": "click", "element": "“Pay” button", "targets": ["getByRole('button', { name: 'Pay', exact: true })"], "page": shop, "shot": "step-2.jpg" },
+            { "action": "click", "element": "“Done” button", "targets": ["getByRole('button', { name: 'Done', exact: true })"], "page": { "url": "https://shop.example.com/thanks", "title": "Thanks 4242-secret-pin" }, "shot": "step-3.jpg" },
+        ] });
+        Ok(text(&format!("### Result\n{steps}")))
+    });
+    let (session, _) = scripted(app, &owner, "Shop", answer).await;
+    *profile.lock().unwrap() = session.id.clone();
+    app.browser_sessions.record(app, &owner.id, &session.id, false).await.unwrap();
+    let (_, message) = app.browser_sessions.stop_recording(app, &owner.id, &session.id, &chat_id, "").await.unwrap();
+    let recording = super::recording::load(app, &message.unwrap().recording.unwrap().id).unwrap();
+    assert!(!serde_json::to_string(&recording).unwrap().contains("4242-secret-pin"), "a saved value is never kept");
+    assert_eq!(recording.steps[0].step.value.as_deref(), Some("{{secret:SHOP_PIN}}"));
+    assert_eq!(recording.steps[0].step.targets, ["getByLabel('PIN', { exact: true })"], "a target that finds the element by the value goes");
+    let shots: Vec<bool> = recording.steps.iter().map(|recorded| recorded.shot.is_some()).collect();
+    assert_eq!(shots, [false, false, true], "no screenshot of the page the secret was typed into in plain sight");
+    assert_eq!(recording.steps[2].page.as_ref().unwrap().title, "Thanks {{secret:SHOP_PIN}}");
+}
+
+#[tokio::test]
+async fn a_run_types_a_saved_secret_on_its_site_only() {
+    let scratch = setup();
+    let app = &scratch.0;
+    let owner = bot(app);
+    let chat_id = app.state.lock().unwrap().chats[0].meta.id.clone();
+    let url = Arc::new(Mutex::new("https://shop.example.com/login".to_string()));
+    let page = url.clone();
+    let answer: crate::plugins::mcp::tests::BrowserAnswer = Arc::new(move |name, args| match name {
+        "browser_navigate" => {
+            *page.lock().unwrap() = args["url"].as_str().unwrap().to_string();
+            Ok(text("ok"))
+        }
+        "browser_tabs" => Ok(text(&format!("### Result\n- 0: (current) [Shop]({})", page.lock().unwrap()))),
+        "browser_type" => Err(format!("Timeout typing {} into the field", args["text"].as_str().unwrap())),
+        "browser_take_screenshot" => Ok(crate::plugins::mcp::tests::png_content()),
+        _ => Ok(text("ok")),
+    });
+    let (_, calls) = scripted(app, &owner, "Shop", answer).await;
+    save_skill(app, &owner, "pay", json!({ "profile": "Shop", "steps": [
+        { "action": "goto", "url": "https://shop.example.com/login" },
+        { "action": "fill", "targets": ["#pin"], "value": "{{secret:SHOP_PIN}}", "timeout": 1 },
+    ] }));
+    let cancel = CancellationToken::new();
+    let missing = match super::replay::run(app, &owner, &chat_id, "pay", &Default::default(), &cancel).await {
+        Ok(result) => panic!("ran: {:?}", result.content),
+        Err(error) => error,
+    };
+    assert!(missing.0.contains("SHOP_PIN, which isn't saved for your Browser"), "{}", missing.0);
+    save_secret(app, &owner, "SHOP_PIN", "shop.example.com", "4242-secret-pin");
+    let stopped = super::replay::run(app, &owner, &chat_id, "pay", &Default::default(), &cancel).await.unwrap();
+    let typed: Vec<String> = calls.lock().unwrap().iter().filter(|(name, _)| name == "browser_type").map(|(_, args)| args["text"].as_str().unwrap().to_string()).collect();
+    assert!(!typed.is_empty() && typed.iter().all(|text| text == "4242-secret-pin"), "the run types the saved value on its site: {typed:?}");
+    let words = stopped.content[0].as_text().unwrap();
+    assert!(stopped.is_error && !words.contains("4242-secret-pin") && words.contains("{{secret:SHOP_PIN}}"), "what the browser said is redacted: {words}");
+    let messages = app.store.page(&chat_id, None, 20).unwrap().0;
+    assert!(!messages.iter().any(|message| serde_json::to_string(&message.body).unwrap().contains("4242-secret-pin")), "nor does the notice show it");
+
+    // Off its site, the value isn't typed at all.
+    calls.lock().unwrap().clear();
+    save_skill(app, &owner, "elsewhere", json!({ "profile": "Shop", "steps": [
+        { "action": "goto", "url": "https://evil.example.net/login" },
+        { "action": "fill", "targets": ["#pin"], "value": "{{secret:SHOP_PIN}}" },
+    ] }));
+    let refused = super::replay::run(app, &owner, &chat_id, "elsewhere", &Default::default(), &cancel).await.unwrap();
+    assert!(refused.is_error && refused.content[0].as_text().unwrap().contains("is saved for shop.example.com"));
+    assert!(!calls.lock().unwrap().iter().any(|(name, _)| name == "browser_type"));
+}

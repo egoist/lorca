@@ -1,7 +1,9 @@
 //! A recorded browser workflow as a skill keeps it: `scripts/browser-steps.json`, the steps
 //! `browser_session { action: "run" }` repeats in one of the bot's profiles. Each step names the
 //! element it acts on by Playwright locators, the first that matches the page wins, and may say
-//! what the page shows afterwards. `{{name}}` stands for an input the run is given.
+//! what the page shows afterwards. `{{name}}` stands for an input the run is given, and
+//! `{{secret:NAME}}`, only in what a `fill` step types, for one of the bot's saved secrets
+//! (`crate::secrets`), which the run fills in on the secret's site.
 
 use std::collections::BTreeMap;
 
@@ -106,7 +108,20 @@ fn fill(text: &str, inputs: &BTreeMap<String, String>) -> String {
     out
 }
 
-/// The `{{name}}`s in a text.
+/// The saved secret a `{{secret:NAME}}` names: NAME, when the placeholder is one.
+fn secret_name(placeholder: &str) -> Option<&str> {
+    placeholder.strip_prefix("secret:").map(str::trim)
+}
+
+/// The saved secrets the steps type, by name.
+pub fn secrets_named(steps: &Steps) -> Vec<String> {
+    let mut names: Vec<String> = steps.steps.iter().flat_map(|step| step.value.iter()).flat_map(|value| placeholders(value)).filter_map(secret_name).map(str::to_string).collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// The `{{name}}`s in a text, `{{secret:NAME}}`s included.
 fn placeholders(text: &str) -> Vec<&str> {
     let mut names = Vec::new();
     let mut rest = text;
@@ -205,8 +220,17 @@ pub fn parse(text: &str) -> Result<Steps, String> {
         for text in step.texts() {
             short(text, MAX_VALUE, &format!("{PATH}: step {}", index + 1))?;
             for name in placeholders(text) {
-                if !steps.inputs.contains_key(name) {
-                    return fail(index, &format!("uses {{{{{name}}}}}, which inputs doesn't list"));
+                match secret_name(name) {
+                    // A saved secret goes only into what Browser types.
+                    Some(secret) if step.action != Action::Fill || step.value.as_ref() != Some(text) => {
+                        return fail(index, &format!("uses {{{{secret:{secret}}}}} outside a fill step's value"));
+                    }
+                    Some(secret) if secret.is_empty() || !secret.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') => {
+                        return fail(index, "names a secret by letters, numbers, and underscores");
+                    }
+                    Some(_) => {}
+                    None if !steps.inputs.contains_key(name) => return fail(index, &format!("uses {{{{{name}}}}}, which inputs doesn't list")),
+                    None => {}
                 }
             }
         }
@@ -221,7 +245,7 @@ impl Steps {
     /// The steps with the run's inputs in place of their `{{name}}`s. Every input the steps use
     /// must be given.
     pub fn with_inputs(&self, inputs: &BTreeMap<String, String>) -> Result<Steps, String> {
-        let used: std::collections::BTreeSet<&str> = self.steps.iter().flat_map(Step::texts).flat_map(|text| placeholders(text)).collect();
+        let used: std::collections::BTreeSet<&str> = self.steps.iter().flat_map(Step::texts).flat_map(|text| placeholders(text)).filter(|name| secret_name(name).is_none()).collect();
         let missing: Vec<&str> = used.iter().copied().filter(|name| !inputs.contains_key(*name)).collect();
         if !missing.is_empty() {
             return Err(format!("Give the run these inputs: {}.", missing.iter().map(|name| format!("{name} ({})", self.inputs.get(*name).map(String::as_str).unwrap_or_default())).collect::<Vec<_>>().join(", ")));
@@ -266,6 +290,9 @@ mod tests {
         ]));
         let steps = parse(&good).unwrap();
         assert_eq!(steps.steps.len(), 5);
+        let typed = parse(&file(serde_json::json!([{ "action": "fill", "targets": ["#pw"], "value": "{{secret:SHOP_PASSWORD}}" }]))).unwrap();
+        assert_eq!(secrets_named(&typed), ["SHOP_PASSWORD"]);
+        assert_eq!(typed.with_inputs(&BTreeMap::new()).unwrap().steps[0].value.as_deref(), Some("{{secret:SHOP_PASSWORD}}"), "a run fills a secret in at the browser, not here");
         assert_eq!(steps.steps[1].describe(), "click “New” button");
         assert_eq!(steps.steps[3].describe(), "type a password into getByLabel('Password', { exact: true })");
         for (bad, why) in [
@@ -278,6 +305,8 @@ mod tests {
             (file(serde_json::json!([{ "action": "press", "key": "Enter", "targets": ["#a"] }])), "takes no targets"),
             (file(serde_json::json!([{ "action": "click", "targets": ["#a"], "page": {} }])), "unknown field"),
             (file(serde_json::json!([])), "1 to 100 steps"),
+            (file(serde_json::json!([{ "action": "goto", "url": "https://x.example/?p={{secret:PW}}" }])), "outside a fill step's value"),
+            (file(serde_json::json!([{ "action": "fill", "targets": ["#pw"], "value": "{{secret:pass word}}" }])), "letters, numbers, and underscores"),
         ] {
             let error = parse(&bad).unwrap_err();
             assert!(error.contains(why), "{error} should say {why}");

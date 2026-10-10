@@ -217,8 +217,12 @@ pub fn scrub(text: &str) -> String {
     }
     SECRET_ASSIGNMENT
         .replace_all(&out, |m: &regex::Captures| {
+            // `{{secret:NAME}}` names a saved secret (`crate::secrets`); it isn't one.
+            let placeholder = m[1].eq_ignore_ascii_case("secret:")
+                && out[..m.get(0).unwrap().start()].ends_with("{{")
+                && m[2].strip_suffix("}}").is_some_and(|name| name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
             // Already scrubbed material is read and exported again. Keep the marker intact.
-            if &m[2] == "«redacted" { m[0].to_string() }
+            if &m[2] == "«redacted" || placeholder { m[0].to_string() }
             else { format!("{}{}", &m[1], redaction(m[2].chars().count())) }
         })
         .to_string()
@@ -674,6 +678,10 @@ mod tests {
         assert_eq!(scrub("AKIAABCDEFGHIJKLMNOP is an aws key"), "«redacted 20 chars» is an aws key");
         assert_eq!(scrub("Authorization: Bearer abcdefghijklmnopqrstuvwxyz"), "Authorization: «redacted 33 chars»");
         assert_eq!(scrub("API_KEY=\"abcdef123456\""), "API_KEY=\"«redacted 12 chars»\"");
+        // A saved secret's placeholder is a name, not a value.
+        assert_eq!(scrub(r#"{"value":"{{secret:SHOP_PIN}}"}"#), r#"{"value":"{{secret:SHOP_PIN}}"}"#);
+        assert_eq!(scrub("secret:hunter2-long"), "secret:«redacted 12 chars»");
+        assert_eq!(scrub("{{secret:hunter2-long}}x"), "{{secret:«redacted 15 chars»");
     }
 
     #[test]
