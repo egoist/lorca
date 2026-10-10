@@ -429,7 +429,7 @@ export const zh: Record<string, string> = {
   "Point at the pairing QR code": "对准配对二维码",
   "Price unknown": "价格未知",
   "Profiles": "配置文件",
-  "Profiles open in a window on {runner}, where you sign in.": "配置文件在 {runner} 上的窗口中打开，你在那里登录。",
+  "Profiles open in a window on {runner}, where you sign in and do the tasks you record.": "配置文件在 {runner} 上的窗口中打开，你在那里登录，也在那里做一遍要录制的任务。",
   "Project": "项目",
   "Provider": "服务商",
   "Providers": "服务商",

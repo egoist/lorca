@@ -146,7 +146,7 @@ export default function BrowserScreen() {
     loadError ??
     (profiles?.length === 0
       ? t("A profile keeps sign-ins for {bot}'s browser. Add one, then open it on {runner} to sign in.", { bot: bot.name, runner: runnerName })
-      : t("Profiles open in a window on {runner}, where you sign in.", { runner: runnerName }));
+      : t("Profiles open in a window on {runner}, where you sign in and do the tasks you record.", { runner: runnerName }));
 
   return (
     <>
