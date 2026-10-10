@@ -16,8 +16,10 @@ import (
 
 var nonAlnum = regexp.MustCompile(`[^a-z0-9]+`)
 
+// minutesAgo is a demo time on the formatters' clock, so a test that sets `Now` sees the same
+// stamps every run.
 func minutesAgo(minutes float64) time.Time {
-	return time.Now().Add(-time.Duration(minutes * float64(time.Minute)))
+	return Now().Add(-time.Duration(minutes * float64(time.Minute)))
 }
 
 func mockMessage(author Author, body Body, at time.Time) *Message {

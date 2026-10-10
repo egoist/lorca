@@ -379,9 +379,9 @@ export const NoticeRow = memo(function NoticeRow({ row }: { row: Extract<Row, { 
 /// it waits: the question, the call (a shell command in a code block that opens the whole
 /// command on tap), why Auto-review paused it, the answers, and under them the rule Always allow
 /// adds. A shell command offers Always allow only with a rule. Once answered, the answer and the
-/// call; an Always allow keeps its rule. A bot's Access refusing a call asks for more access,
-/// which is changed in the bot's Access on a computer, so here it is only dismissed. In a group
-/// the card sits in the bubbles' column, the bot's avatar beside its bottom edge.
+/// call; an Always allow keeps its rule. A bot's Access refusing a call asks for more access: Edit
+/// Access… opens the bot's Access, and Dismiss puts the request away; neither runs the call. In a
+/// group the card sits in the bubbles' column, the bot's avatar beside its bottom edge.
 export const PermissionRow = memo(function PermissionRow({ row, isGroup, onDecide }: { row: Extract<Row, { type: "permission" }>; isGroup: boolean; onDecide: (message: Message, decision: "allow" | "always" | "deny") => void }) {
   useLanguage();
   const p = usePalette();
@@ -419,8 +419,8 @@ export const PermissionRow = memo(function PermissionRow({ row, isGroup, onDecid
   const decided: Record<string, string> = connect
     ? { allowed: t("Signing in"), denied: t("Not now"), dismissed: t("Dismissed"), connected: t("Signed in"), failed: t("Sign-in failed") }
     : { allowed: t("Allowed once"), always: t("Always allowed"), denied: t("Denied"), expired: t("No answer in time"), dismissed: t("Dismissed") };
-  const choices: [string, "allow" | "always" | "deny"][] = access
-    ? [[t("Dismiss"), "deny"]]
+  const choices: [string, "allow" | "always" | "deny" | "access"][] = access
+    ? [[t("Edit Access…"), "access"], [t("Dismiss"), "deny"]]
     : connect
     ? [[t("Sign in"), "allow"], [t("Not now"), "deny"]]
     : row.body.tool === "install"
@@ -493,7 +493,15 @@ export const PermissionRow = memo(function PermissionRow({ row, isGroup, onDecid
         {pending ? (
           <View style={{ flexDirection: "row", gap: 8, marginTop: 4 }}>
             {choices.map(([label, decision]) => (
-              <Pressable key={decision} onPress={() => onDecide(row.message, decision)} style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill }]}>
+              <Pressable
+                key={decision}
+                onPress={() =>
+                  decision === "access"
+                    ? row.message.author.kind === "bot" && router.push({ pathname: "/chat-info/access/[id]", params: { id: row.message.author.bot_id, close: "1" } })
+                    : onDecide(row.message, decision)
+                }
+                style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill }]}
+              >
                 <Text style={{ color: decision === "deny" ? p.label : p.tint, fontSize: 13, fontWeight: "600" }}>
                   {label}
                 </Text>
