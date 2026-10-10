@@ -118,6 +118,7 @@ extension SettingsPane {
         case .general: L("General")
         case .autoReview: L("Auto-review")
         case .sharedLinks: L("Shared Links")
+        case .email: L("Email")
         case .advanced: L("Advanced")
         case .bots: L("Bots")
         case .providers: L("Providers")
@@ -131,6 +132,7 @@ extension SettingsPane {
         case .general: "gearshape"
         case .autoReview: "checkmark.shield"
         case .sharedLinks: "link"
+        case .email: "envelope"
         case .advanced: "slider.horizontal.3"
         case .bots: "person.2"
         case .providers: "key"

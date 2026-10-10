@@ -92,12 +92,12 @@ enum PaletteIndex {
     /// The panes, then the settings on them, which only a query brings up.
     private static func settings(root: RootSplitViewController, store: AppStore) -> [PaletteItem] {
         let device = root.settingsDeviceID.flatMap { store.device($0) }
-        let panes = SettingsPane.allCases.map { pane in
+        let panes = SettingsPane.listed(in: store).map { pane in
             PaletteItem(icon: .symbol(pane.symbolName), title: pane.title, keywords: [L("Settings")]) { [weak root] in
                 root?.showSettings(pane)
             }
         }
-        let entries = SettingsPane.allCases.flatMap { pane in
+        let entries = SettingsPane.listed(in: store).flatMap { pane in
             SettingsSearch.entries(in: pane, device: device, store: store).map { entry in
                 PaletteItem(
                     icon: .symbol(pane.symbolName), title: entry.title, subtitle: pane.title,

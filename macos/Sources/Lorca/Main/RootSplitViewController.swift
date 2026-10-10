@@ -441,6 +441,7 @@ final class RootSplitViewController: NSSplitViewController {
             case .general: GeneralSettingsViewController()
             case .autoReview: AutoReviewSettingsViewController()
             case .sharedLinks: SharedLinksSettingsViewController()
+            case .email: EmailSettingsViewController()
             case .advanced: AdvancedSettingsViewController()
             case .bots: BotsSettingsViewController()
             case .providers: ProvidersSettingsViewController()

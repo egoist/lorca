@@ -625,6 +625,22 @@ enum MockData {
         ]
     }
 
+    /// The demo account's address. `LORCA_MOCK_MAIL` shows the other states: `none` (no address
+    /// yet), `suspended`, or `off` (a relay without email).
+    static func mail(name: String = "k7f3m9q2") -> MailStatus {
+        let domain = "bots.lorca.app"
+        let state = ProcessInfo.processInfo.environment["LORCA_MOCK_MAIL"]
+        guard state != "off" else { return MailStatus(available: false, domain: nil, address: nil, leadBotId: nil, bots: []) }
+        let lead = bots().first?.id
+        guard state != "none" else { return MailStatus(available: true, domain: domain, address: nil, leadBotId: lead, bots: []) }
+        let tags = ["bot-nova": "project-manager", "bot-patch": "developer", "bot-scout": "researcher", "bot-quill": "writer"]
+        return MailStatus(
+            available: true, domain: domain,
+            address: .init(name: name, email: "\(name)@\(domain)", state: state == "suspended" ? .suspended : .active),
+            leadBotId: lead,
+            bots: bots().compactMap { bot in tags[bot.id].map { .init(botId: bot.id, email: "\(name)+\($0)@\(domain)") } })
+    }
+
     static func sharedLinks() -> [SharedLink] {
         [SharedLink(id: "mock-link", url: "https://lorca.app/t/mock-link#dGhpcyBpcyBub3QgYSByZWFsIGtleSwganVzdCBhIGRlbW8",
             botId: "bot-quill", name: "Writer", selection: TemplateSelection(memoryIds: ["memory-voice"]),
@@ -872,9 +888,14 @@ enum MockData {
                 id: server.id, name: server.name,
                 tools: (server.tools ?? []).map { Tool(name: $0.name, description: $0.about, capability: $0.isReadOnly ? "read" : "write") })
         }
+        // The account's address is a connection of its own, built into every Runner.
+        let email: [BotAccessCatalog.Plugin] = mail().address == nil ? [] : [.init(id: MailStatus.connectionID, name: "Email", tools: [
+            Tool(name: "email", title: "Read and wait for email", capability: "read"),
+            Tool(name: "send_email", title: "Send email", capability: "write"),
+        ])]
         return BotAccessCatalog(connections: [
             .init(id: "github", name: "GitHub", tools: github), .init(id: "linear", name: "Linear", tools: linear),
-        ] + servers)
+        ] + email + servers)
     }
 
     static func bots() -> [Bot] {

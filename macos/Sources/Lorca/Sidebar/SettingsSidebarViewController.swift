@@ -147,7 +147,7 @@ final class SettingsSidebarViewController: NSViewController {
         rebuild()
         store.observe(self) { [weak self] event in
             switch event {
-            case .rosterChanged, .snapshotReplaced: self?.rebuild()
+            case .rosterChanged, .snapshotReplaced, .mailChanged: self?.rebuild()
             default: break
             }
         }
@@ -175,7 +175,7 @@ final class SettingsSidebarViewController: NSViewController {
 
         let results: [SettingsSearch.PaneResult] =
             if searchQuery.isEmpty {
-                SettingsPane.allCases.map { .init(pane: $0, entries: []) }
+                SettingsPane.listed(in: store).map { .init(pane: $0, entries: []) }
             } else {
                 SettingsSearch.panes(matching: searchQuery, device: device, store: store)
             }

@@ -123,8 +123,10 @@ final class BotAccessViewController: SheetViewController {
         let row = PluginAccessRow()
         // A named account (Gmail · Work) has its service's mark.
         let installed = runner?.plugins.first { $0.id == plugin.id }
+        // The account's email address is built in, not an installed plugin.
+        let symbol = plugin.id == MailStatus.connectionID ? "envelope" : installed?.symbolName ?? "puzzlepiece.extension"
         row.icon = PluginLogo.tile(for: installed?.marketplaceID ?? plugin.id, size: 18)
-            ?? NSImage(systemSymbolName: installed?.symbolName ?? "puzzlepiece.extension", accessibilityDescription: nil)
+            ?? NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         row.onLevel = { [weak self] level in
             self?.levels[plugin.id] = level
             self?.render()

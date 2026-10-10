@@ -44,6 +44,7 @@ enum Wire {
         var runningTurns: [RunningTurn]?
         var attention: AttentionView?
         var budgets: [BudgetState]?
+        var mail: MailStatus?
     }
 
     struct BudgetsChanged: Decodable { var budgets: [BudgetState] }

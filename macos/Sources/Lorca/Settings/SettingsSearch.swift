@@ -55,6 +55,9 @@ struct SettingsEntry: Hashable {
     static var deleteAccount: SettingsEntry { SettingsEntry(
         .advanced, L("Delete Account"), row: L("Account"), keywords: [L("erase remove wipe relay data identity")]) }
 
+    static var emailAddress: SettingsEntry { SettingsEntry(
+        .email, L("Email Address"), row: L("Address"), keywords: [L("mail inbox sign up verification code bots")]) }
+
     static var machineKey: SettingsEntry { SettingsEntry(
         .device, L("Machine key"), keywords: [L("device os role runner last seen relay")]) }
     static var pairing: SettingsEntry { SettingsEntry(.device, L("Pairing"), keywords: [L("unpair remove device paired")]) }
@@ -105,6 +108,7 @@ enum SettingsSearch {
                 + (Updater.isEnabled ? [.version, .automaticChecks, .automaticDownloads] : [])
         case .autoReview: [.autoReviewSwitch, .autoReviewModel, .autoReviewRules]
         case .sharedLinks: []
+        case .email: store.mail?.available == true ? [.emailAddress] : []
         case .advanced: [.relayURL, .cliPort, .onboarding] + (store.hasIdentity == true ? [.deleteAccount] : [])
         case .bots: (device.map { store.bots(on: $0.id) } ?? []).map { .bot($0) }
         case .providers: store.providers.map { .provider($0.kind) } + (store.reviewProviderKinds.isEmpty ? [] : [.reviewModels])
@@ -125,7 +129,7 @@ enum SettingsSearch {
     }
 
     static func panes(matching query: String, device: Device?, store: AppStore) -> [PaneResult] {
-        SettingsPane.allCases.compactMap { pane in
+        SettingsPane.listed(in: store).compactMap { pane in
             let entries = entries(in: pane, device: device, store: store).filter { $0.matches(query) }
             guard !entries.isEmpty || pane.title.localizedStandardContains(query) else { return nil }
             return PaneResult(pane: pane, entries: entries)

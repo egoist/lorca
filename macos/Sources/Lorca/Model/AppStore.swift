@@ -27,6 +27,8 @@ enum StoreEvent {
     case outputsChanged(Chat.ID)
     /// A group's shared project context changed, here or on another Device.
     case projectContextChanged(Chat.ID)
+    /// The account's email address changed, here or on another Device.
+    case mailChanged
     case selectionChanged
     case connectionChanged
     case identityChanged
@@ -37,6 +39,7 @@ enum SettingsPane: String, CaseIterable {
     case providers
     case autoReview = "auto-review"
     case sharedLinks = "shared-links"
+    case email
     case plugins
     case bots
     case device
@@ -47,9 +50,16 @@ enum SettingsPane: String, CaseIterable {
     /// the provider credentials.
     var isDeviceScoped: Bool {
         switch self {
-        case .general, .providers, .autoReview, .sharedLinks, .advanced: false
+        case .general, .providers, .autoReview, .sharedLinks, .email, .advanced: false
         case .bots, .plugins, .device: true
         }
+    }
+}
+
+extension SettingsPane {
+    /// The panes Settings lists: Email only while the relay offers it.
+    @MainActor static func listed(in store: AppStore) -> [SettingsPane] {
+        allCases.filter { $0 != .email || store.mail?.available == true }
     }
 }
 
@@ -90,6 +100,8 @@ final class AppStore {
     private(set) var attention = AttentionView()
     /// The bots the account shares as links, shared through the roster.
     private(set) var sharedLinks: [SharedLink] = []
+    /// The account's email address, as the relay last said; nil until the CLI has asked it.
+    private(set) var mail: MailStatus?
     /// The account's provider credentials, the same on every Device.
     private(set) var providers: [ProviderCredential] = []
     /// The models the CLI's catalog offers, for the Model and Thinking pickers.
@@ -309,6 +321,7 @@ final class AppStore {
         autoReview = snapshot.autoReview?.toModel() ?? AutoReview()
         attention = snapshot.attention ?? AttentionView()
         sharedLinks = snapshot.sharedLinks ?? []
+        mail = snapshot.mail
         providers = (snapshot.providers ?? []).compactMap { $0.toModel() }
         catalog = (snapshot.models ?? []).compactMap { $0.toModel() }
         runningJobs = (snapshot.runningTurns ?? []).map { ($0.jobId, $0.chatId, $0.botId, $0.routineId) }
@@ -455,6 +468,9 @@ final class AppStore {
             relayURL = status.url ?? relayURL
             emit(.rosterChanged)
 
+        case "mail.changed":
+            if let incoming = decode(MailStatus.self) { applyMail(incoming) }
+
         case "projects.changed":
             struct ProjectChanged: Decodable { var chatId: String }
             guard let payload = decode(ProjectChanged.self) else { return }
@@ -518,6 +534,54 @@ final class AppStore {
             return applyAttention(view)
         }
         _ = try await client.request("attention.preferences", [key: value ?? NSNull()])
+    }
+
+    // MARK: - Email
+
+    func applyMail(_ status: MailStatus) {
+        guard status != mail else { return }
+        mail = status
+        emit(.mailChanged)
+    }
+
+    /// Asks the relay afresh, as the Email pane does when it shows.
+    func refreshMail() {
+        guard !isMock else { return }
+        Task { [weak self] in
+            guard let self, let status = try? await client.request("mail.get", as: MailStatus.self) else { return }
+            applyMail(status)
+        }
+    }
+
+    /// Gets the account an address, or changes the one it has: a random name without `name`.
+    /// Answers why a name of the user's own was not taken, or nil once it was.
+    func applyForMail(name: String?) async throws -> MailNameProblem? {
+        if isMock { return mockApply(name: name) }
+        var params: [String: Any] = [:]
+        if let name { params["name"] = name }
+        let reply = try await client.request("mail.apply", params, as: Wire.MailReply.self)
+        if let problem = reply.problem { return problem }
+        if let status = reply.mail { applyMail(status) }
+        return nil
+    }
+
+    /// Gives the address up: mail to it bounces, and nobody else can take the name.
+    func releaseMail() async throws {
+        if isMock, let mail {
+            return applyMail(MailStatus(available: true, domain: mail.domain, address: nil, leadBotId: mail.leadBotId, bots: []))
+        }
+        let reply = try await client.request("mail.release", as: Wire.MailReply.self)
+        if let status = reply.mail { applyMail(status) }
+    }
+
+    private func mockApply(name: String?) -> MailNameProblem? {
+        if let name {
+            guard MailStatus.isValidName(name) else { return .invalid }
+            if ["admin", "postmaster", "abuse", "support"].contains(name) { return .reserved }
+            if name == "taken" { return .taken }
+        }
+        applyMail(MockData.mail(name: name ?? "r4b8w2nx"))
+        return nil
     }
 
     func observe(_ owner: AnyObject, _ handler: @escaping (StoreEvent) -> Void) {
@@ -2222,6 +2286,7 @@ final class AppStore {
         mockPlaybooks = MockData.playbooks()
         autoReview = MockData.autoReview()
         sharedLinks = MockData.sharedLinks()
+        mail = MockData.mail()
         providers = MockData.providers()
         catalog = MockData.models()
         sortChats()
