@@ -976,6 +976,9 @@ struct ToolInvocation: Hashable {
     /// A shell command's card, which the transcript shows only while the command needs the user
     /// (`isShown`). Every `bash` row has one.
     var run: CommandRun? = nil
+    /// The card of the coding agent a `coding_agent` call started, which the transcript shows
+    /// from the start: what it works on, how it stands, and what it asks.
+    var agent: AgentRun? = nil
 
     /// A finished message_bot call: the one tool the transcript shows, as "Messaged ◉ Name".
     /// Everything else a bot does with tools stays behind the "is working" row.
@@ -989,6 +992,7 @@ struct ToolInvocation: Hashable {
     /// question) until it ends. Before that the bot deals with it, and the command shows only
     /// as the working row's activity.
     var isShown: Bool {
+        if agent != nil { return true }
         guard let run else { return isSentMessage }
         return run.state == .asking || (run.isLive && run.handedOver)
     }
@@ -1081,6 +1085,117 @@ struct CommandRun: Hashable {
     /// The buttons the question offers: (title, decision). Always allow only with a rule to add.
     var choices: [(String, String)] {
         rule == nil ? [(L("Allow once"), "allow"), (L("Deny"), "deny")] : [(L("Allow once"), "allow"), (L("Always allow"), "always"), (L("Deny"), "deny")]
+    }
+}
+
+/// A coding agent a bot runs on its Runner, Claude Code or Codex, as the card of the call that
+/// started it shows it: Auto-review's question before it starts, what it works on and where, how
+/// it stands, its last lines, and what it asks. A question about starting it or a command it
+/// wants to run is answered like a command's (`chats.permission`); one its pane asks, with a
+/// choice or text (`coding.answer`). Stop is `coding.stop`; its transcript, `coding.transcript`.
+struct AgentRun: Hashable {
+    enum State: String, Hashable {
+        /// Auto-review is judging whether it may start.
+        case checking
+        /// A question waits for the user.
+        case asking
+        case starting
+        case working
+        /// Done with what it was asked; it takes a follow-up.
+        case idle
+        case exited
+        case failed
+        case stopped
+        /// Not allowed to start.
+        case denied
+        /// Nobody answered in time.
+        case expired
+        /// The user wrote in the chat instead of answering.
+        case dismissed
+    }
+
+    struct Question: Hashable {
+        enum Kind: String, Hashable {
+            /// Auto-review asks before it starts.
+            case start
+            /// It wants to run `command`.
+            case command
+            /// Its pane asks, with a menu of `choices`.
+            case choices
+            /// Its pane asks for an answer to type.
+            case text
+        }
+
+        var kind: Kind
+        /// What its pane shows asking.
+        var text: String
+        var command: String?
+        var choices: [String]
+        var reason: String?
+        var rule: String?
+
+        /// Answered with Allow once and Deny, and Always allow with a rule to add.
+        var isPermission: Bool { kind == .start || kind == .command }
+
+        /// The buttons a permission offers: (title, decision).
+        var decisions: [(String, String)] {
+            rule == nil ? [(L("Allow once"), "allow"), (L("Deny"), "deny")] : [(L("Allow once"), "allow"), (L("Always allow"), "always"), (L("Deny"), "deny")]
+        }
+    }
+
+    var id: String
+    /// `claude` or `codex`.
+    var kind: String
+    /// `herdr` or `luvus` when it runs in a pane of that terminal host on its Runner.
+    var host: String?
+    var task: String
+    /// Where it works, from the home folder.
+    var folder: String
+    var branch: String?
+    var state: State
+    /// Working, with nothing new for a while.
+    var stalled = false
+    var question: Question?
+    var output: String?
+    var outcome: String?
+    var device: String?
+    var startedAt: Date?
+
+    /// Its product's name, which is not translated.
+    var name: String { kind == "codex" ? "Codex" : "Claude Code" }
+    var hostName: String? {
+        switch host {
+        case "herdr": "Herdr"
+        case "luvus": "Luvus"
+        default: nil
+        }
+    }
+
+    /// It has not ended.
+    var isOpen: Bool { [.checking, .asking, .starting, .working, .idle].contains(state) }
+    /// It runs, or is about to: Stop ends it. Not while Auto-review decides whether it may start,
+    /// and not once it is done, waiting for a follow-up.
+    var isRunning: Bool { isOpen && state != .checking && state != .idle && question?.kind != .start }
+
+    /// Where it works, in a word: its branch, else its folder's name.
+    var place: String {
+        branch ?? folder.split(separator: "/").last.map(String.init) ?? folder
+    }
+
+    /// How it stands, in a word or two.
+    var status: String {
+        switch state {
+        case .checking, .starting: L("Starting", context: "coding agent")
+        case .asking: L("Needs you", context: "coding agent")
+        case .working: stalled ? L("Quiet", context: "coding agent") : L("Working", context: "coding agent")
+        case .idle: L("Done", context: "coding agent")
+        case .exited: L("Ended", context: "coding agent")
+        case .failed: L("Failed", context: "coding agent")
+        case .stopped: L("Stopped", context: "coding agent")
+        case .denied: L("Not allowed", context: "coding agent")
+        case .expired: L("No answer", context: "coding agent")
+        case .dismissed: L("Dismissed", context: "coding agent")
+        }
     }
 }
 

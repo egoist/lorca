@@ -559,7 +559,33 @@ enum Wire {
         var rule: String?
         var command: String?
         var run: Run?
+        var agent: Agent?
         var replyTo: ReplyTo?
+    }
+
+    struct Agent: Decodable {
+        var id: String
+        var kind: String
+        var host: String?
+        var task: String?
+        var folder: String?
+        var branch: String?
+        var state: String
+        var stalled: Bool?
+        var question: Question?
+        var output: String?
+        var outcome: String?
+        var device: String?
+        var startedAt: Double?
+    }
+
+    struct Question: Decodable {
+        var kind: String
+        var text: String?
+        var command: String?
+        var choices: [String]?
+        var reason: String?
+        var rule: String?
     }
 
     struct ReplyTo: Decodable {
@@ -757,7 +783,8 @@ extension Wire.Message {
                             prompt: $0.prompt, output: $0.output,
                             device: $0.device, reason: $0.reason, rule: $0.rule,
                             handedOver: $0.handedOver ?? false, background: $0.background ?? false)
-                    }
+                    },
+                    agent: self.body.agent.map { $0.toModel() }
                 ))
         case "handoff":
             body = .handoff(from: self.body.from ?? "", to: self.body.to ?? "", reason: self.body.reason ?? "")
@@ -793,6 +820,23 @@ extension Wire.Message {
         message.queued = queued ?? false
         message.notification = notification
         return message
+    }
+}
+
+extension Wire.Agent {
+    func toModel() -> AgentRun {
+        AgentRun(
+            id: id, kind: kind, host: host, task: task ?? "", folder: folder ?? "", branch: branch,
+            state: AgentRun.State(rawValue: state) ?? .stopped, stalled: stalled ?? false,
+            question: question.flatMap { question in
+                AgentRun.Question.Kind(rawValue: question.kind).map {
+                    AgentRun.Question(
+                        kind: $0, text: question.text ?? "", command: question.command, choices: question.choices ?? [],
+                        reason: question.reason, rule: question.rule)
+                }
+            },
+            output: output, outcome: outcome, device: device,
+            startedAt: startedAt.map { Date(timeIntervalSince1970: $0) })
     }
 }
 

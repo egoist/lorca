@@ -346,6 +346,17 @@ final class ChatLayout {
         return height
     }
 
+    /// A coding agent's card, for the `coding_agent` row that started it.
+    private func agentHeight(for message: Message, agent: AgentRun, tableWidth: CGFloat, indent: CGFloat) -> CGFloat {
+        let width = min(AgentCellView.width, tableWidth - indent - ChatMetrics.horizontalInset)
+        var entry = entry(for: message)
+        if let card = entry.card, card.width == width { return card.height }
+        let height = AgentCellView.height(for: agent, rowWidth: tableWidth, indent: indent)
+        entry.card = (width, height)
+        cache[message.id] = entry
+        return height
+    }
+
     /// Hugs the text up to `noticeMaxWidth`, with the icon centered on the first line.
     func noticeMetrics(for text: String, tableWidth: CGFloat) -> NoticeMetrics {
         let inset = TextMeasure.labelInset
@@ -397,8 +408,12 @@ final class ChatLayout {
                 let metrics = metrics(for: message, showsAvatar: showsAvatar, groupStart: groupStart, tableWidth: tableWidth)
                 return top + metrics.rowHeight
 
-            // Tool calls never show but as a message_bot marker or a command's card.
+            // Tool calls never show but as a message_bot marker, a command's card, or a coding
+            // agent's card.
             case let .tool(tool):
+                if let agent = tool.agent {
+                    return top + agentHeight(for: message, agent: agent, tableWidth: tableWidth, indent: indent)
+                }
                 if let run = tool.run {
                     return top + commandHeight(for: message, run: run, tableWidth: tableWidth, indent: indent)
                 }

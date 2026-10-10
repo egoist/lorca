@@ -1252,6 +1252,13 @@ final class AppStore {
                 if request.isConnect, request.decision == .allowed { request.summary = L("Starting the sign-in…") }
                 message.body = .permission(request)
             case var .tool(tool):
+                if var agent = tool.agent, let question = agent.question, question.isPermission {
+                    agent.question = nil
+                    agent.state = decision == "deny" ? (question.kind == .start ? .denied : .working) : (question.kind == .start ? .starting : .working)
+                    tool.agent = agent
+                    message.body = .tool(tool)
+                    return
+                }
                 guard var run = tool.run, run.state == .asking else { return }
                 run.state = decision == "deny" ? .denied : .running
                 tool.run = run
@@ -1308,6 +1315,67 @@ final class AppStore {
             run.state = state
             run.prompt = nil
             tool.run = run
+            message.body = .tool(tool)
+        }
+    }
+
+    // MARK: - Coding agents
+
+    /// Stops a coding agent, here or on its bot's Runner; its card says so once the Runner has.
+    func stopAgent(chatID: Chat.ID, messageID: Message.ID) async throws {
+        guard !isMock else {
+            finishMockAgent(chatID: chatID, messageID: messageID, state: .stopped)
+            return
+        }
+        _ = try await client.request("coding.stop", ["chat_id": chatID, "message_id": messageID])
+    }
+
+    /// Answers what a coding agent's pane asks with one of the choices it offers.
+    func answerAgent(chatID: Chat.ID, messageID: Message.ID, choice: Int) async throws {
+        guard !isMock else {
+            finishMockAgent(chatID: chatID, messageID: messageID, state: .working)
+            return
+        }
+        _ = try await client.request("coding.answer", ["chat_id": chatID, "message_id": messageID, "choice": choice])
+    }
+
+    /// Types an answer into what a coding agent's pane asks, then Return.
+    func answerAgent(chatID: Chat.ID, messageID: Message.ID, text: String) async throws {
+        guard !isMock else {
+            finishMockAgent(chatID: chatID, messageID: messageID, state: .working)
+            return
+        }
+        _ = try await client.request("coding.answer", ["chat_id": chatID, "message_id": messageID, "text": text])
+    }
+
+    /// A coding agent's transcript, from its Runner: what it was sent, said, and did, or what
+    /// its pane shows.
+    func agentTranscript(chatID: Chat.ID, messageID: Message.ID) async throws -> String {
+        guard !isMock else { return MockData.agentTranscript }
+        struct Transcript: Decodable { var text: String }
+        let data = try await client.request("coding.transcript", ["chat_id": chatID, "message_id": messageID])
+        return try Wire.decoder.decode(Transcript.self, from: data).text
+    }
+
+    /// Brings a coding agent's pane forward on this Runner, in its terminal host.
+    func showAgent(chatID: Chat.ID, messageID: Message.ID) async throws {
+        guard !isMock else { return }
+        _ = try await client.request("coding.show", ["chat_id": chatID, "message_id": messageID])
+    }
+
+    /// Whether this Device runs the bot behind `message`: only there does its pane show.
+    func runsHere(_ message: Message) -> Bool {
+        guard let botID = message.author.botID, let bot = bot(botID), let here = thisDevice else { return false }
+        return bot.runnerID == here.id
+    }
+
+    /// The demo has no Runner: a Stop or an answer settles the card at once.
+    private func finishMockAgent(chatID: Chat.ID, messageID: Message.ID, state: AgentRun.State) {
+        update(messageID, in: chatID) { message in
+            guard case var .tool(tool) = message.body, var agent = tool.agent else { return }
+            agent.state = state
+            agent.question = nil
+            tool.agent = agent
             message.body = .tool(tool)
         }
     }

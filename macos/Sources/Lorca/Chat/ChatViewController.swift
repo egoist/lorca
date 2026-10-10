@@ -736,6 +736,9 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
             case .text:
                 identifier = MessageCellView.identifier
                 cell = dequeue(identifier) { MessageCellView() }
+            case let .tool(tool) where tool.agent != nil:
+                identifier = AgentCellView.identifier
+                cell = dequeue(identifier) { AgentCellView() }
             case let .tool(tool) where tool.run != nil:
                 identifier = CommandCellView.identifier
                 cell = dequeue(identifier) { CommandCellView() }
@@ -852,6 +855,8 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
                 let held = message.queued ? " \(L("Waiting for the bot to finish its step."))" : ""
                 guard let quote = message.replyTo else { return said + held }
                 return "\(said) \(L("In reply to %@: %@", authorName(of: quote.author), quote.text))\(held)"
+            case let .tool(tool) where tool.agent != nil:
+                return AgentCellView.spokenText(agent: tool.agent!, botName: botName(of: message))
             case let .tool(tool) where tool.run != nil:
                 return CommandCellView.spokenText(run: tool.run!, botName: botName(of: message))
             case .tool, .handoff:
@@ -928,6 +933,33 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
                     ? { [weak self] in self?.captureSkill(from: message, in: chatID) } : nil
                 messageCell.onQuoteClick = message.replyTo.map { quote in { [weak self] in self?.reveal(quote.messageID) } }
                 messageCell.onSendNow = { [weak self] in self?.store.sendNow(message.id, in: chat.id) }
+
+            case let .tool(tool) where tool.agent != nil:
+                guard let agentCell = cell as? AgentCellView, let agent = tool.agent else { return }
+                agentCell.configure(
+                    agent: agent, messageID: message.id, botName: botName(of: message), avatar: cardAvatar(for: message),
+                    groupStart: groupStart)
+                agentCell.onDecision = { [weak self] decision in
+                    self?.store.answerPermission(chatID: chat.id, messageID: message.id, decision: decision)
+                }
+                agentCell.onChoice = { [weak self] choice in
+                    try await self?.store.answerAgent(chatID: chat.id, messageID: message.id, choice: choice)
+                }
+                agentCell.onSend = { [weak self] text in
+                    try await self?.store.answerAgent(chatID: chat.id, messageID: message.id, text: text)
+                }
+                agentCell.onStop = { [weak self] in
+                    try await self?.store.stopAgent(chatID: chat.id, messageID: message.id)
+                }
+                agentCell.onShowCommand = { [weak self] in
+                    guard let self, let command = agent.question?.command else { return }
+                    presentAsSheet(CommandSheetViewController(title: L("%@'s command", agent.name), command: command))
+                }
+                // Before it starts there is no transcript to read.
+                let started = agent.state != .checking && agent.question?.kind != .start && !(agent.state == .denied || agent.state == .expired || agent.state == .dismissed)
+                agentCell.onOpen = started ? { [weak self] in
+                    self?.presentAsSheet(AgentTranscriptViewController(chatID: chat.id, messageID: message.id, agent: agent))
+                } : nil
 
             case let .tool(tool) where tool.run != nil:
                 guard let commandCell = cell as? CommandCellView, let run = tool.run else { return }

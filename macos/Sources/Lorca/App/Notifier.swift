@@ -73,6 +73,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             switch message.body {
             case let .permission(request) where request.isPending: message.id
             case let .tool(tool) where tool.run?.state == .asking: message.id
+            case let .tool(tool) where tool.agent?.state == .asking: message.id
             default: nil
             }
         })
@@ -93,6 +94,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         switch message.body {
         case let .permission(request): asks = request.isPending
         case let .tool(tool) where tool.run != nil: asks = tool.run?.state == .asking
+        case let .tool(tool) where tool.agent != nil: asks = tool.agent?.state == .asking
         default: return
         }
         guard asks else { clearPermission(messageID); return }
