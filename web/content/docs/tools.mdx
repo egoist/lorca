@@ -1,6 +1,6 @@
 ---
 title: Tools
-description: What a bot can do on its Runner, including files, search, the shell, the web, and teamwork.
+description: What a bot can do on its Runner, including files, search, the shell, the web, teamwork, and what it brings to you.
 icon: Wrench
 ---
 
@@ -19,10 +19,10 @@ Relative paths resolve in the bot's [working directory](/docs/bots#working-direc
 Commands see the same `PATH` and variables as your terminal. On a Mac or Linux, Lorca reads them from your login shell, whether zsh, bash, or fish, when it starts, so `npm`, `cargo`, and `brew` work even when the app started Lorca. Plugin servers get them too. Restart Lorca after you change your shell's configuration.
 
 <Callout type="warn" title="A bot has your access">
-  Shell commands run as your user and are not limited to the working directory. They can control files, processes, credentials, applications, and the network. Give a bot a description with constraints that match the trust you would give a script you run yourself, and assign bots to a machine you are comfortable with them controlling.
+  Shell commands run as your user and are not limited to the working directory. They can control files, processes, credentials, applications, and the network. Give a bot a description with constraints that match the trust you would give a script you run yourself, and assign bots to a machine you are comfortable with them controlling. A bot's [Access](/docs/access) can turn its shell commands off, or keep its files to reading.
 </Callout>
 
-Before a shell command starts, Lorca parses all of its stages and sends the complete command through [Auto-review](/docs/auto-review). Safe work runs automatically; for risky work, the command's card asks you first. An allowed command retains your user's full access.
+Before a shell command starts, Lorca checks the bot's [Access](/docs/access), then parses all of its stages and sends the complete command through [Auto-review](/docs/auto-review). Safe work runs automatically; for risky work, the command's card asks you first. An allowed command retains your user's full access.
 
 ## The command's card
 
@@ -55,13 +55,27 @@ DeepSeek, Anthropic, ChatGPT, and Grok bots search the web and read pages when t
 
 | Tool | What it does |
 | --- | --- |
-| **Message a bot** | Hands work to a bot outside the current chat. See [Chats](/docs/chats#bots-that-message-each-other). |
+| **Message a bot** | Hands work to a bot outside the current chat, which reports back. See [Chats](/docs/chats#bots-that-message-each-other). |
 | **List teammates** | Sees every bot, its job, its Runner and model, and whether that Runner is online. |
 | **Create and edit bots** | Builds the team: a new teammate, or a change to one's description, model, or working directory. |
+| **Tasks** | Keeps work that takes more than one turn. See [Tasks](/docs/tasks). |
 | **Routines** | Schedules its own recurring work. See [Routines](/docs/routines). |
 | **Memory** | Saves and recalls what it has learned. See [Memory](/docs/memory). |
+| **Skills** | Reads its skills when a task matches, and drafts new ones for you to save. See [Skills](/docs/skills). |
+| **Project** | In a group, reads the project and suggests entries. See [Group chats](/docs/group-chats#the-project). |
 | **Plugins** | Searches the marketplace, asks to install a plugin, and asks you to sign in. See [Plugins](/docs/plugins). |
+| **Coding agents** | Hands a coding job to Claude Code or Codex and follows it. See [Coding agents](/docs/coding-agents). |
+| **Channels** | Listens on Telegram or Slack when you ask. See [Channels](/docs/channels). |
+
+## With you
+
+| Tool | What it does |
+| --- | --- |
+| **Publish an output** | Posts a file or a link it made, with what it checked. See [Outputs](/docs/chats#outputs). |
+| **Leave for review** | Leaves an action or a draft for you to approve later. See [Drafts and reviews](/docs/reviews). |
+| **Ask for a secret** | Asks for a password or a key on a card, and uses it by name. See [Secrets](/docs/secrets). |
+| **Attention** | Reports what needs you, and posts a brief when it coordinates. See [Attention](/docs/attention). |
 
 ## Plugin tools
 
-Every [plugin](/docs/plugins) installed on a Runner makes its tools discoverable to the bots there: creating a GitHub issue, reading a Linear ticket, driving a browser. Lorca loads only the matching tool schemas when a task needs them. Actions that change something go through [Auto-review](/docs/auto-review) first.
+Every [plugin](/docs/plugins) installed on a Runner makes its tools discoverable to the bots there, as far as each bot's [Access](/docs/access) allows: creating a GitHub issue, reading a Linear ticket, driving a [browser](/docs/browser). Lorca loads only the matching tool schemas when a task needs them. Actions that change something go through [Auto-review](/docs/auto-review) first.

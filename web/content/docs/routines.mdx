@@ -1,6 +1,6 @@
 ---
 title: Routines
-description: A routine is a task a bot runs on a schedule, such as a morning brief, an hourly check, or a weekly report.
+description: A routine is a task a bot runs on a schedule, such as a morning brief, an hourly check, or a weekly report, or once, around calendar events, or while a pull request is open.
 icon: CalendarClock
 ---
 
@@ -16,7 +16,19 @@ The bot creates the routine: a name, a schedule, and a prompt it writes as an in
 
 ## Schedules
 
-A routine runs at an interval (every 30 minutes, every 2 hours, every day) or at set times (weekdays at 9:00, the 1st of every month at 8:30). Times are in the Runner's local time. The shortest interval is five minutes.
+A routine runs at an interval (every 30 minutes, every 2 hours, every day) or at set times (weekdays at 9:00, the 1st of every month at 8:30). The shortest interval is five minutes. It can also:
+
+- **Run once** at a date and time: "Remind me on Monday at 9 to renew the certificate." Once it has run, the routine removes itself; the chat keeps the run.
+- **Watch a pull request**: see [below](#pull-request-watches).
+- **Run around calendar events**: see [below](#calendar-events).
+
+### Timezones
+
+A routine keeps the timezone it was made in, the Runner's unless you name another: "every weekday at 9 New York time". Traveling, or moving the Runner to another timezone, leaves its hours as they were, and daylight saving time is handled: a skipped hour doesn't run that day, and a repeated one runs once. When your computer keeps other hours than the routine, its sheet names the routine's timezone, such as "New York time".
+
+### Missed runs
+
+When the Runner was off or asleep at a run's time, the routine either runs once for everything it missed when the Runner is back (**Run once**, the default) or waits for its next time (**Skip**). It never runs once per missed time. Ask the bot to change it.
 
 ## What a run looks like
 
@@ -24,15 +36,42 @@ A run opens with a **Routine · Name** marker in the bot's direct chat. The bot 
 
 You get a notification for a run that says something, like any other reply.
 
+A routine that watches for something, such as an inbox, a feed, or a page, can check first without the model: the bot writes a short check that only reads, and a run starts only when the check finds something new. A quiet hour costs nothing.
+
 <Callout title="Routines and permissions">
-  Nobody is there to answer a permission card during a run. A routine can use shell and plugin actions that [Auto-review](/docs/auto-review) or one of your scoped rules allows; anything that would ask is refused.
+  Nobody is there to answer a permission card during a run. A routine runs the shell and plugin actions that [Auto-review](/docs/auto-review) or your rules allow; anything that would ask waits for your [review](/docs/reviews#waiting-for-review) instead, and the chat says so.
 </Callout>
+
+## Pull request watches
+
+"Watch acme/project#42 and tell me when it changes." The bot follows one pull request through the [GitHub plugin](/docs/plugins) on its Runner, every 10 minutes unless you ask for another interval. It runs only when something changed, such as new commits, comments, a review, or a title, and says what. When the pull request merges or closes, the bot runs one last time and the watch removes itself.
+
+## Calendar events
+
+"Fifteen minutes before each customer call, brief me on the customer." A routine can run a set time before an event starts, at its start, or after it ends, for the events of a Google Calendar account on the Runner, or only those with certain words in them. It runs once for each matching event, with that event. All-day events, events you declined, and focus time are left out. The routine's sheet names the account and the next event it will run for.
+
+One-time routines, watches, and calendar routines belong to your account, so a [shared bot](/docs/templates) and a [workflow](/docs/workflows) carry only repeating routines. To start a routine from another service, see [A routine's webhook](/docs/events#a-routines-webhook).
 
 ## Manage routines
 
-The bot's inspector has a **Routines** section: each routine with its schedule in words, its next run, and a switch that pauses or resumes it. Click one for its prompt, its last run, and **Run Now**, **Pause**, **Edit in Chat**, and **Delete**. The phone shows the same list in the chat's details.
+The bot's inspector has a **Routines** section: each routine with its schedule in words, its next run, and a switch that pauses or resumes it. The symbol says what places its runs: a clock, an alarm for a one-time routine, a pull request, or a calendar. Click one for its sheet: its state, the schedule, the next run, **Missed runs**, the last check and run, a **Limits** row, the prompt and the check, and **Run Now**, **Pause**, **Edit in Chat**, and **Delete**. The phone shows the same list in the chat's Details; ask the bot in the chat to edit a routine there.
 
-Routines run on the bot's Runner, so that computer has to be awake. A run that was due while it slept happens when it wakes.
+Routines run on the bot's Runner, so that computer has to be on. **Settings › Devices** says whether a Runner keeps Lorca running in the background (see [Command line](/docs/cli#a-headless-runner)).
+
+### When something goes wrong
+
+A routine that needs you says so first in its row, in orange while you have to act:
+
+| It says | What to do |
+| --- | --- |
+| **Waiting for Runner** | The bot's computer is offline. It runs when that computer is back. |
+| **Can't connect** | It couldn't reach a service or the AI provider. A check tries again after five minutes, then less often, up to every six hours. |
+| **Sign-in failed** | A service or the provider refused its sign-in. Sign in again before it happens three times. |
+| **Needs sign-in** | Three sign-ins in a row failed, so it paused. Reconnect the provider or sign in to the plugin, then **Resume**. |
+| **Check failed** | Its check, or a watch's or calendar's read, failed. The sheet says why; ask the bot to fix it. |
+| **Limit reached** | It reached one of its [limits](/docs/limits). Raise the limit and resume it there. |
+
+The sheet explains what happened and how to fix it.
 
 ## When you are away
 

@@ -1,0 +1,46 @@
+---
+title: Channels
+description: A bot listens in your Telegram groups or Slack channels and answers people in their thread, as its own bot.
+icon: MessagesSquare
+---
+
+A **channel** has a bot listen on a Telegram or Slack account: in the groups and channels that account's bot is in, to every message, to mentions and replies, or to hashtags such as #feedback. Each message it takes starts the bot's work with the channel's task, and the bot answers in the thread as the account's own bot, never as you.
+
+Your Runner reads Telegram and Slack itself, so nothing needs a public address or a server of yours.
+
+## Connect an account
+
+Accounts are added on a computer, from the [marketplace](/docs/plugins#the-marketplace) or **Settings › Plugins**. A Runner can have several, each with its own name.
+
+- **Telegram:** make a bot with [BotFather](https://t.me/BotFather) (`/newbot`), add a **Telegram** account, and paste the bot's token. In a group, a Telegram bot sees only replies and commands unless it is an admin or its privacy mode is off (`/setprivacy` in BotFather, then add it to the group again). The channel's sheet says when that is in the way.
+- **Slack:** the [Slack account](/docs/plugins#named-accounts) you sign in with, whose Slack app has a bot user and Socket Mode on. Its setup takes the app's Bot User OAuth Token (`xoxb-…`) and an app-level token (`xapp-…`); the fields list the scopes and events the app needs.
+
+Then add the bot to the Telegram group or invite it to the Slack channel.
+
+## Set up a channel
+
+Ask the bot:
+
+> Listen in the Acme Community Telegram group for mentions, replies, and #feedback. File each one as a GitHub issue and thank the person with its number.
+
+The bot sets up the channel: the account, what it listens to, the task, and optionally which chats. Its direct chat's inspector then has a **Channels** section after Routines (on the phone, in Details): each channel with what it takes, and a switch that pauses it.
+
+## Conversations
+
+Each Telegram chat or topic and each Slack thread is a **conversation** in your chat list, under its title, with the bot's avatar: "Feedback Collector on Telegram". It shows the people there by name and the bot's replies, which add no unread mark. You can write in it too; the bot answers you in Lorca, or in the thread when you ask it to. Deleting a conversation deletes only its transcript.
+
+A conversation starts in the same [section](/docs/chats#organize-chats) as the bot's direct chat, and muted if that chat is.
+
+## What people can and can't do
+
+The bot reads people's text and photo captions, and leaves out other bots, edits, joins, and anything sent before the channel started listening. What people write is information for the bot, never an instruction: it can't approve an action, change the bot's settings, or open another channel. The bot's replies go through its [Access](/docs/access), [Auto-review](/docs/auto-review), and the account's [call limit](/docs/limits#plugin-call-limits), and never carry a [secret](/docs/secrets).
+
+## When a message holds
+
+If the bot's work on a message fails or is cut off, later messages wait. The channel reads **On hold**, [Attention](/docs/attention) lists it, and its sheet offers **Try Again** and **Skip**. **Stop** in a conversation ends the work on that message and the channel goes on to the next. The switch pauses the channel: messages that arrive meanwhile are left out.
+
+Click a channel for its sheet: **Listening**, its state, the account, the chats, what it takes, the task, the latest conversations, and **Remove…**, which keeps the conversations.
+
+## The feedback collector
+
+The **Feedback collector** [workflow](/docs/workflows) sets this up in one go: a Telegram account and GitHub, the repository, the Feedback Collector bot, a digest each morning, and a channel for mentions, replies, and #feedback that files or updates an issue and thanks the person in their thread. Its sample drafts a digest and a reply, and the channel starts listening when you turn the workflow on.

@@ -1,0 +1,41 @@
+---
+title: Coding agents
+description: A bot hands a coding job to Claude Code or Codex on its Runner, follows its work, and reports back with the diff.
+icon: CodeXml
+---
+
+A bot can hand a coding job to **Claude Code** or **Codex** on its Runner and supervise it: the agent works on its own, the bot reads what it does, sends it follow-ups, and tells you when it is done, with the diff and the pull request.
+
+## Start one
+
+Ask the bot:
+
+> Have Claude Code fix the flaky login test in ~/dev/app, and open a pull request.
+
+The Runner needs Claude Code or Codex installed, as your terminal finds it. Without a preference the bot uses Claude Code, else Codex. Starting one needs **Shell commands** in the bot's [Access](/docs/access), and goes through [Auto-review](/docs/auto-review): when it asks, the card reads "Developer wants to start Claude Code on Workbench" with **Allow once**, **Always allow**, and **Deny**.
+
+In a git repository the agent never works in your checkout. It gets a worktree of its own in Lorca's folder, on a new branch made from the repository's current commit, named after the job. A later job can go on in the same branch. A folder that isn't a repository is worked in as it is.
+
+## Where it runs
+
+- With Herdr running on the Runner, the agent runs in a pane of a Herdr workspace of its own.
+- Else with Luvus running, in a Luvus workspace.
+- Else Lorca runs it in the background.
+
+In a pane you can watch it and type into it yourself.
+
+## What it may do
+
+Every command the agent runs goes through the bot's Access and Auto-review, as the bot's own commands do. Commands that only read, and work inside its worktree, run at once; a push or a deploy is weighed against what you asked for. When Auto-review asks, the agent's card reads "Claude Code wants to run a command" with the command and the same answers, from any of your devices. When the agent itself asks something in its pane, the card reads "Claude Code asks", with its choices or a field for your **Answer**.
+
+A bot can give an agent [secrets](/docs/secrets) it saved for commands, such as `NPM_TOKEN` to publish a package. An agent that holds secrets always runs in the background, never in a pane where they could show.
+
+## The card
+
+The agent's card stays in the chat: its name, what it was asked, how it stands (Starting, Working, Quiet, Done, Ended, Failed, or Stopped) with its branch, and while it works its latest lines. Click what it works on to read its whole transcript; on the Runner you can also show its pane. **Stop** on the card ends it.
+
+## When it is done
+
+When the agent finishes, Lorca posts its work in the chat as the bot's [outputs](/docs/chats#outputs): the diff of everything it changed, the pull request it opened, and the test logs and before-and-after screenshots it saved as proof. Then the bot reads what the agent said and tells you, or sends it a follow-up. An agent that goes ten minutes without anything new, or that exits, wakes the bot too.
+
+**Stop** in the chat stops the chat's coding agents along with the bot's work. Quitting Lorca stops the agents it runs and leaves the ones in a pane running. The agent's run time counts toward the [limits](/docs/limits) of the turn that started it.

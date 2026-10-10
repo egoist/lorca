@@ -1,6 +1,6 @@
 ---
 title: Chats
-description: Direct chats with one bot, attachments, dictation, mentions, replies, and how bots message each other.
+description: Direct chats with one bot, attachments, dictation, mentions, replies, Stop, outputs, how bots hand work to each other, and how to organize the sidebar.
 icon: MessageCircle
 ---
 
@@ -10,7 +10,7 @@ Every bot has one **direct chat** with you. It is always that bot that answers t
 
 Type and press Return. While a bot works, its avatar shows a breathing green dot in the sidebar and the chat shows what it is doing in a shimmering line: "Thinking…", "Running command: Install dependencies…", "Searching the web…", "Using GitHub…". Replies arrive a paragraph at a time.
 
-Send another message while the bot works to steer it. Its current model step and tools—including a running command—finish first; then the bot sees your new instruction before its next step. Until then your message waits, dimmed, with **Send now** under it: click it to have the bot read it right away. A command the bot is running moves to the background and keeps going, and the bot can check on it or stop it. To end the bot's work instead, press **Stop** in the desktop app.
+Send another message while the bot works to steer it. Its current model step and tools—including a running command—finish first; then the bot sees your new instruction before its next step. Until then your message waits, dimmed, with **Send now** under it: click it to have the bot read it right away. A command the bot is running moves to the background and keeps going, and the bot can check on it or stop it. To end the bot's work instead, press [Stop](#stop) in the desktop app.
 
 You do not see tool calls in the transcript. You see what the bot says before and after its work.
 
@@ -36,21 +36,57 @@ Type `@` and a bot's name. In a direct chat a mention is a reference the bot act
 
 To answer a particular message, right-click its bubble and choose **Reply**, or swipe it to the left on your phone. The composer shows what you are replying to; press Escape or its × to drop it. Your message carries a quote of the original, and the bot reads it. In a group, the bot you reply to speaks first, after any bot you mention. Click a quote to jump back to the message it came from.
 
+## Stop
+
+**Stop** in the desktop app's composer, or **Chat › Stop Responding** (⌘. on a Mac), ends the bot's work in this chat, on whichever computer it runs:
+
+- The reply ends, keeping the words it had shown.
+- Its tool calls end. One that hasn't ended 15 seconds later is cut off, and the bot is told it may have done part of its work. So a turn ends within about 15 seconds, whatever its tools do.
+- Its commands stop, except those [running in the background](/docs/tools#servers-and-long-builds): the chat names the ones still running, and **Running tasks** stops them.
+- [Coding agents](/docs/coding-agents) in the chat stop, and so does a run of a recorded [browser workflow](/docs/browser#record-a-workflow). An open browser stays open.
+- Work the bot handed to other bots stops too, on any computer, and reports back "Stopped before finishing."
+- An email or Slack message it was still writing isn't kept. [Draft cards](/docs/reviews) already in the chat stay for you.
+
+Stop ends a [routine](/docs/routines)'s run the same way, and the run still counts. In a [channel](/docs/channels)'s conversation, Stop ends the work on that message and the channel goes on to the next one. A Runner that is offline stops as soon as it reconnects.
+
+The phone has no Stop for a whole turn; its **Running tasks** stop one command at a time.
+
+## Outputs
+
+When a bot makes a file you asked for, such as a report, an export, or test results, or a document at a link, it publishes it in the chat as an **output**: the file's tile, the link, and what the bot checked, such as "Test result · Passed". The check is the bot's own claim: **Passed**, **Failed**, or **Not verified**.
+
+The inspector lists the chat's outputs, the latest three with **View all** (on the phone, in the chat's Details). Click one for a preview, the check, every version, **Open**, and **Save As…** (**Share…** on the phone). When the bot makes a new version, the old ones stay. Outputs reach every device encrypted, and a [task](/docs/tasks) can cite one as evidence.
+
 ## Bots that message each other
 
-A bot can message any bot outside the current chat. When it does:
+A bot can hand work to any bot outside the current chat, with what it needs: the context, what to deliver, and how to tell it is done. When it does:
 
 - The chat you are in shows a **Messaged ◉ Scout** marker.
-- Scout's own direct chat with you shows **Message from ◉ Chef**, and Scout answers there.
+- Scout's own direct chat with you shows **Message from ◉ Chef** with the request, and Scout works there.
+- When Scout is done, the chat that asked gets **Message from ◉ Scout** with a line about the result (click it to read the whole report), and Chef goes on with it.
 
-So every handoff is visible in a chat you can read. After eight bot-to-bot hops with no message from you, bots stop messaging, so two of them cannot loop.
+So every handoff is visible in a chat you can read. A handoff to a bot whose Runner is offline waits and runs when that computer is back. One that comes back blocked or failed shows in [Attention](/docs/attention); the bot that asked can send a follow-up. After eight bot-to-bot hops with no message from you, bots stop messaging, so two of them cannot loop.
 
 ## Unread counts and notifications
 
 The sidebar shows an unread pill for replies you have not seen. Reading a chat on one device clears it on the others.
 
-When a bot finishes a reply in a chat you are not looking at, the desktop app posts a notification and your phone gets a push. Push contents are encrypted; Apple and Google only see "New reply".
+When a bot finishes a reply in a chat you are not looking at, the desktop app posts a notification and your phone gets a push. Push contents are encrypted; Apple and Google only see "New reply". While you have a chat open in front of you on a computer, your phone gets no push for it.
 
 ## Organize chats
 
-Right-click a chat in the sidebar to pin, rename, or delete it. Deleting a chat removes its messages and attachments from the relay and from every device.
+Right-click a chat in the sidebar to pin, rename, mute, hide, move it to a section, or delete it. On the phone, long-press it. Deleting a chat removes its messages and attachments from the relay and from every device.
+
+### Sections
+
+Group chats under headings of your own, such as Work and Home. Choose **File › New Section…**, or **Move to Section › New Section…** in a chat's menu (on the phone, **New Section** in the New menu). Drag chats onto a section in the desktop app, or use **Move to Section**. A section's header renames it, moves it up or down, or deletes it, which moves its chats back to **Chats**. Sections and their folding sync to every device.
+
+The sidebar lists pinned chats first, then each section, then **Chats** for the chats in no section, then **Hidden**.
+
+### Hidden chats
+
+**Hide** moves a chat to **Hidden** at the bottom of the sidebar, folded. Its bots keep working there, it keeps its unread count, and search still finds it. **Show in Sidebar**, pinning it, or moving it to a section brings it back.
+
+### Muted chats
+
+**Mute** quiets a chat **For 1 Hour**, **For 8 Hours**, **For 1 Week**, or **Always**. A muted chat sends no notifications or phone pushes on any device, whatever it is about, and stays out of the app's badge. Its row shows a crossed-out bell and keeps its unread count, and [Attention](/docs/attention) still lists what waits in it. **Unmute** turns it back on.

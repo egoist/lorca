@@ -1,0 +1,43 @@
+---
+title: Limits
+description: Cap what a bot's turns, tasks, and routines may spend, and how often bots call a plugin's service.
+icon: Gauge
+---
+
+Limits stop work before it costs more than you meant: a turn that runs too long, a routine that keeps spending, a task that takes more tokens than it's worth. A plugin's call limit keeps bots from calling a service faster than it allows.
+
+## What you can limit
+
+| Limit | What counts |
+| --- | --- |
+| **Spending** | Dollars, at the provider's published API rates. |
+| **Tokens** | Tokens sent to and received from the model. |
+| **Run time** | Minutes, including waits for the model, the plugins, and your answers. |
+| **Retries** | Requests sent again after the provider failed. |
+| **Plugin calls** | Calls to plugin tools. |
+
+Leave a field empty for no limit. The Limits sheet shows what the work has used beside each.
+
+## Where limits apply
+
+- **A bot's direct chat:** the bot's inspector has a **Limits** row under Runs with, after Spent (on the phone, in Details). Each new turn in that chat stops when it reaches one of them. Work another bot hands to this bot counts here too.
+- **A task:** the task's sheet has a **Limits** row. All of the task's runs count together; when it reaches a limit, the task is blocked until you resume it.
+- **A routine:** the routine's sheet has a **Limits** row under Schedule. All its runs and checks count together; when it reaches a limit, it shows **Limit reached** and doesn't run until you resume it.
+
+Limits live on the bot's Runner; a bot moved to another Runner starts without them.
+
+## When work stops
+
+A turn that reaches a limit stops at its next step, and the chat says so: "Stopped at the token limit. Raise it in Limits to resume." The Limits row reads **Limit reached** in orange, and the sheet names the limit with **Resume**. Raise the limit and choose **Resume** to go on from where it stopped. Without raising it, Resume asks first, then gives the work its limits again in full.
+
+A turn cut off by a restart of its computer reads **Interrupted** and waits for you, since it may have done part of its work. A restart never resets a limit.
+
+## Prices
+
+Spending counts at the provider's API rates. Turns on a ChatGPT, Grok, or OpenCode Go subscription count what they would cost at those rates, and the inspector marks the figure "est.". A custom provider's price is unknown, so the inspector shows "Price unknown" and a spending limit stops its turns at once; cap those with tokens or run time instead.
+
+## Plugin call limits
+
+All bots on a Runner share each plugin account's call limit: 60 calls a minute and 4 at once to start. A plugin's sheet has a **Call limit** row under Status that opens it: how many **Calls** every so many seconds, and how many **At once**. For a service with several [accounts](/docs/plugins#named-accounts), **Applies to** sets it for **This account** or for all of the service's accounts.
+
+When a service asks Lorca to slow down, the row reads "Waiting until" a time, and later calls wait until then. A call is never sent twice because of it. On the phone, a plugin's screen sets its account's limit; the limit for a whole service is set on a computer.

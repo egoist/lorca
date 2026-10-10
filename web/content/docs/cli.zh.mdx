@@ -46,6 +46,9 @@ irm https://lorca.app/install-cli.ps1 | iex
 | `lorca mcp …` | 管理这台电脑自己的 MCP 服务器；见 [MCP 服务器](#mcp-服务器)。 |
 | `lorca chats list` | 列出所有聊天：每个聊天的 ID 和智能体，以及群聊的负责人。 |
 | `lorca chats set-owner <group> <bot>` | 把某个智能体设为群聊的[负责人](/zh/docs/group-chats#负责人)。群聊用标题或 ID 指定，智能体用名字或 ID 指定。 |
+| `lorca tasks list` | 列出[任务](/zh/docs/tasks)；`--chat-id`、`--owner-bot-id` 和 `--state` 可以缩小范围。`lorca tasks get <id>` 查看其中一个。 |
+| `lorca tasks create`、`update`、`run` | 用一个 JSON 对象新建、修改或开始一个任务，`-` 表示从标准输入读取。需要 `lorca serve` 正在运行。 |
+| `lorca events …` | 管理这台 Runner 的事件订阅和网关；见[Webhook 与事件](/zh/docs/events)。 |
 | `lorca marketplace reload` | 立即向 lorca.app 检查有没有更新的市场。Lorca 启动时、应用连接时，以及你或智能体浏览市场时也会自己检查，最多每小时一次，所以新的插件和智能体无需更新应用就能用上。 |
 | `lorca models reload` | 立即向 lorca.app 检查有没有更新的模型目录。Lorca 启动时和应用连接时也会自己检查，最多每小时一次，所以新模型无需更新应用就能用上。 |
 | `lorca update` | 立即安装最新版本。正在运行的 `lorca serve` 会在没有智能体工作时重启到新版本。`--check` 只告诉你有没有新版本；`--auto off` 关闭自动更新，`--auto on` 重新打开。 |
@@ -113,6 +116,6 @@ lorca service install
 
 ## 文件
 
-一切都在 `~/.lorca/` 下，只有你的用户可读：身份和机器密钥、服务商凭据、设置、聊天、附件、插件、`mcp.json` 里你自己的 MCP 服务器、`catalog.json` 里最近一次获取的模型目录、`marketplace.json` 里最近一次获取的市场、`update.json` 里最近一次的更新检查、`serve-token` 里应用和 `lorca` 连接正在运行的 `lorca serve` 所用的令牌（网页连不上它），以及每个智能体一个的工作区文件夹（里面有它的记忆）。
+一切都在 `~/.lorca/` 下，只有你的用户可读：身份和机器密钥、服务商凭据、设置、聊天、附件、插件、`mcp.json` 里你自己的 MCP 服务器、`catalog.json` 里最近一次获取的模型目录、`marketplace.json` 里最近一次获取的市场、`update.json` 里最近一次的更新检查、`serve-token` 里应用和 `lorca` 连接正在运行的 `lorca serve` 所用的令牌（网页连不上它）、你的[技能](/zh/docs/skills)、智能体索要的[密钥](/zh/docs/secrets)、智能体的[浏览器配置文件](/zh/docs/browser)、[编程智能体](/zh/docs/coding-agents)的 worktree 和记录，以及每个智能体一个的工作区文件夹（里面有它的记忆）。技能、密钥、反馈，以及任务、审核和项目的记录，都用你的账户密钥加密。
 
 macOS 应用把服务的日志写到 `~/Library/Logs/Lorca/cli.log`。使用 `lorca service` 时，日志在 macOS 上是 `~/Library/Logs/Lorca/serve.log`，在 Linux 上用 `journalctl --user -u lorca` 查看，在 Windows 上是 `~/.lorca` 里的 `serve.log`。

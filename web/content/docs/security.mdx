@@ -15,7 +15,7 @@ Creating an identity makes a 32-byte secret on your first Device. Everything els
 
 ## What is encrypted
 
-Everything with meaning: bot names and descriptions, chat titles, messages, attachments, device names, provider credentials, and the contents of push notifications. Each is encrypted on your device with your account key (XChaCha20-Poly1305) before upload. Work sent to a bot on another computer is sealed to that computer's public key, so only it can open the job.
+Everything with meaning: bot names and descriptions, chat titles, messages, attachments, device names, provider credentials, skills, tasks, group projects, items waiting for review, the Attention list, and the contents of push notifications. Each is encrypted on your device with your account key (XChaCha20-Poly1305) before upload. Work sent to a bot on another computer, an answer to a secret's card, and an [event](/docs/events) from your gateway are sealed to that computer's public key, so only it can open them.
 
 ## What the relay sees
 
@@ -35,6 +35,10 @@ A pairing code carries a one-time public key. The new device sends its keys seal
 
 Any paired computer can pair a new device. Every paired device shows in your device list, one that never says what it is as **Unknown Device**, so you can unpair a device you don't recognize.
 
+## Shared links
+
+A bot you [share as a link](/docs/templates) is encrypted with a key of its own, which is part of the link after the `#`. Browsers never send that part, so the relay and lorca.app store and serve ciphertext they can't open; the page decrypts it in the browser of whoever opens the link. Anyone with the whole link can read the template, and revoking the link deletes it from the relay. A template saved as a file is not encrypted.
+
 ## Unpairing
 
 Unpairing a device makes the relay refuse its key for good. The device deletes its keys, credentials, and chats the next time it connects.
@@ -49,13 +53,20 @@ A relay also lets go of an account nothing has touched for a year: no device con
 
 - Keys, credentials, and chats are files under `~/.lorca/`, readable only by your user.
 - Bots run as your user and shell commands retain that user's full computer access after Auto-review allows them. See [Tools](/docs/tools).
-- Plugin secrets and sign-ins stay on the Runner where the plugin is installed.
+- A bot's [Access](/docs/access) limits which plugins and tools it may use, and can turn off its file and shell tools. It limits Lorca's tools; it is not a sandbox of the operating system. A bot with shell access can reach whatever your user can, so a bot that must be kept apart belongs on a Runner of its own.
+- Plugin secrets and sign-ins stay on the Runner where the plugin is installed, and so do a bot's [browser profiles](/docs/browser) and their sign-ins.
+- [Secrets](/docs/secrets) a bot asks for are encrypted on its Runner, used by name, and kept out of chats, drafts, and what the AI provider sees.
+- The local service only takes clients on this computer that hold its token (`serve-token` in `~/.lorca`), so a web page you visit can't reach it.
 - Bot memory is scrubbed of anything that looks like a credential before it is written.
 - The desktop app talks only to its own local service on `127.0.0.1`. That service is the only thing that talks to the relay and to AI providers.
 
 ## What AI providers see
 
-A bot's turn sends the conversation, its description, and its tool results to the provider you connected, under that provider's terms. That traffic goes straight from the Runner to the provider, never through the relay.
+A bot's turn sends the conversation, its description, and its tool results to the provider you connected, under that provider's terms. That traffic goes straight from the Runner to the provider, never through the relay. Saved [secrets](/docs/secrets) are replaced by their names before a tool's result reaches the provider.
+
+## Webhooks
+
+Lorca's relay takes no webhooks from other services, since they arrive unencrypted. Events reach a bot through a [gateway](/docs/events) you run on one of your own computers, which checks the service's signature and hands the event to Lorca to encrypt.
 
 ## Updates
 

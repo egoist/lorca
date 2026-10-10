@@ -16,6 +16,17 @@ The bots in a group can run on different computers. Lorca carries each turn to t
 
 Give a group a description, and every bot in it reads it on each turn: what the room is for, what is in scope, what done looks like. Set it under **Group** in the chat's inspector with **Edit…** beside Description, or in **Group Info** on your phone.
 
+## The project
+
+A group's **Project** section, under Group in the inspector (in the group's Details on the phone), holds what every bot in it should know and keep in view: a brief, goals, constraints, decisions, facts, links, and files. Every bot sees a short index of it on each turn and reads an entry when the work needs it, so it outlasts a long chat being summarized. It belongs to this group alone; each bot's own [memory](/docs/memory) stays separate.
+
+- **Add:** the **+** menu adds a brief, goal, constraint, decision, fact, link, or file.
+- **Suggestions:** bots can suggest an entry. It reads "Suggested by" the bot until you **Accept** it.
+- **Links:** a bot checks a link again before relying on what it said, after a day by default. The entry says when it was last checked; **Check Now** checks it at once, and one that couldn't be opened is marked in orange.
+- **Edits:** click an entry to change or **Remove…** it. When two devices changed it at the same time, it is marked in orange: **Keep This Version** picks one.
+
+The group can also have its own [skills](/docs/skills), which every bot in it can use there, and [tasks](/docs/tasks), each owned by one of its bots.
+
 ## How turns work
 
 When you post a message, each bot is offered a turn, one at a time:

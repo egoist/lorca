@@ -1,0 +1,43 @@
+---
+title: Share a bot
+description: Share a bot as a link or a file, with the skills, routines, and memories you pick, and make a new bot from one.
+icon: Share2
+---
+
+Any bot can be shared as a **template**: its profile and the skills, routines, memories, and plugins you pick. Whoever opens it makes a new bot of their own from it, on their own computer, with their own AI provider and sign-ins.
+
+## What a template holds
+
+| Part | What goes in |
+| --- | --- |
+| **Profile** | The name, the description (the bot's instructions), its symbol, and its color. Always included. |
+| **Skills** | The [skills](/docs/skills) you check. |
+| **Routines** | The repeating [routines](/docs/routines) you check, with their schedules and tasks. |
+| **Memories** | Lines of the bot's [memory](/docs/memory) and its topic notes. Never its daily log. |
+| **Plugins** | Which services the bot works with, such as GitHub. Never your account or sign-in. |
+
+A template never holds your provider or model, the bot's computer or folder, its avatar image, or a sign-in. Anything that looks like a key or a password is removed. Rows that still deserve a look before you share are marked at their end, such as an email address in orange.
+
+## Share it
+
+In the desktop app, open the bot's direct chat and choose **File › Share as Template…**, or right-click the chat in the sidebar. On the phone, tap **Share as Template** in the chat's Details. Check what to include, then:
+
+- **Share Link** makes a link like `https://lorca.app/t/…`, copied for you. The template is encrypted with a key that is part of the link, after the `#`, which browsers never send, so neither lorca.app nor the relay can read it. Anyone you give the link to can.
+- **Save as File…** saves a `.lorca-template` file. A file is not encrypted; keep it as private as what is in it.
+
+Sharing the same bot again opens with its link and **Update Link**, which keeps the address.
+
+**Settings › Shared Links** lists your links with their bots and when each was last updated. A link's menu has **Copy Link** and **Revoke Link…**; a revoked link says so to whoever opens it.
+
+## Open a link
+
+A shared link opens a page on lorca.app that shows the bot: its look, name, and description, and its routines, plugins, skills, and memories. **Open in Lorca** opens it in the app, or the page points to the download.
+
+## Make a bot from a template
+
+Choose **File › New Bot from Template…** (on the phone, **New Bot from Template…** in the chat list's New menu), and paste a link or choose a file. Then pick:
+
+- **Name**, the **Runner** it runs on, and the **Provider**.
+- For each plugin it works with, which of the Runner's accounts it uses. A plugin the Runner doesn't have yet must be installed and signed in to first; the sheet says what is missing.
+
+**Create Bot** makes the bot and opens its chat. Its routines start paused. The new bot is yours alone: it shares nothing with the bot it came from.

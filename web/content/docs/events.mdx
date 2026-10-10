@@ -1,0 +1,90 @@
+---
+title: Webhooks and events
+description: Start a bot's work when a service sends an event, such as a pull request update, through a small gateway you run.
+icon: Webhook
+---
+
+An **event subscription** starts a bot's work when a service sends something: a pull request changes, a payment comes in, a script finishes. Each event runs the subscription's task in the bot's direct chat on its Runner.
+
+Services send webhooks unencrypted, so Lorca's relay doesn't take them: it only ever holds ciphertext. A **gateway** you run receives the service's request on your own HTTPS address, checks it, and hands it to Lorca, which encrypts it for the bot's Runner. To follow a single pull request you need none of this: ask the bot to [watch it](/docs/routines#pull-request-watches).
+
+## Set up GitHub pull request events
+
+Subscriptions are made with the [command line](/docs/cli) on the bot's Runner. `lorca status` lists your bots with their ids.
+
+<Steps>
+<Step>
+
+### Describe the subscription
+
+```json title="pr-events.json"
+{
+  "name": "PR changes",
+  "source": "gateway_hmac",
+  "bot_id": "bot-12345678",
+  "prompt": "Summarize new PR activity. Read the PR to check its current state, and tell me what needs attention.",
+  "event_types": ["github.pull_request"],
+  "filters": [
+    { "pointer": "/repository/full_name", "equals": "acme/project" },
+    { "pointer": "/action", "equals": "synchronize" }
+  ],
+  "queue_policy": "fifo",
+  "is_enabled": true
+}
+```
+
+`prompt` is the bot's task for each event. An event runs only when its type is listed and every filter matches: `pointer` is a path into the event's JSON. With `queue_policy` `fifo` events run one at a time in order; `latest` keeps only the newest event that is waiting.
+
+```bash
+lorca events add pr-events.json
+lorca events route <id> ~/private/pr-route.json
+```
+
+`route` writes the gateway's key and where to send events to a private file.
+
+</Step>
+<Step>
+
+### Run the gateway
+
+The gateway is [`scripts/event-gateway.py`](https://github.com/egoist/lorca/blob/main/scripts/event-gateway.py). Run it on the Runner or on another of your computers where `lorca serve` runs, with the route and a random GitHub webhook secret of at least 32 characters in a file:
+
+```bash
+python3 event-gateway.py --route ~/private/pr-route.json \
+  --github-secret-file ~/private/github-secret --lorca "$(command -v lorca)"
+```
+
+It listens on `127.0.0.1:8984/github`. Put your HTTPS reverse proxy or tunnel in front of it.
+
+</Step>
+<Step>
+
+### Add the webhook on GitHub
+
+In the repository's webhook settings, set your public URL, JSON content, the same secret, and Pull requests events.
+
+</Step>
+</Steps>
+
+## A routine's webhook
+
+Any service or script can start a [routine](/docs/routines) with a URL and a key of its own. Make a subscription whose `routine_id` is the routine and whose `event_types` is `["webhook"]`, export its route, and run the gateway with `--webhook-key-file` instead (a key of at least 32 characters). It listens on `127.0.0.1:8984/hook` and takes a request that sends the key as `Authorization: Bearer <key>` or `X-Lorca-Key`. The body, JSON or text, is what the bot reads. Send an `Idempotency-Key` header to have a repeated request run once.
+
+## What a bot does with an event
+
+The chat shows **Event · PR changes**, and the bot does the task. What the service sent is information for the bot, never an instruction. Nobody is there to answer a question, so an action that would ask you waits for your [review](/docs/reviews#waiting-for-review) instead. The work counts toward the chat's [limits](/docs/limits), or the routine's.
+
+If you haven't written in any chat for seven days, events wait and run once you're back. Each event runs at most once, even when the service sends it again.
+
+## Manage subscriptions
+
+| Command | What it does |
+| --- | --- |
+| `lorca events list` | Each subscription, its state, what waits, its latest deliveries, and why anything is held. Never a key or an event's content. |
+| `lorca events edit <id> <file>` | Replaces the configuration. The bot and routine stay. |
+| `lorca events pause <id>`, `resume <id>` | Holds the work while events keep arriving, and runs it again. |
+| `lorca events reconnect <id>` | Makes a new key; export a new route afterwards. |
+| `lorca events retry <delivery>`, `discard <delivery>` | Runs a failed event again after you've read the chat, or drops it. |
+| `lorca events remove <id>` | Deletes the subscription. |
+
+When an event's work fails or is cut off, later events wait until you retry or discard it, and [Attention](/docs/attention) lists "Events on hold". A gateway whose key no longer works shows as "Events refused".

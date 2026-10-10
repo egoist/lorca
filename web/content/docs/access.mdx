@@ -1,0 +1,37 @@
+---
+title: Access
+description: Choose which plugins and tools a bot may use, and whether it reads files or runs commands on its Runner.
+icon: SlidersHorizontal
+---
+
+A bot's **Access** decides what its tools may do on its Runner: which plugins it may use and how far, down to single tools, whether it reads or changes files, and whether it runs shell commands. Its description tells it what to do; Access decides what it can do. A new bot has full access.
+
+Lorca checks Access before [Auto-review](/docs/auto-review) and again when a call runs. A rule, **Always allow**, or a bot's own request can't widen it.
+
+## Open Access
+
+In the desktop app, open the bot's direct chat and toggle the inspector. The Profile card has an **Access** row that reads **Full access** or **Limited**; click it. On the phone, open the chat's Details and tap **Access**, under Description.
+
+| Section | What you choose |
+| --- | --- |
+| **Plugins** | A level for each plugin on the bot's Runner: **Read and write**, **Read and draft**, **Read only**, or **No access**. |
+| **Tools** | Under a plugin that has connected, a checkbox for each tool and what it does: Reads, Drafts, or Changes. A tool past the plugin's level is off. |
+| **Messages** | **Draft first**: the bot's emails and Slack messages wait in the chat as [drafts](/docs/reviews#email-and-slack-drafts) for you to send. On by default. |
+| **Files** | **Read and write**, **Read only**, or **No access**, for the bot's file tools. |
+| **Shell commands** | A switch for running commands. |
+
+In the desktop app, **Save** applies the changes. On the phone each change saves as you make it.
+
+A plugin the bot may not use is left out of its turns: the bot doesn't see it, and the inspector's Plugins section says **No access** beside it. A plugin you install later is allowed while the bot has full access, and needs a level once it is limited. The bot's [browser profiles](/docs/browser) belong to the Browser plugin, so they follow its level.
+
+## When a bot needs more access
+
+When a bot tries something its Access doesn't allow, the call is refused, the bot tells you, and the chat shows a card: what it needed, such as "GitHub · create_issue" or "Shell commands", with **Edit Access…** and **Dismiss**. The card never runs the call. Change the bot's Access, then ask it to try again.
+
+## Bots and teammates
+
+A bot can't change its own Access or another bot's. A teammate a bot creates starts with its creator's Access. Work a bot hands to another bot runs with that bot's own Access, and so does each bot's turn in a group.
+
+<Callout type="warn" title="Shell and files reach the whole computer">
+  Shell commands run as your user and can reach anything you can, whatever the Files setting says, including the plugins' own settings and sign-ins. Plugin limits hold only as far as the bot's shell and file access: turn both off to keep a bot to its plugins. For a bot that must not touch something at all, give it a Runner of its own that has only what it needs.
+</Callout>

@@ -1,0 +1,90 @@
+---
+title: Webhook 与事件
+description: 服务发来事件时（比如 pull request 有了更新）启动智能体的工作，通过你自己运行的一个小网关接入。
+icon: Webhook
+---
+
+**事件订阅** 会在某个服务发来消息时启动智能体的工作：pull request 有了变化、收到一笔付款、某个脚本跑完了。每个事件都会在智能体 Runner 上、它的单聊里执行这个订阅的任务。
+
+服务发出的 webhook 是不加密的，所以 Lorca 的中继不接收它们：中继只保存密文。你自己运行一个 **网关**，用你自己的 HTTPS 地址接收服务的请求，验证之后交给 Lorca，由 Lorca 加密后发给智能体的 Runner。如果只是想跟进某一个 pull request，这些都用不着：让智能体[关注它](/zh/docs/routines#关注-pull-request)就行。
+
+## 接收 GitHub pull request 事件
+
+订阅要在智能体的 Runner 上用[命令行](/zh/docs/cli)创建。`lorca status` 会列出你的智能体和它们的 id。
+
+<Steps>
+<Step>
+
+### 描述订阅
+
+```json title="pr-events.json"
+{
+  "name": "PR changes",
+  "source": "gateway_hmac",
+  "bot_id": "bot-12345678",
+  "prompt": "总结 PR 的新动态。先读这个 PR 确认它的当前状态，再告诉我哪些需要我处理。",
+  "event_types": ["github.pull_request"],
+  "filters": [
+    { "pointer": "/repository/full_name", "equals": "acme/project" },
+    { "pointer": "/action", "equals": "synchronize" }
+  ],
+  "queue_policy": "fifo",
+  "is_enabled": true
+}
+```
+
+`prompt` 是智能体对每个事件要做的事。只有事件类型在列表里、并且每个过滤条件都满足时才会运行：`pointer` 是事件 JSON 里的路径。`queue_policy` 为 `fifo` 时，事件按顺序一个一个运行；为 `latest` 时，只保留等待中的最新一个。
+
+```bash
+lorca events add pr-events.json
+lorca events route <id> ~/private/pr-route.json
+```
+
+`route` 会把网关用的密钥和事件的发送目标写进一个私有文件。
+
+</Step>
+<Step>
+
+### 运行网关
+
+网关是 [`scripts/event-gateway.py`](https://github.com/egoist/lorca/blob/main/scripts/event-gateway.py)。在 Runner 上，或在你另一台运行着 `lorca serve` 的电脑上运行它，并准备好上一步的路由文件，以及一个存放随机 GitHub webhook 密钥（至少 32 个字符）的文件：
+
+```bash
+python3 event-gateway.py --route ~/private/pr-route.json \
+  --github-secret-file ~/private/github-secret --lorca "$(command -v lorca)"
+```
+
+它监听 `127.0.0.1:8984/github`。在前面加上你的 HTTPS 反向代理或隧道。
+
+</Step>
+<Step>
+
+### 在 GitHub 上添加 webhook
+
+在仓库的 webhook 设置里，填入你的公网地址，内容类型选 JSON，密钥填同一个，事件选 Pull requests。
+
+</Step>
+</Steps>
+
+## 例行任务的 webhook
+
+任何服务或脚本都可以通过一个专属的地址和密钥启动某个[例行任务](/zh/docs/routines)。新建一个订阅，`routine_id` 填这个例行任务，`event_types` 填 `["webhook"]`，导出它的路由，然后改用 `--webhook-key-file` 运行网关（密钥至少 32 个字符）。它监听 `127.0.0.1:8984/hook`，接收以 `Authorization: Bearer <key>` 或 `X-Lorca-Key` 带上密钥的请求。请求体，无论是 JSON 还是文本，就是智能体读到的内容。带上 `Idempotency-Key` 请求头，重复的请求只会运行一次。
+
+## 智能体如何处理事件
+
+聊天里会显示 **Event · PR changes**，然后智能体执行任务。服务发来的内容只是供智能体参考的信息，绝不是指令。运行时没人能回答问题，所以本来要问你的操作会留下来[等你审核](/zh/docs/reviews#等待审核)。这些工作计入这个聊天的[上限](/zh/docs/limits)，或者那个例行任务的上限。
+
+如果你七天没有在任何聊天里发过消息，事件会先等着，等你回来再运行。每个事件最多运行一次，服务重复发送也一样。
+
+## 管理订阅
+
+| 命令 | 作用 |
+| --- | --- |
+| `lorca events list` | 每个订阅的状态、在等待的事件、最近的投递，以及被搁置的原因。从不显示密钥或事件内容。 |
+| `lorca events edit <id> <file>` | 替换配置。智能体和例行任务保持不变。 |
+| `lorca events pause <id>`、`resume <id>` | 暂停处理（事件照样到达），以及恢复处理。 |
+| `lorca events reconnect <id>` | 生成新的密钥；之后要重新导出路由。 |
+| `lorca events retry <delivery>`、`discard <delivery>` | 看过聊天后，重新运行失败的事件，或丢弃它。 |
+| `lorca events remove <id>` | 删除订阅。 |
+
+事件处理失败或被打断时，后面的事件会等着，直到你重试或丢弃它，[关注事项](/zh/docs/attention)里会列出“Events on hold”。网关的密钥失效时，会显示“Events refused”。

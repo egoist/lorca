@@ -4,7 +4,9 @@ description: Lorca checks plugin actions and shell commands before they run and 
 icon: ShieldCheck
 ---
 
-Auto-review sits between a bot and effectful plugin actions or shell commands on its Runner. It decides, one action at a time, whether to run it or to ask you.
+Auto-review sits between a bot and effectful plugin actions or shell commands on its Runner, including the commands of a [coding agent](/docs/coding-agents) the bot runs. It decides, one action at a time, whether to run it or to ask you.
+
+It comes after the bot's [Access](/docs/access): an action Access doesn't allow never reaches Auto-review, and no rule or answer here widens Access. In a chat, emails and Slack messages skip it and wait as [drafts](/docs/reviews#email-and-slack-drafts) that you send yourself.
 
 ## Permission cards
 
@@ -65,6 +67,8 @@ Open **Settings › Auto-review** to turn it on or off and to write rules in pla
 
 Always allow adds its rules here too. When two rules disagree, Ask first wins. Rules sync to all your devices and apply to every bot.
 
-## Routines
+## Routines and events
 
-A [routine](/docs/routines) runs with nobody watching, so an action that would ask is refused instead. Actions that Auto-review allows, including those your rules cover, still run.
+A [routine](/docs/routines), an [event](/docs/events), or a [channel](/docs/channels)'s message runs with nobody watching. Actions that Auto-review allows, including those your rules cover, still run. An action that would ask waits for your review instead: it shows under [Waiting for review](/docs/reviews#waiting-for-review), and runs once you approve it.
+
+What an event or someone in a channel wrote is never taken as your request: Auto-review weighs each action against the task you set up.

@@ -48,7 +48,7 @@ The new device receives your account key, then your bots, provider credentials, 
 
 ## Manage devices
 
-**Settings › Devices** shows each device's role, when it was last seen, and its machine key. For a computer running the [command line](/docs/cli#updates) without the app, it also shows the version, and **Update** when a newer release is out. **Settings › Bots** and **Settings › Plugins** show what the device picked in the toolbar has.
+**Settings › Devices** shows each device's role, when it was last seen, and its machine key. For a computer running the [command line](/docs/cli#updates) without the app, it also shows the version, and **Update** when a newer release is out. For a Runner, **Background service** says whether `lorca service` keeps its bots running while Lorca is closed; see [A headless Runner](/docs/cli#a-headless-runner). **Settings › Bots**, **Settings › Plugins**, and **Settings › Secrets** show what the device picked in the toolbar has.
 
 A device that is paired to your account but has never sent its name or system shows as **Unknown Device**. If you don't recognize it, unpair it.
 
@@ -60,4 +60,4 @@ To sign a device out yourself, unpair it from its own Devices pane.
 
 ## Restore on another computer
 
-Choose **Restore** during desktop-app onboarding, or run `lorca identity restore <phrase>` on a CLI-only computer. Lorca rebuilds your keys and pulls your account from the relay. Bots that ran on the old computer need a new Runner; their memory and working files stayed on the old disk.
+Choose **Restore** during desktop-app onboarding, or run `lorca identity restore <phrase>` on a CLI-only computer. Lorca rebuilds your keys and pulls your account from the relay. Bots that ran on the old computer need a new Runner; their memory, working files, [secrets](/docs/secrets), and [browser](/docs/browser) sign-ins stayed on the old disk.

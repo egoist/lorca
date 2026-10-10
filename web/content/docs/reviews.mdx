@@ -1,0 +1,33 @@
+---
+title: Drafts and reviews
+description: Emails and Slack messages wait as drafts you edit and send. Actions a routine can't ask about wait for your review.
+icon: Inbox
+---
+
+Some of a bot's work waits for you before it leaves your computer: the emails and Slack messages it writes, and the actions a [routine](/docs/routines) or an event would have asked you about. You decide on any of your Devices, and the bot's Runner carries it out.
+
+## Email and Slack drafts
+
+When a bot writes an email with Gmail or a message with Slack in a chat, it doesn't send it. The message shows in the chat as a draft card: "Chef drafted an email" (or "a reply", "a Slack message"), the account, To, Cc, Bcc, and Subject, the text, and the attachments.
+
+- **Edit** any field in place, or leave out an attachment.
+- **Send** sends it as the card shows it. The card then reads Sent, or Not sent with the service's reason.
+- **Discard** drops it.
+- **Always Send**, on a Slack card, sends it and lets this bot send its later Slack messages directly.
+
+On the phone, tap the card to open the message as a compose sheet. The bot reads what became of its draft, with your changes, in its next turn, and your edits are [feedback](/docs/feedback) it learns from.
+
+Drafts are on for every bot. To have a bot send directly, turn off **Draft first** in its [Access](/docs/access): its Slack messages go out after [Auto-review](/docs/auto-review), and Gmail keeps its drafts in your Drafts folder. A message never carries a [secret](/docs/secrets) you saved for a bot.
+
+## Waiting for review
+
+A routine or an event runs with nobody watching, so an action that would ask you first doesn't run. It waits instead, as the exact command or plugin call the bot made, or as a draft the bot wrote for you to accept. A bot can also leave work for review itself.
+
+While a chat's bots have something waiting, the inspector shows **Waiting for review** under the bots, oldest first (on the phone, in the chat's Details). Click an item to open it: what the bot wants to do, why, and the command, the call's arguments, or the draft, which you can edit.
+
+- **Approve** runs what the field shows, once, on the bot's Runner. An edit is saved first.
+- **Reject** drops it. **Cancel** closes the sheet and leaves it waiting.
+
+The chat keeps a line for each item, "Waiting for your review · $ git push origin main", which reads Done, Failed, Rejected, or Didn't finish once it ends, with the output below. If something it depends on changed, such as a file or the bot's settings, it asks for your review again. A call that was cut off before it answered reads Didn't finish, since it may have run; it isn't tried again on its own.
+
+The [Attention](/docs/attention) list shows what waits for review across all your chats.

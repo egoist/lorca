@@ -1,0 +1,43 @@
+---
+title: Skills
+description: Write down how a job is done once, or save it from a chat, and a bot or a whole group follows it from then on.
+icon: NotebookPen
+---
+
+A **skill** is how a job is done, written down for a bot or a group: when to use it, the steps, an example, and any reference text or scripts it needs. A bot sees the name and description of each of its skills on every turn and reads the whole skill when a task matches, so a long skill costs nothing until it's needed.
+
+## Where skills live
+
+A bot's skills are in the **Skills** section of its direct chat's inspector, and a group's in the group's inspector (on the phone, in the chat's Details). The section shows once there is a skill or a draft. A group's skills are for every bot in that group, in that group only.
+
+## Write one
+
+Choose **Chat › New Skill…**, or click **+** beside **Skills** once the section shows (on the phone, **Add Skill › New Skill…**). A skill has:
+
+| Field | What it is |
+| --- | --- |
+| **Name** | A short name, written as a slug, such as `weekly-report`. |
+| **Description** | When to use it. The bot reads this to decide. |
+| **Instructions** | The steps. |
+| **Examples** | What good output looks like. |
+| **References** and **Scripts** | Text files the skill carries, such as a style guide or a script the bot runs with its own tools. |
+
+**Save** makes it available from the bot's next turn. Anything that looks like a password or a key is removed as it is saved.
+
+## Save one from a chat
+
+When a bot has done something the way you want it done again, right-click its reply and choose **Save as Skill…**. When you have corrected a bot more than once, right-click one of your messages and choose **Save as Standing Instruction…**. On the phone, use **Add Skill › From This Chat…** in Details.
+
+The sheet lists the chat's recent messages: tick the ones that show the work, and in a group choose whether the skill is for the group or for one bot. **Continue** has the bot's provider write a draft from those messages and opens it for you to edit. A bot can also propose a skill itself; the chat then says where to review it.
+
+A draft is never used. Only **Save** turns it on.
+
+You can also teach a bot a website task by doing it once in its browser; see [Record a workflow](/docs/browser#record-a-workflow).
+
+## History and export
+
+A saved skill's **History** tab lists every version with the date and the Device: created, drafted from a chat, saved, edited. Pick one to read what it said then. Skills sync to all your devices.
+
+**Export…** in a skill's menu saves it as a file to keep or to give someone (the share sheet on the phone). The file holds the skill's text and files, and nothing about your account. To share a whole bot, skills included, see [Share a bot](/docs/templates).
+
+A bot's [feedback](/docs/feedback) can suggest changes to a skill's instructions, which you accept or reject.

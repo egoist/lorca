@@ -1,0 +1,39 @@
+---
+title: Browser
+description: Give a bot a browser profile that keeps its sign-ins, take the browser over when it needs you, and teach it a website task by doing it once.
+icon: Globe
+---
+
+With the **Browser** plugin a bot opens pages, clicks, and fills in forms. Without anything set up it uses a headless browser, which works on a Runner with no screen. For sites that need an account, give the bot a **profile**: a browser of its own on its Runner that keeps the sign-ins you make in it.
+
+Browser comes from the [marketplace](/docs/plugins#the-marketplace), and the bot's [Access](/docs/access) must allow it. It uses Chrome.
+
+## Profiles
+
+Open the bot's direct chat, then **Browser** under Plugins in the inspector. Its sheet has a **Profiles** section; **+** adds one, such as "Work". On the phone, tap **Browser** in the chat's Details.
+
+Click a profile for its menu:
+
+- **Open Browser** opens it in a window on the Runner. Sign in to the sites the bot needs; the sign-ins stay in that profile, on that computer only.
+- **Take Over** and **Return to Bot**: see below.
+- **Record** and **Stop Recording**: see [Record a workflow](#record-a-workflow).
+- **Take Screenshot** posts what the browser shows to the chat.
+- **Close Browser**, and **Delete…**, which removes the profile and its sign-ins.
+
+While a profile is open, the bot's browser calls go to it. A bot can open its profile itself, after [Auto-review](/docs/auto-review). Each row says how the profile stands: Closed, Open, **You have control** in orange, or Recording in red.
+
+## Take over
+
+When a page needs you, such as a captcha, a second factor, or a choice only you can make, choose **Take Over**. The bot's browser calls wait, its window comes to the front on the Runner, and you do what is needed. **Return to Bot** hands it back, and the bot goes on from the same page with the same tabs. The bot's other work goes on meanwhile, and **Stop** in the chat ends the waiting.
+
+## Record a workflow
+
+Teach a bot a website task by doing it once. Choose **Record** on a profile, do the task in the browser, then choose **Stop Recording**. The recording goes to the chat, and the bot makes a [skill](/docs/skills) of it: it drafts the steps, asks about anything the recording doesn't show, and offers to run it on a schedule. **Save** the draft to use it.
+
+What is recorded: your clicks, what you type into a field, choices in menus, files you pick (their names only), and the pages you go to, with a screenshot of each step. Passwords, one-time codes, card numbers, and fields marked as secret are never recorded. A [secret](/docs/secrets) you saved for the bot is kept as its name, never its value.
+
+When the bot runs the skill, it repeats the steps in the profile, after Auto-review. If a page has changed and a step no longer matches, the run stops with a screenshot and says which step, rather than guessing. A routine can run the skill the same way. **Stop** ends a run at once.
+
+## From another device
+
+The browser runs on the bot's Runner, so you sign in and record there. From your phone or another computer you can still list, add, and delete profiles, take over and return a browser, stop a recording, and take a screenshot. **Open Browser** reads "Open on" the Runner, and **Record** works only while the browser is already open on the Runner's screen. Nobody watches or types into the browser from afar.

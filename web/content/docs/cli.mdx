@@ -46,6 +46,9 @@ On Windows, bots run their commands in Git for Windows' bash, not WSL's, so inst
 | `lorca mcp …` | Manages this computer's own MCP servers; see [MCP servers](#mcp-servers). |
 | `lorca chats list` | Lists the chats: each one's id and bots, with a group's owner. |
 | `lorca chats set-owner <group> <bot>` | Makes a bot the [owner](/docs/group-chats#the-owner) of a group. Name the group by its title or id, and the bot by its name or id. |
+| `lorca tasks list` | Lists [tasks](/docs/tasks); `--chat-id`, `--owner-bot-id`, and `--state` narrow it. `lorca tasks get <id>` shows one. |
+| `lorca tasks create`, `update`, `run` | Creates, changes, or starts a task from a JSON object, or `-` to read it from stdin. They need `lorca serve` running. |
+| `lorca events …` | Manages this Runner's event subscriptions and their gateway; see [Webhooks and events](/docs/events). |
 | `lorca marketplace reload` | Checks lorca.app for a newer marketplace now. Lorca also checks on its own when it starts, when an app connects, and when you or a bot look through the marketplace, at most once an hour, so new plugins and bots arrive without an update. |
 | `lorca models reload` | Checks lorca.app for a newer model catalog now. Lorca also checks on its own when it starts and when an app connects, at most once an hour, so new models arrive without an update. |
 | `lorca update` | Installs the latest release now. A running `lorca serve` restarts into it once no bot is working. `--check` only says whether one is out; `--auto off` turns automatic updates off, `--auto on` back on. |
@@ -113,6 +116,6 @@ Restarting into a new release on Windows takes `lorca service`; without it, `lor
 
 ## Files
 
-Everything is under `~/.lorca/`, readable only by your user: your identity and machine keys, provider credentials, settings, chats, attachments, plugins, your MCP servers in `mcp.json`, the last model catalog fetched in `catalog.json`, the last marketplace fetched in `marketplace.json`, the last update check in `update.json`, the token the apps and `lorca` send to a running `lorca serve` in `serve-token` (a web page cannot reach it), and one workspace folder per bot with its memory.
+Everything is under `~/.lorca/`, readable only by your user: your identity and machine keys, provider credentials, settings, chats, attachments, plugins, your MCP servers in `mcp.json`, the last model catalog fetched in `catalog.json`, the last marketplace fetched in `marketplace.json`, the last update check in `update.json`, the token the apps and `lorca` send to a running `lorca serve` in `serve-token` (a web page cannot reach it), your [skills](/docs/skills), the [secrets](/docs/secrets) bots asked for, the bots' [browser profiles](/docs/browser), the worktrees and transcripts of [coding agents](/docs/coding-agents), and one workspace folder per bot with its memory. Skills, secrets, feedback, and the records of tasks, reviews, and projects are encrypted with your account key.
 
 The macOS app logs the service to `~/Library/Logs/Lorca/cli.log`. Under `lorca service` the log is `~/Library/Logs/Lorca/serve.log` on macOS, `journalctl --user -u lorca` on Linux, and `serve.log` in `~/.lorca` on Windows.

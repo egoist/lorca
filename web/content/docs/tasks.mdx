@@ -1,0 +1,41 @@
+---
+title: Tasks
+description: A task keeps a goal, its owner, what done means, and the next step across turns, so work that takes more than one reply doesn't get lost.
+icon: ListChecks
+---
+
+A **task** is work that takes more than one turn: a goal, the bot that owns it, what done means, and the next step. It stays with its bot across turns, long chats, and restarts until it is done, and every bot working on it can read where it stands.
+
+## Create a task
+
+In the desktop app, click **+** beside **Tasks** in the chat's inspector, or choose **File › New Task…**. On the phone, tap **New Task** in the chat's Details. Fill in:
+
+| Field | What it is |
+| --- | --- |
+| **Goal** | What should get done. |
+| **Owner** | The bot that does it, one of the bots in this chat. |
+| **Next step** | What the bot does first. |
+| **Done when** | How to tell it's finished, one check per line. |
+
+You can also ask a bot: "Make this a task and keep at it until the migration is merged." Bots create, update, and run tasks too.
+
+## Run it
+
+**Start** has the owner work on the task in this chat. When the turn ends, its reply and the files and links it [published](/docs/chats#outputs) are kept as the task's evidence, and the task is **Ready for review**. A reply alone never completes a task: check the result, then choose **Mark Complete**, or tell the bot what is still missing.
+
+A turn that stops or fails leaves the task **Blocked** with the reason; **Resume** has the bot try again. A task can wait for other tasks; **Start** waits until those are completed.
+
+If the bot's computer restarts during a run, the task is blocked and says the work may be half done. Look at what happened before you **Resume** it.
+
+## Follow it
+
+The inspector's **Tasks** section lists the chat's tasks (on the phone, in the chat's Details): blocked ones and those ready for review first, then those being worked on, not started, and finished. A row shows the goal, the state, and in a group the owner. Click one for its sheet:
+
+- The state, why it is blocked, and the result with its evidence: a message, a version of an output, or a link, each of which opens.
+- The one step the state allows: **Start**, **Resume**, **Mark Complete**, or **Reopen** for a finished task. **Cancel Task…** asks first.
+- The goal, owner, next step, and checks, which you can edit and **Save**. While the bot is working on it, the owner and the checks stay as they are.
+- A **Limits** row, to cap what the task may spend; see [Limits](/docs/limits).
+
+A bot reads its open tasks at every step, so a long chat being summarized never drops one. Work a bot [hands to another bot](/docs/chats#bots-that-message-each-other) for a task reports back into the task's evidence.
+
+From a terminal, `lorca tasks list` and `lorca tasks get <id>` read tasks; see [Command line](/docs/cli#commands).
