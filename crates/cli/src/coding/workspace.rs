@@ -153,7 +153,8 @@ pub(crate) async fn diff(folder: &Path, base: &str) -> String {
             continue;
         }
         let mut command = lorca_agent::login_shell::command("git").await;
-        command.arg("-C").arg(folder).args(["diff", "--no-index", "--", null_device(), file]).stdin(std::process::Stdio::null());
+        // Git takes `/dev/null` as the empty side on every platform.
+        command.arg("-C").arg(folder).args(["diff", "--no-index", "--", "/dev/null", file]).stdin(std::process::Stdio::null());
         // `git diff --no-index` exits 1 when the files differ, as a new one does.
         if let Ok(output) = command.output().await {
             diff.push_str(&String::from_utf8_lossy(&output.stdout));
@@ -171,10 +172,6 @@ pub(crate) async fn diff(folder: &Path, base: &str) -> String {
         diff.push_str("\n… (the diff is longer; read the rest in the worktree)\n");
     }
     diff
-}
-
-fn null_device() -> &'static str {
-    if cfg!(windows) { "NUL" } else { "/dev/null" }
 }
 
 #[cfg(test)]
