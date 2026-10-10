@@ -1736,9 +1736,9 @@ mod tests {
         let mut held = watch.clone();
         held.events.as_mut().unwrap().key = "k".into();
         held.events.as_mut().unwrap().status = crate::routine_events::Listening::Subscribed;
-        let mut incoming = vec![watch.clone()];
-        assert!(crate::routine_triggers::keep_reads(&held, &mut incoming[0]));
-        assert_eq!(incoming[0].events.as_ref().unwrap().key, "k");
+        let mut incoming = watch.clone();
+        assert!(crate::routine_triggers::keep_reads(&held, &mut incoming));
+        assert_eq!(incoming.events.as_ref().unwrap().key, "k");
     }
 
     /// A routine around events reads its Calendar account, keeps the matching events of the next
