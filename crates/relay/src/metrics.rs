@@ -64,6 +64,8 @@ pub struct Metrics {
     pub file_objects: Counter,
     pub file_sweep_at: Counter,
     pub sweep_at: Counter,
+    /// Events the receivers sealed to Runners.
+    pub receiver_events: Counter,
     requests: Mutex<Requests>,
 }
 
@@ -78,6 +80,7 @@ pub static METRICS: Metrics = Metrics {
     swept_envelopes: Counter::new(),
     swept_orphans: Counter::new(),
     swept_identities: Counter::new(),
+    receiver_events: Counter::new(),
     usage_corrected: Counter::new(),
     missing_objects: Counter::new(),
     sweep_failures: Counter::new(),
@@ -217,6 +220,7 @@ fn render(stats: Option<&Stats>, sockets: usize, connected_identities: usize, in
     page.one("uploads_refused_total", "counter", "Large uploads that found no place in 30 s.", &here, METRICS.uploads_refused.get());
 
     page.one("outdated_clients_total", "counter", "Requests from a client below the minimum protocol.", &here, METRICS.outdated_clients.get());
+    page.one("receiver_events_total", "counter", "Events the receivers sealed to Runners.", &here, METRICS.receiver_events.get());
 
     page.family("pushes_total", "counter", "Pushes handed to APNs and FCM, by what came of them.");
     for (index, name) in PLATFORMS.iter().enumerate() {

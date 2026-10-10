@@ -2050,6 +2050,7 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
+ "crypto_box",
  "deadpool-postgres",
  "ed25519-dalek",
  "futures",

@@ -187,6 +187,28 @@ pub struct Stats {
     pub push_tokens: Vec<(String, i64)>,
 }
 
+/// A routine's subscription with one of the relay's receivers: the receiver seals what it
+/// receives about `subject` to `machine_pubkey`, as an `event` envelope signed with `secret`
+/// for the Runner's event subscription `subscription_id` at `generation`. `key_hash` is the
+/// SHA-256 of the key a webhook's senders include; `account` is the service's account it goes
+/// through (a GitHub App installation); `state` is the receiver's own JSON (a pull request's head
+/// commit).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReceiverSub {
+    pub id: String,
+    pub receiver: String,
+    pub identity_pubkey: String,
+    pub machine_pubkey: String,
+    pub subject: String,
+    pub subscription_id: String,
+    pub generation: i64,
+    pub secret: String,
+    pub key_hash: Option<String>,
+    pub account: Option<String>,
+    pub state: Option<String>,
+    pub created_at: i64,
+}
+
 /// Where a phone takes pushes: its APNs or FCM device token, one per machine.
 #[derive(Debug, Clone)]
 pub struct PushToken {
@@ -331,6 +353,29 @@ pub trait Store: Send + Sync {
     async fn share(&self, id: &str) -> ApiResult<Option<Vec<u8>>>;
     /// False when the identity holds nothing under `id`.
     async fn delete_share(&self, identity_pubkey: &str, id: &str) -> ApiResult<bool>;
+
+    // Receivers: what an identity set up with a service through the relay, and the routines'
+    // subscriptions with it. A state proves which identity a service's redirect is for; an
+    // account is one the service let this identity prove it holds.
+
+    async fn receiver_state_put(&self, state: &str, receiver: &str, identity_pubkey: &str) -> ApiResult<()>;
+    /// The identity a state was made for, once, when it was made at or after `not_before`.
+    async fn receiver_state_take(&self, state: &str, receiver: &str, not_before: i64) -> ApiResult<Option<String>>;
+    async fn receiver_bind(&self, receiver: &str, account: &str, identity_pubkey: &str, label: &str) -> ApiResult<()>;
+    async fn receiver_bound(&self, receiver: &str, account: &str, identity_pubkey: &str) -> ApiResult<bool>;
+    /// The service dropped the account: its bindings and the subscriptions through it go.
+    /// Returns the subscriptions removed.
+    async fn receiver_unbind(&self, receiver: &str, account: &str) -> ApiResult<Vec<ReceiverSub>>;
+    /// `409` when the identity holds `max` subscriptions with the receiver already.
+    async fn receiver_subscribe(&self, sub: &ReceiverSub, max: i64) -> ApiResult<()>;
+    /// False when the identity has no such subscription.
+    async fn receiver_unsubscribe(&self, identity_pubkey: &str, receiver: &str, id: &str) -> ApiResult<bool>;
+    async fn receiver_sub(&self, receiver: &str, id: &str) -> ApiResult<Option<ReceiverSub>>;
+    /// The receiver's subscriptions whose subject starts with `prefix`.
+    async fn receiver_subs(&self, receiver: &str, prefix: &str) -> ApiResult<Vec<ReceiverSub>>;
+    /// Replaces a subscription's key hash (its identity's to change) or its receiver state.
+    async fn receiver_set_key(&self, identity_pubkey: &str, receiver: &str, id: &str, key_hash: &str) -> ApiResult<bool>;
+    async fn receiver_set_state(&self, receiver: &str, id: &str, state: &str) -> ApiResult<()>;
 
     // Push tokens
 

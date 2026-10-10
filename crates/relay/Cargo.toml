@@ -16,6 +16,7 @@ deadpool-postgres.workspace = true
 futures.workspace = true
 axum.workspace = true
 base64.workspace = true
+crypto_box.workspace = true
 usage = { package = "usage-rs", version = "6" }
 ed25519-dalek.workspace = true
 hmac.workspace = true
@@ -38,4 +39,5 @@ uuid.workspace = true
 webpki-roots.workspace = true
 
 [dev-dependencies]
-lorca = { path = "../cli", default-features = false }
+# The receivers' end-to-end tests run a routine on a Runner.
+lorca = { path = "../cli", default-features = false, features = ["runner"] }
