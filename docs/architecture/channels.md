@@ -48,7 +48,9 @@ The bot's system prompt describes channels once its Runner has a Telegram or Sla
 
 What the bot sends to a conversation's chat comes back into the conversation as the bot's message (`external_id` the service's id), quoting the message it answers, and quiet: it adds no unread mark and no notification, since the user did not ask for it. When the bot's turn is in that conversation, its own message goes there; else the calling bot's conversation for that chat and thread, never another bot's; a call no bot made goes to the first.
 
-A message whose turn fails or is interrupted holds its channel as any event does: later messages wait, the bot's DM has a quiet blocker, "Channel on hold: Name", and the apps offer Try Again and Skip (`events.retry` and `events.discard`, with `runner_id`).
+A message whose turn fails or is interrupted holds its channel as any event does: later messages wait, the bot's DM has a quiet blocker, "Channel on hold: Name", and the apps offer Try Again and Skip (`events.retry` and `events.discard`, with `runner_id`). A turn its limits stop holds it the same way.
+
+Stop in a conversation ends the turn of the message it answers as it ends any turn ([Stop](stopping.md)): the model call, its commands, what it handed off, and a reply call in flight, which the builtin server drops when `notifications/cancelled` reaches it (a message Telegram or Slack already took stays sent). The user decided about that message, so it is settled, not held or tried again, also when its turn was still waiting for the conversation (`last_outcome` `stopped`), and the channel goes on to the next message. Its switch is what pauses the channel.
 
 ## What every Device sees
 

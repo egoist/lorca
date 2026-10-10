@@ -633,7 +633,7 @@ pub fn spawn_local_job(app: Arc<App>, job: Job, remote_blob_id: Option<String>) 
         // An event turn settles its delivery; it is not a run of the routine it targets.
         if job.kind == "event" {
             #[cfg(feature = "runner")]
-            if let Err(error) = crate::event_triggers::finished(&app, &job, outcome) {
+            if let Err(error) = crate::event_triggers::finished(&app, &job, outcome, cancel.is_cancelled() && !crate::handoffs::stopped_at_limits(&app, &job)) {
                 tracing::error!(%error, "recording the event turn outcome");
             }
         } else if let Some(id) = &job.routine_id {

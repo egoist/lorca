@@ -904,11 +904,14 @@ pub fn task_for_job(app: &App, job: &crate::model::Job) -> anyhow::Result<EventT
 
 /// Settles the delivery behind a finished event turn. A turn held behind the chat lock put its
 /// delivery back to pending, and only the Job the inbox admitted settles its delivery.
+/// `stopped` is the user's Stop: a channel's message the user stopped is settled, and the
+/// channel goes on to the next.
 #[cfg(feature = "runner")]
 pub fn finished(
     app: &App,
     job: &crate::model::Job,
     outcome: crate::runtime::TurnOutcome,
+    stopped: bool,
 ) -> anyhow::Result<()> {
     let key = dek(app)?;
     let mut db = app.store.connection.lock().unwrap();
@@ -918,7 +921,8 @@ pub fn finished(
         return Ok(());
     }
     let mut sub = subscription(&tx, &key, &item.envelope.subscription_id)?;
-    let success = outcome != crate::runtime::TurnOutcome::Skipped;
+    let stopped = stopped && sub.config.is_channel();
+    let success = stopped || outcome != crate::runtime::TurnOutcome::Skipped;
     item.state = if success {
         DeliveryState::Done
     } else {
@@ -926,6 +930,7 @@ pub fn finished(
     };
     sub.health.last_outcome = Some(
         match outcome {
+            _ if stopped => "stopped",
             crate::runtime::TurnOutcome::Sent => "sent",
             crate::runtime::TurnOutcome::Pass => "pass",
             _ => "error",
@@ -933,7 +938,9 @@ pub fn finished(
         .into(),
     );
     if success {
-        sub.health.last_success_at = Some(now_unix());
+        if !stopped {
+            sub.health.last_success_at = Some(now_unix());
+        }
         item.envelope.payload.clear();
         item.task = None;
     } else {
@@ -1548,7 +1555,7 @@ mod tests {
             "event data cannot replace its routine budget scope"
         );
         forged.id = "forged-event-job".into();
-        finished(&scratch.0, &forged, crate::runtime::TurnOutcome::Skipped).unwrap();
+        finished(&scratch.0, &forged, crate::runtime::TurnOutcome::Skipped, false).unwrap();
         assert_eq!(
             items(&scratch.0)[0].state,
             DeliveryState::Running,

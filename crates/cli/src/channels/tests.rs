@@ -416,3 +416,74 @@ async fn a_message_starts_the_bots_turn_in_its_conversation_and_a_failed_one_hol
     crate::event_triggers::serve(app, "events.discard", &json!({ "id": held })).unwrap();
     assert_eq!(app.channels.statuses()[0].state, "listening");
 }
+
+/// A chat-completions model that never says a word, behind `custom:fake`.
+async fn hanging_model(app: &App) -> Arc<Mutex<usize>> {
+    let asked: Arc<Mutex<usize>> = Arc::default();
+    let counted = asked.clone();
+    let router = Router::new().route("/v1/chat/completions", post(move || {
+        let counted = counted.clone();
+        async move {
+            *counted.lock().unwrap() += 1;
+            let never = futures::stream::pending::<Result<String, std::io::Error>>();
+            ([("content-type", "text/event-stream")], axum::body::Body::from_stream(never))
+        }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let custom = crate::credentials::CustomProvider {
+        name: "Fake".into(),
+        api: crate::credentials::CustomApi::ChatCompletions,
+        base_url,
+        api_key: String::new(),
+        models: vec![serde_json::from_value(json!({ "id": "fake", "context_window": 64000 })).unwrap()],
+        created_at: 0,
+    };
+    app.credentials.lock().unwrap().custom.insert("custom:fake".into(), custom);
+    let mut state = app.state.lock().unwrap();
+    state.bots[0].provider = "custom:fake".into();
+    state.bots[0].model = Some("fake".into());
+    asked
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stopping_a_messages_turn_settles_it_and_the_channel_listens_on() {
+    let scratch = scratch();
+    let app = &scratch.0;
+    let asked = hanging_model(app).await;
+    let account_id = account(app, TELEGRAM, "Community", &[(telegram::TOKEN, "1:abc")]);
+    run_tool(&tool(app, false), json!({ "action": "create", "account": account_id, "listen": { "tags": ["feedback"] }, "task": "File it" })).await.unwrap();
+    ingest(app, &sample(&account_id, "#feedback crash on export")).unwrap();
+    let chat = conversations(app).remove(0);
+    crate::event_triggers::tick(app).unwrap();
+    eventually("the model answering the message", || *asked.lock().unwrap() == 1).await;
+
+    // The user's Stop in the conversation ends the turn; the message is settled, not held.
+    crate::runtime::cancel_chat(app, &chat.meta.id);
+    eventually("the turn ending", || app.running_jobs.lock().unwrap().is_empty()).await;
+    let status = app.channels.statuses().remove(0);
+    assert_eq!((status.state.as_str(), status.held_delivery.as_deref()), ("listening", None));
+    let listed = crate::event_triggers::serve(app, "events.list", &json!({})).unwrap();
+    assert!(crate::attention::view(app).unwrap().items.is_empty(), "nothing waits on the user");
+
+    // A message's turn still waiting for the conversation, behind the user's own turn there,
+    // is stopped with it and settled the same way.
+    ingest(app, &Incoming { message_id: "42".into(), ..sample(&account_id, "#feedback and dark mode") }).unwrap();
+    let lock = app.chat_lock(&chat.meta.id);
+    let guard = lock.lock().await;
+    crate::event_triggers::tick(app).unwrap();
+    assert_eq!(app.running_jobs.lock().unwrap().len(), 1, "the turn waits for the conversation");
+    crate::runtime::cancel_chat(app, &chat.meta.id);
+    drop(guard);
+    eventually("the waiting turn ending", || app.running_jobs.lock().unwrap().is_empty()).await;
+    assert_eq!(app.channels.statuses()[0].state, "listening");
+    assert_eq!(*asked.lock().unwrap(), 1, "it never reached the model");
+
+    // The next message starts its own turn.
+    ingest(app, &Incoming { message_id: "43".into(), ..sample(&account_id, "#feedback and offline mode") }).unwrap();
+    crate::event_triggers::tick(app).unwrap();
+    eventually("the next message's turn", || *asked.lock().unwrap() == 2).await;
+    crate::runtime::cancel_chat(app, &chat.meta.id);
+    eventually("that turn ending too", || app.running_jobs.lock().unwrap().is_empty()).await;
+}
