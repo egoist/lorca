@@ -433,6 +433,12 @@ async fn a_recording_reaches_the_bot_with_secrets_left_out_and_stays_encrypted()
     assert!(words.contains("on “Ads” https://ads.example.com/") && words.contains("→ “New” https://ads.example.com/new"));
     assert_eq!(shown.iter().filter(|part| matches!(part, ContentPart::Image { .. })).count(), 1, "the screenshot the recorder took, and no file outside its folder");
     assert!(!super::recording_content(app, &message.id, &reference, false).iter().any(|part| matches!(part, ContentPart::Image { .. })));
+    // The bot's turn reads it with the user's words.
+    let chat = app.chat(&chat_id).unwrap();
+    let transcript = crate::turns::transcript_for(app, &chat, &owner, &scratch.1.join("work"));
+    let lorca_agent::AgentMessage::User(said) = transcript.iter().rev().find(|message| matches!(message, lorca_agent::AgentMessage::User(_))).unwrap() else { unreachable!() };
+    let said: Vec<&str> = said.content.iter().filter_map(ContentPart::as_text).collect();
+    assert!(said[0].starts_with("I recorded this in the Work browser") && said[1].starts_with(&format!("[Recording {}, message {}", reference.id, message.id)), "{said:?}");
 
     // The bot drafts a skill from it, citing the user's message.
     let steps_file = json!({ "profile": "Work", "inputs": { "campaign": "The campaign's name" }, "steps": [
