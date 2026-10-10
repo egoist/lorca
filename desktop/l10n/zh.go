@@ -1289,4 +1289,18 @@ var zh = map[string]string{
 	"Can't connect":        "无法连接",
 	"%@ is working on it…": "%@ 正在处理…",
 	"The sample didn't finish. %@'s chat says what happened.": "示例没有完成。原因见 %@ 的聊天。",
+
+	"Record|browser":           "录制",
+	"Record on %@":             "在 %@ 上录制",
+	"Stop Recording":           "停止录制",
+	"Recording":                "正在录制",
+	"Starting…":                "正在开始…",
+	"Stopping…":                "正在停止…",
+	"Couldn't start recording": "无法开始录制",
+	"Couldn't stop recording":  "无法停止录制",
+	"Nothing was recorded":     "没有录到操作",
+	"Do the task in the browser while it records, then stop.":                                                                  "录制时在浏览器里做一遍这项任务，然后停止录制。",
+	"Do the task in this browser on %@, then choose Stop Recording. Passwords aren't recorded.":                                "在 %@ 上的这个浏览器里做一遍这项任务，然后选择“停止录制”。密码不会被录下。",
+	"I recorded this in the %@ browser. Make it a skill you can repeat, and ask me about anything the recording doesn't show.": "我在 %@ 浏览器里录下了这个流程。把它做成你能重复使用的技能，录制里看不出来的地方问我。",
+	"Drafted from a recording": "根据录制起草",
 }

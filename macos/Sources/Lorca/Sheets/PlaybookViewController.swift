@@ -559,6 +559,7 @@ final class PlaybookHistoryPane: PlaybookListPane {
         switch (step.status, step.provenance.kind) {
         case ("deleted", _): return L("Deleted")
         case ("draft", "corrections"): return L("Drafted from corrections")
+        case ("draft", "recording"): return L("Drafted from a recording")
         case ("draft", _): return L("Drafted from a chat")
         case (_, "edit") where step.revision > 1:
             return steps.first { $0.revision == step.revision - 1 }?.status == "draft" ? L("Saved") : L("Edited")

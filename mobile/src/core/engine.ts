@@ -798,10 +798,18 @@ class Engine {
   }
 
   /// `browser.create` (`name`), `browser.takeover`, `browser.resume` (`revision`), `browser.stop`,
-  /// `browser.delete`, or `browser.screenshot` (`chat_id`) for one of the bot's profiles
-  /// (`session_id`), on its Runner. Windows open only there, so the phone never sends `browser.open`.
+  /// `browser.delete`, `browser.screenshot` (`chat_id`), or `browser.record` for one of the bot's
+  /// profiles (`session_id`), on its Runner. Windows open only there, so the phone never sends
+  /// `browser.open`, and records only in a browser already open on the Runner's screen.
   async browserAction(method: string, botId: string, params: Record<string, string | number>): Promise<void> {
     await core.request(method, { ...params, bot_id: botId });
+  }
+
+  /// Stops the profile's recording and sends it to the bot in the chat with the user's words.
+  /// False when the user did nothing in the browser, so nothing went.
+  async stopBrowserRecording(botId: string, sessionId: string, chatId: string, text: string): Promise<boolean> {
+    const { message_id } = await core.request<{ message_id?: string | null }>("browser.stop_recording", { bot_id: botId, session_id: sessionId, chat_id: chatId, text });
+    return !!message_id;
   }
 
   /// Sets limits on the bot's Runner; what the work used stays. `kind` is `chat` for each new turn

@@ -65,7 +65,7 @@ func TestBrowserProfilesInThePluginSheet(t *testing.T) {
 	}
 	renderBrowser(t, tt, "browser-profiles")
 
-	if menu := profileMenu(t, tt, "Work"); !slices.Equal(menu, []string{L("Return to Bot"), L("Take Screenshot"), L("Close Browser"), "-", L("Delete…")}) {
+	if menu := profileMenu(t, tt, "Work"); !slices.Equal(menu, []string{L("Return to Bot"), Lc("Record", "browser"), L("Take Screenshot"), L("Close Browser"), "-", L("Delete…")}) {
 		t.Fatalf("menu %q", menu)
 	}
 	if err := tt.ChooseMenuItem(L("Return to Bot")); err != nil {
@@ -75,14 +75,14 @@ func TestBrowserProfilesInThePluginSheet(t *testing.T) {
 	if !tt.HasText(Lc("Open", "browser")) {
 		t.Fatalf("after Return to Bot: %q", tt.Texts())
 	}
-	if menu := profileMenu(t, tt, "Work"); !slices.Equal(menu, []string{L("Take Over"), L("Take Screenshot"), L("Close Browser"), "-", L("Delete…")}) {
+	if menu := profileMenu(t, tt, "Work"); !slices.Equal(menu, []string{L("Take Over"), Lc("Record", "browser"), L("Take Screenshot"), L("Close Browser"), "-", L("Delete…")}) {
 		t.Fatalf("menu %q", menu)
 	}
 	if err := tt.ChooseMenuItem(L("Close Browser")); err != nil {
 		t.Fatal(err)
 	}
 	sheetASettle(tt)
-	if menu := profileMenu(t, tt, "Personal"); !slices.Equal(menu, []string{L("Open Browser"), "-", L("Delete…")}) {
+	if menu := profileMenu(t, tt, "Personal"); !slices.Equal(menu, []string{L("Open Browser"), Lc("Record", "browser"), "-", L("Delete…")}) {
 		t.Fatalf("menu %q", menu)
 	}
 	tt.CloseMenu()
@@ -135,15 +135,47 @@ func TestBrowserProfilesFromAnotherDevice(t *testing.T) {
 	})
 	renderBrowser(t, tt, "browser-profiles-paired")
 	// A window opens only on the Runner's own screen.
-	if menu := profileMenu(t, tt, "Personal"); !slices.Equal(menu, []string{L("Open on %@", "Studio"), "-", L("Delete…")}) {
+	if menu := profileMenu(t, tt, "Personal"); !slices.Equal(menu, []string{L("Open on %@", "Studio"), L("Record on %@", "Studio"), "-", L("Delete…")}) {
 		t.Fatalf("menu %q", menu)
 	}
 	if err := tt.ChooseMenuItem(L("Open on %@", "Studio")); err == nil {
 		t.Fatal("opened a window for another Device")
 	}
+	if err := tt.ChooseMenuItem(L("Record on %@", "Studio")); err == nil {
+		t.Fatal("recorded in a browser that isn't on the Runner's screen")
+	}
 	tt.CloseMenu()
-	if menu := profileMenu(t, tt, "Research"); !slices.Contains(menu, L("Take Over")) {
+	// One open on the Runner's screen records from here: the user does the task there.
+	if menu := profileMenu(t, tt, "Research"); !slices.Contains(menu, L("Take Over")) || !slices.Contains(menu, Lc("Record", "browser")) {
 		t.Fatalf("menu %q", menu)
+	}
+}
+
+// Record takes the browser for the user and the row turns red; Stop Recording sends it to the
+// chat the sheet covers and closes the sheet.
+func TestBrowserProfilesRecord(t *testing.T) {
+	m, tt := sheetATester(t, func(m *mainWindow) {
+		withBrowser(t, "dev-workbench", "bot-quill", "Work")
+		m.presentPlugin(model.BrowserPluginID, sheetAWorkbench(), "bot-quill", "chat-launch")
+	})
+	profileMenu(t, tt, "Work")
+	if err := tt.ChooseMenuItem(Lc("Record", "browser")); err != nil {
+		t.Fatal(err)
+	}
+	sheetASettle(tt)
+	if !tt.HasText(L("Recording")) {
+		t.Fatalf("no recording state in %q", tt.Texts())
+	}
+	renderBrowser(t, tt, "browser-profiles-recording")
+	if menu := profileMenu(t, tt, "Work"); !slices.Equal(menu, []string{L("Stop Recording"), L("Take Screenshot"), L("Close Browser"), "-", L("Delete…")}) {
+		t.Fatalf("menu %q", menu)
+	}
+	if err := tt.ChooseMenuItem(L("Stop Recording")); err != nil {
+		t.Fatal(err)
+	}
+	sheetASettle(tt)
+	if m.hasSheet() {
+		t.Error("the sheet stays up over the chat the recording went to")
 	}
 }
 
@@ -232,6 +264,21 @@ func TestBrowserProfilesWire(t *testing.T) {
 	}
 	shot.reply <- map[string]any{"message_id": "message-1"}
 	(<-posted)()
+	shotRefresh := nextBrowserCall(t, calls)
+	shotRefresh.reply <- map[string]any{"sessions": []model.BrowserProfile{{ID: "browser-1", Name: "Work", State: model.BrowserHuman, Revision: 9, Recording: true}}}
+	waitFor(t, posted, func() bool { return b.profiles[0].Recording })
+
+	// Stopping sends the chat and the user's words; a recording of nothing says so.
+	b.stopRecording(b.profiles[0])
+	stop := nextBrowserCall(t, calls)
+	if stop.method != "browser.stop_recording" || stop.params["chat_id"] != "chat-launch" || stop.params["session_id"] != "browser-1" || stop.params["text"] == "" {
+		t.Fatal(stop.params)
+	}
+	stop.reply <- map[string]any{"session": map[string]any{}, "message_id": nil}
+	(<-posted)()
+	if !m.hasSheet() {
+		t.Fatal("no word that nothing was recorded")
+	}
 	late := nextBrowserCall(t, calls)
 	b.close()
 	late.reply <- map[string]any{"sessions": []model.BrowserProfile{}}

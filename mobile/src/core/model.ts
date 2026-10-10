@@ -93,6 +93,8 @@ export interface BrowserProfile {
   name: string;
   state: "stopped" | "bot" | "taking_over" | "human";
   revision: number;
+  /// The user records a workflow in it for the bot to learn, with the browser in hand.
+  recording?: boolean;
 }
 
 export interface PluginStatus {
