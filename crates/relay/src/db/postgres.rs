@@ -140,6 +140,7 @@ const MIGRATIONS: &[&str] = &[
         account         TEXT NOT NULL,
         identity_pubkey TEXT NOT NULL,
         label           TEXT NOT NULL,
+        scope           TEXT NOT NULL,
         bound_at        BIGINT NOT NULL,
         PRIMARY KEY (receiver, account, identity_pubkey)
     );
@@ -607,25 +608,25 @@ impl Store for Postgres {
         Ok(row.filter(|row| row.get::<_, String>(0) == receiver && row.get::<_, i64>(2) >= not_before).map(|row| row.get(1)))
     }
 
-    async fn receiver_bind(&self, receiver: &str, account: &str, identity_pubkey: &str, label: &str) -> ApiResult<()> {
+    async fn receiver_bind(&self, receiver: &str, account: &str, identity_pubkey: &str, label: &str, scope: &str) -> ApiResult<()> {
         self.client()
             .await?
             .execute(
-                "INSERT INTO receiver_accounts (receiver, account, identity_pubkey, label, bound_at) VALUES ($1, $2, $3, $4, $5)
-                 ON CONFLICT (receiver, account, identity_pubkey) DO UPDATE SET label = excluded.label, bound_at = excluded.bound_at",
-                &[&receiver, &account, &identity_pubkey, &label, &now()],
+                "INSERT INTO receiver_accounts (receiver, account, identity_pubkey, label, scope, bound_at) VALUES ($1, $2, $3, $4, $5, $6)
+                 ON CONFLICT (receiver, account, identity_pubkey) DO UPDATE SET label = excluded.label, scope = excluded.scope, bound_at = excluded.bound_at",
+                &[&receiver, &account, &identity_pubkey, &label, &scope, &now()],
             )
             .await?;
         Ok(())
     }
 
-    async fn receiver_bound(&self, receiver: &str, account: &str, identity_pubkey: &str) -> ApiResult<bool> {
+    async fn receiver_scope(&self, receiver: &str, account: &str, identity_pubkey: &str) -> ApiResult<Option<String>> {
         Ok(self
             .client()
             .await?
-            .query_opt("SELECT 1 FROM receiver_accounts WHERE receiver = $1 AND account = $2 AND identity_pubkey = $3", &[&receiver, &account, &identity_pubkey])
+            .query_opt("SELECT scope FROM receiver_accounts WHERE receiver = $1 AND account = $2 AND identity_pubkey = $3", &[&receiver, &account, &identity_pubkey])
             .await?
-            .is_some())
+            .map(|row| row.get(0)))
     }
 
     async fn receiver_unbind(&self, receiver: &str, account: &str) -> ApiResult<Vec<crate::db::ReceiverSub>> {

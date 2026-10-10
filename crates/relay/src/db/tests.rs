@@ -461,12 +461,13 @@ async fn receiver_states_accounts_and_subscriptions_belong_to_their_identity() {
         ok!(store.receiver_state_put(&good, "github", &who));
         assert_eq!(ok!(store.receiver_state_take(&good, "github", now() - 60)).as_deref(), Some(who.as_str()));
         assert_eq!(ok!(store.receiver_state_take(&good, "github", now() - 60)), None, "once");
-        // An account binds to each identity that proved it holds it.
+        // An account binds to each identity that proved it holds it, with what it may reach there;
+        // binding again replaces that.
         let account = name("installation");
-        ok!(store.receiver_bind("github", &account, &who, "acme"));
-        ok!(store.receiver_bind("github", &account, &who, "acme"));
-        assert!(ok!(store.receiver_bound("github", &account, &who)));
-        assert!(!ok!(store.receiver_bound("github", &account, &other)));
+        ok!(store.receiver_bind("github", &account, &who, "acme", r#"["acme/a"]"#));
+        ok!(store.receiver_bind("github", &account, &who, "acme", r#"["acme/a","acme/b"]"#));
+        assert_eq!(ok!(store.receiver_scope("github", &account, &who)).as_deref(), Some(r#"["acme/a","acme/b"]"#));
+        assert_eq!(ok!(store.receiver_scope("github", &account, &other)), None);
         let sub = |identity: &str, subject: &str| ReceiverSub {
             id: name("sub"),
             receiver: "github".into(),
@@ -501,7 +502,7 @@ async fn receiver_states_accounts_and_subscriptions_belong_to_their_identity() {
         // The service drops the account: its bindings and every subscription through it go.
         let removed = ok!(store.receiver_unbind("github", &account));
         assert_eq!(removed.len(), 2);
-        assert!(!ok!(store.receiver_bound("github", &account, &who)));
+        assert_eq!(ok!(store.receiver_scope("github", &account, &who)), None);
         assert!(ok!(store.receiver_subs("github", &repo)).is_empty());
     }
 }

@@ -65,10 +65,18 @@ fn unknown(receiver: &str) -> ApiError {
     ApiError::not_found(&format!("This relay has no {receiver} receiver"))
 }
 
-/// The link a user follows to set the receiver up for their account: the GitHub App's install.
-async fn setup(State(state): State<AppState>, auth: Auth, Path(receiver): Path<String>) -> ApiResult<Json<Value>> {
+#[derive(Debug, Default, Deserialize)]
+struct Setup {
+    /// What the routine waits to listen to, when it is about one subject.
+    #[serde(default)]
+    subject: Option<String>,
+}
+
+/// The link a user follows to set the receiver up for their account: for GitHub, where the App
+/// installs, or where they authorize it when it is installed on the subject's repository.
+async fn setup(State(state): State<AppState>, auth: Auth, Path(receiver): Path<String>, Json(body): Json<Setup>) -> ApiResult<Json<Value>> {
     match (receiver.as_str(), &state.receivers.github) {
-        ("github", Some(app)) => Ok(Json(json!({ "url": app.install_url(&state, &auth.identity_pubkey).await? }))),
+        ("github", Some(app)) => Ok(Json(json!({ "url": app.setup_url(&state, &auth.identity_pubkey, body.subject.as_deref()).await? }))),
         _ => Err(unknown(&receiver)),
     }
 }

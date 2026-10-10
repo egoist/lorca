@@ -317,31 +317,52 @@ pub fn told(events: &RoutineEvents, answer: &Subscribed) -> String {
     }
 }
 
-/// Subscribes again, every two minutes in the background, the routines still waiting on the
-/// relay or on the user's setup, which may be done since.
+/// Whether a routine on events still waits on the relay or on the user's setup.
 #[cfg(feature = "runner")]
-pub fn retry_waiting(app: &Arc<App>, mine: &[Routine]) {
+fn waiting(events: &RoutineEvents) -> bool {
+    matches!(events.status, Listening::Pending | Listening::NeedsSetup) && !events.subscription_id.is_empty() && events.ended_at.is_none()
+}
+
+/// Marks a routine tried now, unless it was tried within `secs`. False when it was.
+#[cfg(feature = "runner")]
+fn try_now(routine_id: &str, secs: i64) -> bool {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
     static TRIED: OnceLock<Mutex<HashMap<String, i64>>> = OnceLock::new();
     let now = crate::config::now_unix();
+    let mut tried = TRIED.get_or_init(Default::default).lock().unwrap();
+    if tried.get(routine_id).is_some_and(|at| now - at < secs) {
+        return false;
+    }
+    tried.insert(routine_id.to_string(), now);
+    true
+}
+
+/// Subscribes again, every two minutes in the background, the routines still waiting on the
+/// relay or on the user's setup, which may be done since.
+#[cfg(feature = "runner")]
+pub fn retry_waiting(app: &Arc<App>, mine: &[Routine]) {
     for routine in mine {
-        let Some(events) = &routine.events else { continue };
-        if !matches!(events.status, Listening::Pending | Listening::NeedsSetup) || events.subscription_id.is_empty() || events.ended_at.is_some() {
+        if !routine.events.as_ref().is_some_and(waiting) || !try_now(&routine.id, 120) {
             continue;
-        }
-        {
-            let mut tried = TRIED.get_or_init(Default::default).lock().unwrap();
-            if tried.get(&routine.id).is_some_and(|at| now - at < 120) {
-                continue;
-            }
-            tried.insert(routine.id.clone(), now);
         }
         let (app, id) = (app.clone(), routine.id.clone());
         tokio::spawn(async move {
             subscribe(&app, &id).await;
         });
     }
+}
+
+/// Subscribes a waiting routine again now: an app asks when the user comes back to it, likely
+/// from finishing the setup in the browser, so the routine needn't wait for the next retry. At
+/// most once every five seconds; a routine that waits on nothing is left as it is.
+#[cfg(feature = "runner")]
+pub async fn subscribe_now(app: &Arc<App>, routine_id: &str) -> Result<(), String> {
+    let routine = app.routine(routine_id).ok_or("Unknown routine")?;
+    if routine.events.as_ref().is_some_and(waiting) && try_now(routine_id, 5) {
+        subscribe(app, routine_id).await;
+    }
+    Ok(())
 }
 
 /// Removes what a routine on events set up: its subscription here and its row on the relay.

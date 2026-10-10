@@ -699,6 +699,23 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             #[cfg(not(feature = "runner"))]
             Err("Only a Runner keeps a routine's webhook.".into())
         }
+        // A routine on events that waits on the user's setup subscribes again on its Runner,
+        // asked by an app the user came back to.
+        "routines.subscribe" => {
+            let id = string(&params, "id")?;
+            let routine = app.routine(&id).ok_or("Unknown routine")?;
+            let runner = app.bot(&routine.bot_id).map(|bot| bot.runner_id).ok_or("Unknown bot")?;
+            if app.this_device_id().as_deref() != Some(runner.as_str()) {
+                return crate::requests::ask(app, &runner, "routines.subscribe", json!({ "id": id })).await;
+            }
+            #[cfg(feature = "runner")]
+            {
+                crate::routine_events::subscribe_now(app, &id).await?;
+                Ok(json!({ "routine": app.routine(&id).map(|routine| app.routine_out(&routine)) }))
+            }
+            #[cfg(not(feature = "runner"))]
+            Err("Only a Runner subscribes a routine.".into())
+        }
         // The link a user follows to set a relay's receiver up for this account, such as the
         // Lorca GitHub App's install.
         "receivers.setup" => {
@@ -706,7 +723,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             let relay = app.relay_url().ok_or("This Device has no relay.")?;
             let machine = app.machine_file().and_then(|m| m.machine().ok()).ok_or("This Device isn't paired.")?;
             let token = crate::sync::token_or_register(app, &relay, &machine).await.map_err(|e| e.to_string())?;
-            app.relay.receiver_setup(&relay, &token, &receiver).await.map_err(|error| match error.status {
+            app.relay.receiver_setup(&relay, &token, &receiver, params["subject"].as_str().filter(|subject| !subject.is_empty())).await.map_err(|error| match error.status {
                 Some(404) => format!("This relay has no {receiver} receiver."),
                 _ => error.message,
             })

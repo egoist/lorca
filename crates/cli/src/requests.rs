@@ -140,6 +140,12 @@ async fn answer(app: &Arc<App>, request: &Request) -> Result<Value, String> {
             Ok(json!({ "routine": app.routine(id).map(|routine| app.routine_out(&routine)) }))
         }
         #[cfg(feature = "runner")]
+        "routines.subscribe" => {
+            let id = body["id"].as_str().ok_or("missing id")?;
+            crate::routine_events::subscribe_now(app, id).await?;
+            Ok(json!({ "routine": app.routine(id).map(|routine| app.routine_out(&routine)) }))
+        }
+        #[cfg(feature = "runner")]
         "playbooks.draft" => {
             let scope = serde_json::from_value(body["scope"].clone()).map_err(|_| "Explicit playbook scope is required")?;
             crate::playbook_tools::capture(app, &scope, body).await

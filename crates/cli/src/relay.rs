@@ -448,10 +448,11 @@ impl RelayClient {
         Ok(())
     }
 
-    /// The link a user follows to set a receiver up for this account: the GitHub App's install.
-    /// A relay without the receiver answers 404.
-    pub async fn receiver_setup(&self, url: &str, token: &str, receiver: &str) -> RelayResult<Value> {
-        Self::check(self.http().post(format!("{url}/v1/receivers/{receiver}/setup")).bearer_auth(token).json(&json!({})).send().await?).await
+    /// The link a user follows to set a receiver up for this account: where the GitHub App
+    /// installs, or where they authorize it when it is installed on `subject`'s repository. A
+    /// relay without the receiver answers 404.
+    pub async fn receiver_setup(&self, url: &str, token: &str, receiver: &str, subject: Option<&str>) -> RelayResult<Value> {
+        Self::check(self.http().post(format!("{url}/v1/receivers/{receiver}/setup")).bearer_auth(token).json(&json!({ "subject": subject })).send().await?).await
     }
 
     /// Asks a receiver to seal its events about `subject` to this machine under a subscription's

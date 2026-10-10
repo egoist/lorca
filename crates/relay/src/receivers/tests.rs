@@ -27,8 +27,9 @@ impl Drop for Relay {
     }
 }
 
-/// GitHub's API as the App sees it: one installation on acme/project, an open pull request 42,
-/// and a user whose sign-in reaches that installation.
+/// GitHub's API as the App sees it: one installation on acme's project and secret
+/// repositories, an open pull request 42 in each, and a user whose sign-in reaches that
+/// installation but who can access only acme/project in it.
 async fn github_stub(calls: Arc<Mutex<Vec<String>>>) -> String {
     let router = Router::new()
         .route(
@@ -38,6 +39,9 @@ async fn github_stub(calls: Arc<Mutex<Vec<String>>>) -> String {
                 async { Json(json!({ "id": 77, "account": { "login": "acme" } })) }
             }),
         )
+        .route("/repos/acme/secret/installation", get(|| async { Json(json!({ "id": 77, "account": { "login": "acme" } })) }))
+        .route("/repos/acme/secret/pulls/42", get(|| async { Json(json!({ "number": 42, "title": "Rotate the keys", "state": "open", "head": { "sha": "s" } })) }))
+        .route("/user/installations/77/repositories", get(|| async { Json(json!({ "repositories": [{ "full_name": "acme/project" }] })) }))
         .route("/app/installations/77/access_tokens", post(|| async { Json(json!({ "token": "installation-token" })) }))
         .route("/repos/acme/project/pulls/42", get(|| async { Json(json!({ "number": 42, "title": "Add passkey sign-in", "state": "open", "html_url": "https://github.com/acme/project/pull/42", "head": { "sha": "abc" } })) }))
         .route("/repos/acme/project/pulls/43", get(|| async { Json(json!({ "number": 43, "title": "Old", "state": "closed", "merged": true })) }))
@@ -225,9 +229,12 @@ async fn a_github_watch_binds_through_the_install_and_runs_on_each_event_until_m
     let triggers = lorca::routines::Triggers { receiver: Some("github"), subject: Some("Acme/Project#42"), ..Default::default() };
     let routine = lorca::routines::create_routine(&app, &bot_id, "Login PR", "", "Tell me what happened on the pull request.", None, true, None, None, triggers).unwrap();
 
-    // Not bound to this account yet: the relay hands the install link.
+    // Installed on the repository but not bound to this account yet: the relay hands the link
+    // that authorizes the App; where it isn't installed, the install link.
     let lorca::routine_events::Subscribed::NeedsSetup(url) = lorca::routine_events::subscribe(&app, &routine.id).await else { panic!("needs setup") };
-    assert!(url.starts_with(&format!("{stub}/apps/lorca-test/installations/new?state=")), "{url}");
+    assert!(url.starts_with(&format!("{stub}/login/oauth/authorize?client_id=client&state=")), "{url}");
+    let elsewhere = lorca::api::dispatch(&app, "receivers.setup", json!({ "receiver": "github", "subject": "acme/elsewhere#1" })).await.unwrap();
+    assert!(elsewhere["url"].as_str().unwrap().starts_with(&format!("{stub}/apps/lorca-test/installations/new?state=")), "{elsewhere}");
     assert_eq!(app.routine(&routine.id).unwrap().events.unwrap().status, lorca::routine_events::Listening::NeedsSetup);
     let state = url.rsplit("state=").next().unwrap().to_string();
     let no_redirects = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
@@ -240,6 +247,19 @@ async fn a_github_watch_binds_through_the_install_and_runs_on_each_event_until_m
     assert_eq!(bound.status(), 303);
     assert_eq!(bound.headers()["location"], "https://lorca.app/github/connected?status=connected&account=acme");
     assert_eq!(callback("77", &state).await.unwrap().headers()["location"], "https://lorca.app/github/connected?status=expired", "a state works once");
+    // An authorization alone, from the authorize link, binds what the user reaches too.
+    let again = lorca::api::dispatch(&app, "receivers.setup", json!({ "receiver": "github", "subject": "acme/project#42" })).await.unwrap()["url"].as_str().unwrap().rsplit("state=").next().unwrap().to_string();
+    let authorized = no_redirects.get(format!("{}/github/callback?code=c&state={again}", relay.url)).send().await.unwrap();
+    assert_eq!(authorized.headers()["location"], "https://lorca.app/github/connected?status=connected&account=acme");
+    // The installation also covers acme/secret, which this user can't access: no watch there,
+    // only the link to authorize again.
+    let secret = lorca::routines::create_routine(&app, &bot_id, "Secret PR", "", "x", None, true, None, None, lorca::routines::Triggers { receiver: Some("github"), subject: Some("acme/secret#42"), ..Default::default() }).unwrap();
+    assert!(matches!(lorca::routine_events::subscribe(&app, &secret.id).await, lorca::routine_events::Subscribed::NeedsSetup(url) if url.contains("/login/oauth/authorize?")));
+    assert!(relay.state.db.receiver_subs("github", "acme/secret#").await.unwrap().is_empty());
+    // The app asks again when the user is back; it waits on the same setup.
+    lorca::api::dispatch(&app, "routines.subscribe", json!({ "id": secret.id })).await.unwrap();
+    assert_eq!(app.routine(&secret.id).unwrap().events.unwrap().status, lorca::routine_events::Listening::NeedsSetup);
+    lorca::routines::delete(&app, &secret.id).unwrap();
 
     assert_eq!(lorca::routine_events::subscribe(&app, &routine.id).await, lorca::routine_events::Subscribed::Subscribed);
     let events = app.routine(&routine.id).unwrap().events.unwrap();

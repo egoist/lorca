@@ -123,6 +123,7 @@ const MIGRATIONS: &[&str] = &[
         account         TEXT NOT NULL,
         identity_pubkey TEXT NOT NULL,
         label           TEXT NOT NULL,
+        scope           TEXT NOT NULL,
         bound_at        INTEGER NOT NULL,
         PRIMARY KEY (receiver, account, identity_pubkey)
     );
@@ -1004,26 +1005,25 @@ impl Store for Sqlite {
         .await
     }
 
-    async fn receiver_bind(&self, receiver: &str, account: &str, identity_pubkey: &str, label: &str) -> ApiResult<()> {
-        let (receiver, account, identity_pubkey, label) = (receiver.to_string(), account.to_string(), identity_pubkey.to_string(), label.to_string());
+    async fn receiver_bind(&self, receiver: &str, account: &str, identity_pubkey: &str, label: &str, scope: &str) -> ApiResult<()> {
+        let (receiver, account, identity_pubkey, label, scope) = (receiver.to_string(), account.to_string(), identity_pubkey.to_string(), label.to_string(), scope.to_string());
         self.write(move |db| {
             db.execute(
-                "INSERT INTO receiver_accounts (receiver, account, identity_pubkey, label, bound_at) VALUES (?1, ?2, ?3, ?4, ?5)
-                 ON CONFLICT (receiver, account, identity_pubkey) DO UPDATE SET label = excluded.label, bound_at = excluded.bound_at",
-                params![receiver, account, identity_pubkey, label, now()],
+                "INSERT INTO receiver_accounts (receiver, account, identity_pubkey, label, scope, bound_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT (receiver, account, identity_pubkey) DO UPDATE SET label = excluded.label, scope = excluded.scope, bound_at = excluded.bound_at",
+                params![receiver, account, identity_pubkey, label, scope, now()],
             )?;
             Ok(())
         })
         .await
     }
 
-    async fn receiver_bound(&self, receiver: &str, account: &str, identity_pubkey: &str) -> ApiResult<bool> {
+    async fn receiver_scope(&self, receiver: &str, account: &str, identity_pubkey: &str) -> ApiResult<Option<String>> {
         let (receiver, account, identity_pubkey) = (receiver.to_string(), account.to_string(), identity_pubkey.to_string());
         self.read(move |db| {
             Ok(db
-                .query_row("SELECT 1 FROM receiver_accounts WHERE receiver = ?1 AND account = ?2 AND identity_pubkey = ?3", params![receiver, account, identity_pubkey], |_| Ok(()))
-                .optional()?
-                .is_some())
+                .query_row("SELECT scope FROM receiver_accounts WHERE receiver = ?1 AND account = ?2 AND identity_pubkey = ?3", params![receiver, account, identity_pubkey], |row| row.get(0))
+                .optional()?)
         })
         .await
     }

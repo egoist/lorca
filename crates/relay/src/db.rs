@@ -361,8 +361,12 @@ pub trait Store: Send + Sync {
     async fn receiver_state_put(&self, state: &str, receiver: &str, identity_pubkey: &str) -> ApiResult<()>;
     /// The identity a state was made for, once, when it was made at or after `not_before`.
     async fn receiver_state_take(&self, state: &str, receiver: &str, not_before: i64) -> ApiResult<Option<String>>;
-    async fn receiver_bind(&self, receiver: &str, account: &str, identity_pubkey: &str, label: &str) -> ApiResult<()>;
-    async fn receiver_bound(&self, receiver: &str, account: &str, identity_pubkey: &str) -> ApiResult<bool>;
+    /// Binds an account to the identity with its `scope`: what in the account the identity proved
+    /// it may reach, in the receiver's terms (GitHub: the repositories, as a JSON list). Binding
+    /// again replaces the scope.
+    async fn receiver_bind(&self, receiver: &str, account: &str, identity_pubkey: &str, label: &str, scope: &str) -> ApiResult<()>;
+    /// The scope of the identity's binding to the account; `None` when it has none.
+    async fn receiver_scope(&self, receiver: &str, account: &str, identity_pubkey: &str) -> ApiResult<Option<String>>;
     /// The service dropped the account: its bindings and the subscriptions through it go.
     /// Returns the subscriptions removed.
     async fn receiver_unbind(&self, receiver: &str, account: &str) -> ApiResult<Vec<ReceiverSub>>;

@@ -1,8 +1,10 @@
-//! The Lorca GitHub App. A user installs it on the repositories bots may watch; the install
-//! ends at `/github/callback`, which binds the installation to the account whose `state` the
-//! link carried, once the App's user authorization shows the installation is that user's
-//! (`GET /user/installations`), so nobody binds someone else's repository. A routine subscribes
-//! a pull request (`owner/repo#42`) once the App is installed there and bound to its account.
+//! The Lorca GitHub App. A user installs it on the repositories bots may watch, or authorizes it
+//! where it is installed already; either ends at `/github/callback`, which binds to the account
+//! whose `state` the link carried every installation the user's authorization reaches
+//! (`GET /user/installations`), each with the repositories the user can access in it
+//! (`GET /user/installations/{id}/repositories`). A routine subscribes a pull request
+//! (`owner/repo#42`) only in a repository its account's binding lists, so nobody watches a
+//! repository they can't see, even in an installation they share.
 //! GitHub then sends the App's webhooks to `/github/webhook`: their signature is checked with
 //! the App's webhook secret, and each event about a subscribed pull request is turned into an
 //! event in its own words and sealed to the routine's Runner. The App reads pull requests,
@@ -75,6 +77,23 @@ impl GithubApp {
         Ok(format!("{}/apps/{}/installations/new?state={nonce}", self.web, self.slug))
     }
 
+    /// A link that has the user authorize the App where it is installed already, which binds what
+    /// they can reach there to the identity that asked.
+    pub async fn authorize_url(&self, state: &AppState, identity_pubkey: &str) -> ApiResult<String> {
+        let nonce = super::random_id();
+        state.db.receiver_state_put(&nonce, "github", identity_pubkey).await?;
+        Ok(format!("{}/login/oauth/authorize?client_id={}&state={nonce}", self.web, urlencode(&self.client_id)))
+    }
+
+    /// The link for a pull request's repository: authorize where the App is installed, install
+    /// where it isn't.
+    pub async fn setup_url(&self, state: &AppState, identity_pubkey: &str, subject: Option<&str>) -> ApiResult<String> {
+        match subject.and_then(pull_request) {
+            Some((repo, _)) if self.installation_for(&repo).await?.is_some() => self.authorize_url(state, identity_pubkey).await,
+            _ => self.install_url(state, identity_pubkey).await,
+        }
+    }
+
     /// The App's own token: an RS256 JWT for ten minutes less a minute of clock slack.
     fn jwt(&self) -> ApiResult<String> {
         let header = b64url_encode(br#"{"alg":"RS256","typ":"JWT"}"#);
@@ -119,10 +138,15 @@ impl GithubApp {
         let Some((repo, number)) = pull_request(&body.subject) else {
             return Ok(json!({ "status": "refused", "message": "Give the pull request as owner/repo#42." }));
         };
-        let setup = || async { Ok::<_, ApiError>(json!({ "status": "needs_setup", "name": "GitHub", "setup_url": self.install_url(state, &auth.identity_pubkey).await? })) };
-        let Some((installation, _)) = self.installation_for(&repo).await? else { return setup().await };
-        if !state.db.receiver_bound("github", &installation, &auth.identity_pubkey).await? {
-            return setup().await;
+        let setup = |url: String| json!({ "status": "needs_setup", "name": "GitHub", "setup_url": url });
+        let Some((installation, _)) = self.installation_for(&repo).await? else { return Ok(setup(self.install_url(state, &auth.identity_pubkey).await?)) };
+        // The repository must be one the user showed they can access: being able to reach the
+        // installation is not enough, since an organization's covers repositories some members
+        // can't see. A repository added since asks for the authorization again.
+        let scope = state.db.receiver_scope("github", &installation, &auth.identity_pubkey).await?;
+        let reachable = scope.as_deref().and_then(|scope| serde_json::from_str::<Vec<String>>(scope).ok()).is_some_and(|repos| repos.contains(&repo));
+        if !reachable {
+            return Ok(setup(self.authorize_url(state, &auth.identity_pubkey).await?));
         }
         let token = self.installation_token(&installation).await?;
         let Some(found) = self.call(self.http.get(format!("{}/repos/{repo}/pulls/{number}", self.api)).bearer_auth(token)).await? else {
@@ -167,9 +191,10 @@ pub struct Callback {
     state: Option<String>,
 }
 
-/// Where GitHub sends the user after the install and its authorization: binds the
-/// installation to the account the state was made for, once GitHub shows the user can reach
-/// it, and ends on the lorca.app page that says how it went.
+/// Where GitHub sends the user after the install and its authorization, or after an
+/// authorization alone: binds to the account the state was made for every installation the
+/// user's authorization reaches, with the repositories they can access in each, and ends on the
+/// lorca.app page that says how it went.
 pub async fn callback(State(state): State<AppState>, Query(query): Query<Callback>) -> Response {
     let Some(app) = &state.receivers.github else { return ApiError::not_found("This relay has no GitHub App").into_response() };
     let done = |status: &str, account: Option<&str>| {
@@ -187,35 +212,62 @@ pub async fn callback(State(state): State<AppState>, Query(query): Query<Callbac
     if query.setup_action.as_deref() == Some("request") {
         return done("requested", None);
     }
-    let (Some(code), Some(installation)) = (query.code.as_deref(), query.installation_id.as_deref()) else { return done("failed", None) };
-    match bind(&state, app, &identity, code, installation).await {
-        Ok(Some(account)) => done("connected", Some(&account)),
-        Ok(None) => done("not_yours", None),
+    let Some(code) = query.code.as_deref() else { return done("failed", None) };
+    match bind(&state, app, &identity, code).await {
+        // The installation GitHub named must be among the user's; an authorization alone names
+        // none and binds whatever the user reaches.
+        Ok(bound) => match query.installation_id.as_deref() {
+            Some(installation) => match bound.iter().find(|(id, _)| id == installation) {
+                Some((_, account)) => done("connected", Some(account)),
+                None => done("not_yours", None),
+            },
+            None => match bound.first() {
+                Some((_, account)) => done("connected", Some(account)),
+                None => done("not_yours", None),
+            },
+        },
         Err(_) => done("failed", None),
     }
 }
 
-/// Binds the installation when the user's own token shows it among the installations they can
-/// reach. The account it is on, or `None` when it is not theirs.
-async fn bind(state: &AppState, app: &GithubApp, identity: &str, code: &str, installation: &str) -> ApiResult<Option<String>> {
+/// Binds every installation of the App the user's authorization reaches to the identity, each
+/// with the repositories the user can access in it (lowercase `owner/repo`). The user's token
+/// is used for this alone and kept nowhere. Returns the installations bound and their accounts.
+async fn bind(state: &AppState, app: &GithubApp, identity: &str, code: &str) -> ApiResult<Vec<(String, String)>> {
     let exchanged = app
         .call(app.http.post(format!("{}/login/oauth/access_token", app.web)).json(&json!({ "client_id": app.client_id, "client_secret": app.client_secret, "code": code })))
         .await?
         .ok_or_else(|| ApiError::unavailable("GitHub has no sign-in for this code"))?;
     let token = exchanged["access_token"].as_str().ok_or_else(|| ApiError::unauthorized("GitHub turned the sign-in down"))?.to_string();
-    for page in 1..=10 {
-        let found = app.call(app.http.get(format!("{}/user/installations?per_page=100&page={page}", app.api)).bearer_auth(&token)).await?.unwrap_or(Value::Null);
-        let installations = found["installations"].as_array().cloned().unwrap_or_default();
-        if let Some(found) = installations.iter().find(|item| item["id"].as_u64().map(|id| id.to_string()).as_deref() == Some(installation)) {
-            let account = found["account"]["login"].as_str().unwrap_or_default().to_string();
-            state.db.receiver_bind("github", installation, identity, &account).await?;
-            return Ok(Some(account));
+    let pages = |path: String, key: &'static str| {
+        let token = token.clone();
+        async move {
+            let mut found = Vec::new();
+            for page in 1..=10 {
+                let listed = app.call(app.http.get(format!("{}{path}?per_page=100&page={page}", app.api)).bearer_auth(&token)).await?.unwrap_or(Value::Null);
+                let items = listed[key].as_array().cloned().unwrap_or_default();
+                let full = items.len() == 100;
+                found.extend(items);
+                if !full {
+                    break;
+                }
+            }
+            Ok::<_, ApiError>(found)
         }
-        if installations.len() < 100 {
-            break;
-        }
+    };
+    let mut bound = Vec::new();
+    for installation in pages("/user/installations".into(), "installations").await? {
+        let Some(id) = installation["id"].as_u64().map(|id| id.to_string()) else { continue };
+        let account = installation["account"]["login"].as_str().unwrap_or_default().to_string();
+        let repos: Vec<String> = pages(format!("/user/installations/{id}/repositories"), "repositories")
+            .await?
+            .iter()
+            .filter_map(|repo| repo["full_name"].as_str().map(str::to_lowercase))
+            .collect();
+        state.db.receiver_bind("github", &id, identity, &account, &serde_json::to_string(&repos).expect("serializable")).await?;
+        bound.push((id, account));
     }
-    Ok(None)
+    Ok(bound)
 }
 
 fn urlencode(text: &str) -> String {
