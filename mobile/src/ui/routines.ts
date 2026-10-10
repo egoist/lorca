@@ -2,13 +2,14 @@
 // app's Routine and RoutineProblem (Model/Models.swift): what went wrong in a word or two, what
 // happened and how to fix it, the schedule with its timezone, and its last check.
 
-import type { Routine } from "../core/model";
+import type { Routine, RoutineEvents } from "../core/model";
 import { language, t } from "../i18n";
 import { daySeparator, monthDay, scheduleText, time, upcoming } from "./format";
 
 /// What went wrong with a routine: three failed sign-ins in a row paused it, of its runs
 /// (`model`) or its check; its Runner is offline; its checks or runs can't connect or sign in and
-/// try again; its check failed, or called something that could change things.
+/// try again; its check failed, or called something that could change things; a routine on
+/// events waits for the user to set its service up.
 export type RoutineProblem =
   | { kind: "signedOut"; model: boolean }
   | { kind: "offline" }
@@ -16,15 +17,17 @@ export type RoutineProblem =
   | { kind: "signInFailed"; model: boolean }
   | { kind: "checkFailed" }
   | { kind: "checkBlocked" }
-  /** A watch couldn't read its pull request, or a routine around events its calendar. */
-  | { kind: "readFailed"; calendar: boolean };
+  /** A routine around events couldn't read its calendar. */
+  | { kind: "readFailed" }
+  /** A routine on events waits for the user: the GitHub App installed on its repository. */
+  | { kind: "needsSetup"; gitHub: boolean; subject: string };
 
 /// What went wrong, while something did: the core's `state` with the kind of failure.
 export function routineProblem(routine: Routine): RoutineProblem | undefined {
   if (routine.is_running) return undefined;
   const health = routine.health;
   const model = !!health?.model?.status;
-  const read: RoutineProblem | undefined = routine.pull_request || routine.calendar ? { kind: "readFailed", calendar: !!routine.calendar } : undefined;
+  const read: RoutineProblem | undefined = routine.calendar ? { kind: "readFailed" } : undefined;
   switch (routine.state) {
     case "blocked":
       if (routine.paused_reason !== "authentication") return read ?? { kind: "checkBlocked" };
@@ -37,6 +40,9 @@ export function routineProblem(routine: Routine): RoutineProblem | undefined {
       if ((health?.connection_failures ?? 0) > 0) return { kind: "cantConnect", model: false };
       return read ?? { kind: "checkFailed" };
   }
+  // A routine on events whose receiver waits for the user.
+  const events = routine.events;
+  if (routine.is_enabled && events?.status === "needs_setup") return { kind: "needsSetup", gitHub: events.receiver === "github", subject: events.subject ?? "" };
   return undefined;
 }
 
@@ -55,6 +61,8 @@ export function problemWord(problem: RoutineProblem): string {
     case "checkBlocked":
     case "readFailed":
       return t("Check failed");
+    case "needsSetup":
+      return problem.gitHub ? t("App not installed") : t("Needs setup");
   }
 }
 
@@ -83,20 +91,33 @@ export function problemExplanation(problem: RoutineProblem, bot: string, runner:
     case "checkBlocked":
       return t("The check tried to change something, or to use something this bot's Access leaves out. Ask {bot} to fix it.", { bot });
     case "readFailed":
-      return problem.calendar
-        ? t("The last check couldn’t read the calendar. Make sure {bot} may use it in Access, and that it’s signed in on {runner}.", { bot, runner })
-        : t("The last check couldn’t read the pull request. {bot} got the error and can fix the watch.", { bot });
+      return t("The last check couldn’t read the calendar. Make sure {bot} may use it in Access, and that it’s signed in on {runner}.", { bot, runner });
+    case "needsSetup":
+      // The repository of "acme/project#42".
+      return problem.gitHub
+        ? t("The Lorca GitHub App isn’t installed on {repo}, or isn’t connected to this account yet. Install it from the GitHub row: the watch starts once it’s in.", { repo: problem.subject.split("#")[0] })
+        : t("The service needs you first. {bot} said what to do in the chat.", { bot });
   }
 }
 
-/// Whether its Runner looks before it runs: a check, or a watch's read of its pull request.
-export const looksFirst = (routine: Routine) => !!routine.check || !!routine.pull_request;
+/// Whether its Runner looks before it runs: a routine with a check.
+export const looksFirst = (routine: Routine) => !!routine.check;
+
+/// A routine's own webhook.
+export const isWebhook = (events: RoutineEvents) => events.receiver === "webhook" || !!events.endpoint;
+
+/// What starts a routine on events: "Watches acme/project#42", "When its webhook is called".
+export function eventsText(events: RoutineEvents): string {
+  if (events.subject) return t("Watches {pr}", { pr: events.subject });
+  if (isWebhook(events)) return t("When its webhook is called");
+  return t("On {service} events", { service: events.source_name || events.receiver });
+}
 
 /// The symbol of its row: what places its runs, while it is on.
 export function routineSymbol(routine: Routine): string {
   if (routine.is_running) return "arrow.triangle.2.circlepath";
   if (!routine.is_enabled) return "pause.circle";
-  if (routine.pull_request) return "arrow.triangle.pull";
+  if (routine.events) return isWebhook(routine.events) ? "link" : "arrow.triangle.pull";
   if (routine.calendar) return "calendar";
   if (routine.once_at) return "alarm";
   return "clock";
@@ -126,10 +147,10 @@ export function onceText(unix: number, zone?: string): string {
   return t("Once on {date} at {time}", { date: day, time: time(clock) });
 }
 
-/// The routine's schedule in words: a watch's pull request, a time around events, a one-time
-/// date, or the core's sentence for a repeating schedule.
+/// The routine's schedule in words: what a routine on events listens to, a time around events, a
+/// one-time date, or the core's sentence for a repeating schedule.
 export function routineSchedule(routine: Routine): string {
-  if (routine.pull_request) return t("Watches {pr}", { pr: `${routine.pull_request.repo}#${routine.pull_request.number}` });
+  if (routine.events) return eventsText(routine.events);
   if (routine.calendar) return aroundEvents(routine.calendar.minutes ?? 0, !!routine.calendar.after, routine.calendar.matching);
   if (routine.once_at) return onceText(routine.once_at, routine.timezone);
   return scheduleText(routine.schedule_text);
@@ -153,8 +174,8 @@ function offsetIn(zone: string, at: Date): number | undefined {
 /// schedule; the phone's Schedule section gives it a row's value.
 export function timezoneLabel(routine: Routine, now = new Date()): string | undefined {
   const zone = routine.timezone;
-  // A watch reads on an interval, and events keep their own times.
-  if (!zone || routine.schedule.startsWith("every ") || routine.pull_request || routine.calendar) return undefined;
+  // Events keep their own times.
+  if (!zone || routine.schedule.startsWith("every ") || routine.events || routine.calendar) return undefined;
   const differs = [now, new Date(now.getTime() + 182 * 86_400_000)].some((at) => {
     const there = offsetIn(zone, at);
     return there !== undefined && there !== -at.getTimezoneOffset();
@@ -210,4 +231,11 @@ export function routineDetail(routine: Routine): string {
     return `${schedule} · ${looksFirst(routine) ? t("Next check {when}", { when }) : t("Next {when}", { when })}`;
   }
   return schedule;
+}
+
+/// When the latest event of a routine on events came and what it was ("Changes requested by
+/// kim"), or None yet.
+export function lastEvent(events: RoutineEvents): { when: string; summary?: string } {
+  const last = events.last_event;
+  return last ? { when: daySeparator(new Date(last.at * 1000)), summary: last.summary } : { when: t("None yet") };
 }

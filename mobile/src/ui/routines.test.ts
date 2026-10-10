@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Routine } from "../core/model";
-import { aroundEvents, lastCheck, lastRun, missedRuns, nextRunText, onceText, problemExplanation, problemNeedsUser, problemWord, routineDetail, routineProblem, routineSchedule, routineSymbol, timezoneLabel } from "./routines";
+import { aroundEvents, lastCheck, lastEvent, lastRun, looksFirst, missedRuns, nextRunText, onceText, problemExplanation, problemNeedsUser, problemWord, routineDetail, routineProblem, routineSchedule, routineSymbol, timezoneLabel } from "./routines";
 
 // A routine as the core sends it: its timezone, missed-run policy, state, and check health.
 const base: Routine = {
@@ -62,12 +62,24 @@ describe("routines", () => {
     expect(onceText(once.once_at!, "Asia/Singapore")).toBe("Once on Oct 12, 2030 at 9:00 AM");
     expect(routineSchedule(once)).toBe("Once on Oct 12, 2030 at 9:00 AM");
     expect(routineSymbol(once)).toBe("alarm");
-    const watch = routine({ schedule: "every 10m", schedule_text: "Watches acme/project#42", timezone: "Pacific/Kiritimati", pull_request: { repo: "acme/project", number: 42, title: "Add login", url: "https://github.com/acme/project/pull/42" }, next_run_at: Date.now() / 1000 + 600 });
+    // A watch has no next run or check: its events start it.
+    const watch = routine({ schedule: "on events", schedule_text: "Watches acme/project#42", timezone: "Pacific/Kiritimati", events: { receiver: "github", subject: "acme/project#42", status: "subscribed", source_name: "GitHub", title: "Add login", url: "https://github.com/acme/project/pull/42", last_event: { summary: "Changes requested by kim", at: Date.now() / 1000 - 600 } } });
     expect(routineSchedule(watch)).toBe("Watches acme/project#42");
-    expect(routineDetail(watch)).toMatch(/^Watches acme\/project#42 · Next check today /);
+    expect(routineDetail(watch)).toBe("Watches acme/project#42");
+    expect(looksFirst(watch)).toBe(false);
     expect(timezoneLabel(watch)).toBeUndefined();
     expect(routineSymbol(watch)).toBe("arrow.triangle.pull");
-    expect(routineProblem(routine({ ...watch, state: "failed", health: { status: "failed" } }))).toEqual({ kind: "readFailed", calendar: false });
+    expect(lastEvent(watch.events!).summary).toBe("Changes requested by kim");
+    const waiting = routine({ ...watch, events: { receiver: "github", subject: "acme/docs#7", status: "needs_setup" } });
+    const setup = routineProblem(waiting)!;
+    expect(setup).toEqual({ kind: "needsSetup", gitHub: true, subject: "acme/docs#7" });
+    expect(problemWord(setup)).toBe("App not installed");
+    expect(problemExplanation(setup, "Scout", "Workbench")).toContain("installed on acme/docs,");
+    expect(lastEvent(waiting.events!)).toEqual({ when: "None yet" });
+    expect(routineProblem({ ...waiting, is_enabled: false })).toBeUndefined();
+    const hook = routine({ schedule: "on events", schedule_text: "When its webhook is called", events: { receiver: "webhook", status: "subscribed", endpoint: "https://hooks.lorca.app/r/abc", key: "k3y" } });
+    expect(routineSchedule(hook)).toBe("When its webhook is called");
+    expect(routineSymbol(hook)).toBe("link");
     expect(aroundEvents(15, false, null)).toBe("15 minutes before each event");
     expect(aroundEvents(60, false, "Customer")).toBe("1 hour before events matching “Customer”");
     expect(aroundEvents(0, true, null)).toBe("When each event ends");

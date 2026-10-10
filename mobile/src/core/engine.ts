@@ -1067,6 +1067,17 @@ class Engine {
     void core.request("routines.run", { id });
   }
 
+  /// The page that sets a receiver up for this account: where the Lorca GitHub App installs.
+  async receiverSetupURL(receiver: string): Promise<string> {
+    const { url } = await core.request<{ url: string }>("receivers.setup", { receiver });
+    return url;
+  }
+
+  /// A new key for a routine's webhook, made on its bot's Runner; the old one stops working.
+  async regenerateRoutineKey(id: string) {
+    await core.request("routines.regenerate_key", { id });
+  }
+
   deleteRoutine(id: string) {
     removeRoutine(id);
     void core.request("routines.delete", { id });

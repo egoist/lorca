@@ -206,10 +206,26 @@ export interface Routine {
   created_at: number;
   /** When a one-time routine runs; its Runner removes it after that run. */
   once_at?: number | null;
-  /** The pull request a watch reads at each due time, until it merges or closes. */
-  pull_request?: { repo: string; number: number; title?: string; url?: string } | null;
+  /** What a routine on events listens to: a pull request through GitHub, or its own webhook. */
+  events?: RoutineEvents | null;
   /** The calendar events a routine around events runs before or after: so many minutes before they start, or after they end. */
   calendar?: { account?: string; matching?: string | null; minutes?: number | null; after?: boolean | null; next_event?: { title?: string; start?: number; end?: number } | null } | null;
+}
+
+/// What a routine on events listens to, as the CLI gives it: a receiver on the relay ("github",
+/// "webhook"), a subject ("acme/project#42"), how it listens, and the latest event.
+export interface RoutineEvents {
+  receiver: string;
+  subject?: string;
+  /** "pending", "subscribed", "needs_setup", or "gateway". */
+  status?: string;
+  source_name?: string;
+  title?: string;
+  url?: string;
+  /** A webhook's URL and the key its senders include. */
+  endpoint?: string;
+  key?: string;
+  last_event?: { summary: string; at: number } | null;
 }
 
 /// How a routine's checks and runs have gone, as its Runner records them.
