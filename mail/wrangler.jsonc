@@ -1,0 +1,11 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // The mail Worker: Email Routing's catch-all on the mail domain sends every message here.
+  "name": "lorca-mail",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-09-02",
+  "observability": { "enabled": true },
+  // The relay that keeps the addresses. The bearer it shares with the relay's --mail-token is a
+  // secret: `wrangler secret put MAIL_TOKEN`.
+  "vars": { "RELAY_URL": "https://relay.lorca.app" }
+}
