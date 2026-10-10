@@ -330,6 +330,14 @@ mod runner {
         if cancel.is_cancelled() {
             return crate::local_review::blocked("Stopped".into());
         }
+        // A saved secret never goes into a message, and never into the chat a draft shows in.
+        if holds_secret(app, tool, args) {
+            return crate::local_review::blocked(
+                "The message holds a saved secret or a secret's placeholder, so it was not drafted. Write it without the secret: \
+                 secrets go only where the user saved them for, never into an email or a Slack message."
+                    .into(),
+            );
+        }
         let draft = read(tool, args);
         let mut arguments = args.clone();
         let staged = match stash(app, tool, &mut arguments) {
@@ -357,6 +365,37 @@ mod runner {
                 summary(&draft)
             ),
             Err(error) => format!("Could not put the draft in the chat: {error}"),
+        })
+    }
+
+    /// Whether a message call carries a secret saved on this Runner, in its fields or in a text
+    /// file it attaches, or a secret's `{{secret:NAME}}` placeholder, which only Browser fills.
+    fn holds_secret(app: &App, tool: &MessageTool, arguments: &Value) -> bool {
+        fn texts(value: &Value, out: &mut Vec<String>) {
+            match value {
+                Value::String(text) => out.push(text.clone()),
+                Value::Array(items) => items.iter().for_each(|item| texts(item, out)),
+                Value::Object(fields) => fields.values().for_each(|item| texts(item, out)),
+                _ => {}
+            }
+        }
+        let mut all = Vec::new();
+        texts(arguments, &mut all);
+        if all.iter().any(|text| text.contains("{{secret:")) {
+            return true;
+        }
+        let redactions = crate::secrets::Redactions::load(app);
+        if redactions.is_empty() {
+            return false;
+        }
+        if all.iter().any(|text| redactions.text(text).is_some()) {
+            return true;
+        }
+        use base64::Engine;
+        field(arguments, &tool.attachments).as_array().into_iter().flatten().filter_map(|item| item["content"].as_str()).any(|content| {
+            base64::engine::general_purpose::STANDARD
+                .decode(content.trim())
+                .is_ok_and(|bytes| redactions.text(&String::from_utf8_lossy(&bytes)).is_some())
         })
     }
 

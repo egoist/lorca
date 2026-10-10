@@ -250,19 +250,20 @@ fn install(app: &Arc<App>, manifest: Value) {
 
 /// What the turn's `before_tool_call` decides for a script's call to `tool` of `plugin_id`.
 async fn before_call(app: &Arc<App>, chat_id: &str, trigger: &super::super::review::Trigger, bot: &Bot, plugin_id: &str, tool: &str, arguments: &Value) -> Option<BeforeToolCallResult> {
-    before_call_until(app, chat_id, trigger, bot, plugin_id, tool, arguments, &CancellationToken::new()).await
+    before_call_until(app, chat_id, trigger, bot, plugin_id, tool, arguments, &CancellationToken::new(), false).await
 }
 
-/// `before_call` in a turn that `cancel` stops.
+/// `before_call` in a turn that `cancel` stops, attended or `unattended` (a routine's or an
+/// event's).
 #[allow(clippy::too_many_arguments)]
-async fn before_call_until(app: &Arc<App>, chat_id: &str, trigger: &super::super::review::Trigger, bot: &Bot, plugin_id: &str, tool: &str, arguments: &Value, cancel: &CancellationToken) -> Option<BeforeToolCallResult> {
+async fn before_call_until(app: &Arc<App>, chat_id: &str, trigger: &super::super::review::Trigger, bot: &Bot, plugin_id: &str, tool: &str, arguments: &Value, cancel: &CancellationToken, unattended: bool) -> Option<BeforeToolCallResult> {
     let catalog = turn_catalog(app, Vec::new());
     let name = catalog.state.lock().unwrap().tools.values().find(|candidate| candidate.plugin_id == plugin_id && candidate.original_name == tool).unwrap().name.clone();
     let call = lorca_agent::ToolCall { id: format!("call-{}", uuid::Uuid::new_v4()), name, arguments: arguments.clone() };
     let assistant = lorca_agent::AssistantMessage::empty("test", "test");
     let context = lorca_agent::AgentContext { system_prompt: String::new(), messages: Vec::new(), tools: Vec::new(), cache_points: Vec::new() };
     let ctx = BeforeToolCallContext { assistant_message: &assistant, tool_call: &call, args: arguments, context: &context, cancel, parent: None };
-    review_call(app, &catalog, chat_id, trigger, bot, false, &ctx).await
+    review_call(app, &catalog, chat_id, trigger, bot, unattended, &ctx).await
 }
 
 /// The user's message that asks for the work, as the trigger of the turn that answers it.
@@ -402,7 +403,7 @@ async fn a_stopped_turn_leaves_no_draft() {
     let arguments = json!({ "to": ["ana@example.com"], "body": "Menu attached.", "attachments": [{ "filename": "menu.txt", "content": "aGVsbG8=" }] });
     let cancel = CancellationToken::new();
     cancel.cancel();
-    let stopped = before_call_until(&app, &chat_id, &trigger, &bot, "gmail-test", "create_draft", &arguments, &cancel).await.unwrap();
+    let stopped = before_call_until(&app, &chat_id, &trigger, &bot, "gmail-test", "create_draft", &arguments, &cancel, false).await.unwrap();
     assert!(stopped.block && stopped.reason.as_deref() == Some("Stopped"), "{:?}", stopped.reason);
     assert!(queue::list(&app).unwrap().is_empty(), "no draft");
     assert!(std::fs::read_dir(home.join("drafts")).map(|files| files.count()).unwrap_or(0) == 0, "no stashed file");
@@ -419,6 +420,42 @@ async fn a_stopped_turn_leaves_no_draft() {
     assert!(refused.reason.as_deref().unwrap().starts_with("Could not put the draft in the chat"), "{:?}", refused.reason);
     assert_eq!(std::fs::read_dir(home.join("drafts")).map(|files| files.count()).unwrap_or(0), 0, "no stashed file left");
     assert!(seen.lock().unwrap().is_empty());
+    app.mcp.servers.lock().unwrap().clear();
+    let _ = std::fs::remove_dir_all(home);
+}
+
+#[tokio::test]
+async fn a_saved_secret_never_goes_into_a_draft_and_unattended_runs_ask_auto_review() {
+    let (app, home, bot, chat_id) = drafting_app("secret-draft");
+    install(&app, json!({ "id": "gmail-test", "name": "Gmail", "servers": { "gmail": { "type": "http", "url": "http://unused.invalid/mcp" } },
+        "tools": { "draft": ["create_draft"], "messages": [{ "tool": "create_draft", "kind": "email", "to": "to", "body": "body", "attachments": "attachments", "send": "gmail" }] } }));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let create = json!({ "name": "create_draft", "description": "Create a draft", "inputSchema": { "type": "object", "properties": {
+        "to": { "type": "array", "items": { "type": "string" } }, "body": { "type": "string" }, "attachments": { "type": "array", "items": { "type": "object" } } } } });
+    let _server = serve_fake(&app, "gmail-test", "gmail", vec![create], json!({ "content": [] }), seen.clone()).await;
+    let ask = crate::model::SecretAsk { target: "command".into(), site: None, fields: vec![crate::model::SecretField { name: "NPM_TOKEN".into(), label: "npm token".into() }] };
+    crate::secrets::keep(&app, &bot.id, &ask, &std::collections::BTreeMap::from([("NPM_TOKEN".to_string(), "npm_abcdef123456".to_string())])).unwrap();
+    let trigger = asked(&app, &chat_id, "Email Ana the token");
+    use base64::Engine;
+    let file = base64::engine::general_purpose::STANDARD.encode("NPM_TOKEN=npm_abcdef123456\n");
+    for arguments in [
+        json!({ "to": ["ana@example.com"], "body": "The token is npm_abcdef123456." }),
+        json!({ "to": ["ana@example.com"], "body": "The token is {{secret:NPM_TOKEN}}." }),
+        json!({ "to": ["ana@example.com"], "body": "Attached.", "attachments": [{ "filename": ".env", "content": file }] }),
+    ] {
+        let refused = before_call(&app, &chat_id, &trigger, &bot, "gmail-test", "create_draft", &arguments).await.unwrap();
+        assert!(refused.block && refused.reason.as_deref().unwrap().contains("saved secret"), "{:?}", refused.reason);
+    }
+    assert!(queue::list(&app).unwrap().is_empty(), "nothing reached a review item or the chat");
+    assert_eq!(std::fs::read_dir(home.join("drafts")).map(|files| files.count()).unwrap_or(0), 0);
+
+    // A routine's, a watch's, or an event's run (a webhook's included) has nobody to send a draft:
+    // its message goes to Auto-review, which here lets it run.
+    app.set_auto_review(crate::model::AutoReview { is_enabled: true, ..Default::default() });
+    app.add_auto_review_rule(crate::model::AutoReviewRule { id: "r".into(), text: "use Gmail create_draft".into(), behavior: "allow".into(), tool: Some("gmail-test/create_draft".into()) });
+    let plain = json!({ "to": ["ana@example.com"], "body": "Weekly numbers attached." });
+    assert!(before_call_until(&app, &chat_id, &trigger, &bot, "gmail-test", "create_draft", &plain, &CancellationToken::new(), true).await.is_none());
+    assert!(queue::list(&app).unwrap().is_empty());
     app.mcp.servers.lock().unwrap().clear();
     let _ = std::fs::remove_dir_all(home);
 }
