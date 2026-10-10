@@ -25,6 +25,8 @@ jobs:
   rust-linux:
     name: Rust (Linux)
     runs-on: ubuntu-latest
+    # A hung test fails the job instead of holding a pull request for hours.
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:17
@@ -51,6 +53,7 @@ jobs:
   rust-macos:
     name: Rust (macOS)
     runs-on: macos-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -61,11 +64,13 @@ jobs:
   rust-windows:
     name: Rust (Windows)
     # The crates a Windows Runner runs: the CLI, the agent, the model catalog, and provider
-    # sign-in. There paths have drive letters, PATH splits on `;`, and commands run on pipes in
-    # Git for Windows' bash, which the runner has; tests of Unix-only behavior (terminal sessions,
-    # the login shell's environment) are #[cfg(unix)]. The release builds x86_64-pc-windows-gnu with zig, and the
-    # tests build with the runner's MSVC toolchain.
+    # sign-in. There paths have drive letters, PATH splits on `;`, and commands run in Git for
+    # Windows' bash, which the runner has, in a pseudo console of their own (on pipes where there
+    # is none); tests of Unix-only behavior (the login shell's environment) are #[cfg(unix)]. The
+    # release builds x86_64-pc-windows-gnu with zig, and the tests build with the runner's MSVC
+    # toolchain. It takes longest when its cache is cold.
     runs-on: windows-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -77,6 +82,7 @@ jobs:
     name: macOS app
     # The app builds against the macOS 26 SDK.
     runs-on: macos-26
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -93,6 +99,7 @@ jobs:
   desktop:
     name: Windows and Linux app
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: desktop
@@ -116,6 +123,7 @@ jobs:
   mobile:
     name: Phone app
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: mobile
