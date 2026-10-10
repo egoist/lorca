@@ -138,6 +138,10 @@ pub struct ReviewItem {
     pub history: Vec<ReviewActivity>,
     pub created_at: f64,
     pub updated_at: f64,
+    /// Its call writes an email or Slack message: the chat shows it as a draft card, which the
+    /// apps leave out of Waiting for review.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_message: bool,
 }
 
 impl ReviewItem {
@@ -327,9 +331,9 @@ fn attention(app: &App, item: &ReviewItem) {
         crate::attention::Report {
             key: String::new(),
             category: crate::attention::Category::Review,
-            title: item.summary(),
+            title: crate::drafts::draft_of(app, item).map(|draft| crate::drafts::summary(&draft)).unwrap_or_else(|| item.summary()),
             summary: if rationale.is_empty() { format!("{} asks before it goes ahead.", crate::runtime::name_of(app, &item.bot_id)) } else { rationale.into() },
-            next_action: "Approve or reject it in its chat.".into(),
+            next_action: if crate::drafts::tool_of(app, &item.payload).is_some() { "Send or discard it in its chat.".into() } else { "Approve or reject it in its chat.".into() },
             source,
             coordinator_bot_id: None,
             urgent: false,
@@ -344,6 +348,12 @@ fn attention(app: &App, item: &ReviewItem) {
 pub(crate) fn publish_origin(app: &App, id: &str) {
     let Ok(item) = get(app, id) else { return };
     if app.chat(&item.origin.chat_id).is_none() {
+        return;
+    }
+    // An email or Slack message shows as its draft card.
+    if let Some(card) = crate::drafts::card(app, &item) {
+        crate::drafts::forget(app, &item);
+        app.upsert_message(card, true);
         return;
     }
     let mut message = Message::new(

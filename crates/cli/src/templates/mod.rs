@@ -110,9 +110,12 @@ pub async fn contents(app: &Arc<App>, bot_id: &str) -> Result<Contents, String> 
         serde_json::from_value(value)
             .map_err(|e| format!("Cannot read the Runner's template memories: {e}"))?
     };
+    // A one-time routine, a watch, and a routine around events belong to this account's own
+    // date, pull request, or calendar: a template carries repeating routines only.
     let routines = app
         .routines_of(bot_id)
         .into_iter()
+        .filter(|r| r.pull_request.is_none() && r.calendar.is_none() && crate::schedule::parse(&r.schedule).is_ok_and(|schedule| schedule.repeats()))
         .map(|r| item_of(&r.id.clone(), routines::export(r)))
         .collect();
     let mut ids = HashSet::new();

@@ -650,7 +650,7 @@ pub fn spawn_local_job(app: Arc<App>, job: Job, remote_blob_id: Option<String>) 
         // An event turn settles its delivery; it is not a run of the routine it targets.
         if job.kind == "event" {
             #[cfg(feature = "runner")]
-            if let Err(error) = crate::event_triggers::finished(&app, &job, outcome) {
+            if let Err(error) = crate::event_triggers::finished(&app, &job, outcome, cancel.is_cancelled() && !crate::handoffs::stopped_at_limits(&app, &job)) {
                 tracing::error!(%error, "recording the event turn outcome");
             }
         } else if let Some(id) = &job.routine_id {
@@ -775,7 +775,7 @@ mod tests {
                 owner_bot_id: None,
                 description: None,
                 is_pinned: false,
-                created_at: 1.0,
+                created_at: 1.0, channel: None,
             },
             unread_count: 0,
             usage: None,
@@ -916,7 +916,7 @@ mod tests {
             os: "macos".into(),
             os_version: String::new(),
             box_pubkey: runner_keys.box_pubkey(),
-            plugins: Vec::new(),
+            plugins: Vec::new(), channels: Vec::new(),
             version: String::new(),
             update: None,
             updated_at: 1,
@@ -1031,7 +1031,7 @@ mod tests {
             os: "macos".into(),
             os_version: String::new(),
             box_pubkey: mac_keys.box_pubkey(),
-            plugins: Vec::new(),
+            plugins: Vec::new(), channels: Vec::new(),
             version: String::new(),
             update: None,
             updated_at: 1,
@@ -1062,7 +1062,7 @@ mod tests {
             os: "macos".into(),
             os_version: "26.0".into(),
             box_pubkey: String::new(),
-            plugins: Vec::new(),
+            plugins: Vec::new(), channels: Vec::new(),
             version: String::new(),
             update: None,
             updated_at: 1,

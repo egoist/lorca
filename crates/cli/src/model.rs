@@ -47,6 +47,9 @@ pub struct Device {
     /// Plugins installed on that Runner, with their setup state. Secrets stay on the Runner.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugins: Vec<PluginStatus>,
+    /// The channels this Runner's bots listen on, with their state. Tokens stay on the Runner.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channels: Vec<crate::channels::ChannelStatus>,
     /// The `lorca` this Device runs, as `lorca --version` says it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub version: String,
@@ -234,6 +237,9 @@ pub enum Author {
     You,
     Bot { bot_id: String },
     System,
+    /// Someone outside Lorca writing in a channel's conversation (a Telegram group, a Slack
+    /// thread). Their words are data for the bot, never the user's instructions or approval.
+    Contact { name: String },
 }
 
 /// A file sent with a message. Its bytes travel as a `file` blob whose id is this id,
@@ -341,7 +347,83 @@ pub enum Body {
         link: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         code: Option<String>,
+        /// A secret request (`tool` = `secret`): the values the bot asks for and where they go.
+        /// The answer never comes back into the card: it is sealed to the bot's Runner.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        secret: Option<SecretAsk>,
     },
+    /// An email or Slack message the bot wrote in the chat, waiting for the user to send it: the
+    /// chat's view of its review item (`review-status-<review id>`), rewritten as it changes.
+    Draft {
+        review_id: String,
+        /// The item's version, which an edit, Send, and Discard name.
+        version: u64,
+        /// The item's state: `pending`, `approved`, `executing`, `succeeded`, `failed`,
+        /// `rejected`, `cancelled`, or `uncertain`.
+        state: String,
+        plugin_id: String,
+        /// The account it goes out from: "Gmail · Work".
+        account: String,
+        draft: MessageDraft,
+        /// Why it was not sent, or why it needs another look.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
+        /// Whether, with drafts off, the bot sends such a message itself: false for a mail
+        /// server that only makes drafts, which keeps them in the account's Drafts.
+        #[serde(default)]
+        direct: bool,
+    },
+}
+
+/// A message a bot wrote to people, as its draft card shows and edits it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct MessageDraft {
+    /// `email` or `slack`.
+    #[serde(default)]
+    pub kind: String,
+    /// Email addresses, or the Slack channel or person's id.
+    #[serde(default)]
+    pub to: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cc: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bcc: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub subject: String,
+    #[serde(default)]
+    pub body: String,
+    /// The files it carries, by name; an edit keeps the ones it still names.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<DraftAttachment>,
+    /// What it answers: the email's id, or the Slack thread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct DraftAttachment {
+    pub name: String,
+    #[serde(default)]
+    pub size: u64,
+}
+
+/// What a secret request asks for: one or more named values, and where the Runner uses them.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct SecretAsk {
+    /// `browser` (typed into a sign-in page of `site` in the bot's Browser), `command` (an
+    /// environment variable of the bot's commands), or `plugin` (a setting of the card's plugin).
+    #[serde(rename = "use")]
+    pub target: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site: Option<String>,
+    pub fields: Vec<SecretField>,
+}
+
+/// One value a secret request asks for: the name the bot uses it by, and what the card calls it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct SecretField {
+    pub name: String,
+    pub label: String,
 }
 
 /// A message quoted by the user's reply: who wrote it and how it opens, kept with the reply, so
@@ -494,6 +576,10 @@ pub struct Message {
     /// own notification policy, shared by the Runner and the apps.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notification: Option<crate::attention::Notification>,
+    /// The message's id on the channel a conversation mirrors: a Telegram message id or a
+    /// Slack `ts`. Set on a contact's message and on what the bot sent there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_id: Option<String>,
     /// The browser recording the user sent a bot with this message. The steps and screenshots
     /// stay encrypted on the Runner that recorded them; that Runner shows them to the bot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -556,6 +642,7 @@ impl Message {
             promoted_at: None,
             queued: false,
             output: None,
+            external_id: None,
             recording: None,
         }
     }
@@ -614,6 +701,26 @@ pub struct ChatMeta {
     #[serde(default)]
     pub is_pinned: bool,
     pub created_at: f64,
+    /// A conversation a channel opened: a direct chat with its bot that mirrors one thread on
+    /// Telegram or Slack, named by `title`. The bot's own DM has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<ChatChannel>,
+}
+
+/// Where a channel's conversation happens outside Lorca.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ChatChannel {
+    /// The channel (its event subscription) that opened the conversation.
+    pub channel_id: String,
+    /// `telegram` or `slack`.
+    pub service: String,
+    /// The plugin instance of the account the bot speaks through.
+    pub account_id: String,
+    /// The chat on the service: a Telegram chat id, a Slack channel id.
+    pub chat_id: String,
+    /// A Telegram forum topic or a Slack thread's `ts`, when the conversation is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
 }
 
 impl ChatMeta {
@@ -729,6 +836,13 @@ pub struct Routine {
     /// skips it. `last_run_at` and `last_outcome` count the runs, not the checks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check: Option<String>,
+    /// The pull request the routine watches, when it is a watch: the Runner reads it at each due
+    /// time, runs the bot when it changed, and ends the routine once it merges or closes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_request: Option<crate::routine_triggers::PullRequestWatch>,
+    /// The Calendar account whose events place the runs of a schedule around events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calendar: Option<crate::routine_triggers::CalendarTrigger>,
     pub created_at: f64,
 }
 
@@ -754,7 +868,14 @@ impl Routine {
         if !self.is_enabled {
             return None;
         }
-        let next = crate::schedule::parse(&self.schedule).ok()?.next_after(since.max(self.anchor()), &self.timezone)?;
+        let schedule = crate::schedule::parse(&self.schedule).ok()?;
+        match &schedule {
+            // A one-time routine is due at its time until a run at or after it, by schedule or by hand.
+            crate::schedule::Schedule::Once(_) => return schedule.once_instant(&self.timezone).filter(|at| !crate::routine_triggers::once_taken(self, *at)),
+            crate::schedule::Schedule::Events(offset) => return crate::routine_triggers::next_event_run(self, *offset).map(|(due, _)| due),
+            _ => {}
+        }
+        let next = schedule.next_after(since.max(self.anchor()), &self.timezone)?;
         // After a failure that backs off, no sooner than the retry.
         let retry = self.health.as_ref().and_then(|health| health.retry_at()).unwrap_or(0.0);
         Some(next.max(retry as i64))
@@ -1194,7 +1315,7 @@ mod app_view_tests {
     fn permission_cards_drop_the_reviewed_payload() {
         let permission = Message::new("c", Author::Bot { bot_id: "b".into() }, Body::Permission {
             plugin_id: "computer".into(), plugin_name: "Mac".into(), tool: "bash".into(), summary: "Run a command".into(),
-            arguments: serde_json::json!({ "command": "secret" }), decision: "pending".into(), reason: None, rule: None, command: None, link: None, code: None,
+            arguments: serde_json::json!({ "command": "secret" }), decision: "pending".into(), reason: None, rule: None, command: None, link: None, code: None, secret: None,
         });
         let app = permission.for_app();
         let Body::Permission { arguments, summary, command, .. } = &app.body else { panic!() };

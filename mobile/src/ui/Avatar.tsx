@@ -5,7 +5,7 @@
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { memo, useEffect } from "react";
-import { StyleSheet, View, type StyleProp, type ViewStyle } from "react-native";
+import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from "react-native";
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withRepeat, withTiming } from "react-native-reanimated";
 import { engine } from "../core/engine";
 import type { Bot } from "../core/model";
@@ -52,6 +52,18 @@ export const BotAvatar = memo(function BotAvatar({ bot, size = 40, working = fal
     </View>
   );
 });
+
+/// Someone outside Lorca: the first letter of their name on gray.
+export function ContactAvatar({ name, size = 40 }: { name: string; size?: number }) {
+  const initial = Array.from(name.trim())[0]?.toUpperCase() ?? "?";
+  return (
+    <LinearGradient colors={["#B0B0B5", "#8E8E93"]} style={[styles.disc, { width: size, height: size, borderRadius: size / 2 }]}>
+      <Text style={{ color: "#FFFFFF", fontSize: Math.round(size * 0.46), fontWeight: "600" }} allowFontScaling={false}>
+        {initial}
+      </Text>
+    </LinearGradient>
+  );
+}
 
 export function YouAvatar({ size = 40 }: { size?: number }) {
   const p = usePalette();

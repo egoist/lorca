@@ -7,6 +7,7 @@ pub mod api;
 pub mod app;
 pub mod attention;
 pub mod budgets;
+pub mod channels;
 pub mod browser;
 pub mod catalog;
 pub mod config;
@@ -16,6 +17,7 @@ pub mod credentials;
 pub mod crypto;
 #[cfg(feature = "runner")]
 pub mod decisions;
+pub mod drafts;
 pub mod events;
 pub mod event_triggers;
 pub mod files;
@@ -49,8 +51,11 @@ pub mod review_queue;
 pub mod review_execution;
 pub mod routines;
 pub mod routine_health;
+pub mod routine_triggers;
 pub mod runtime;
 pub mod schedule;
+#[cfg(feature = "runner")]
+pub mod secrets;
 #[cfg(feature = "runner")]
 pub mod scripts;
 pub mod served;

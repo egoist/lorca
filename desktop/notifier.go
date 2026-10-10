@@ -39,6 +39,9 @@ func notificationFor(message *model.Message) *chatNotification {
 	body := message.Body
 	switch {
 	// An access request is the bot's to explain in its reply, which notifies on its own.
+	case body.Kind == model.BodyPermission && body.Request.IsPending() && body.Request.IsSecret():
+		base.kind, base.body = notifyPermission, L("Asks for %@", body.Request.Summary)
+		return &base
 	case body.Kind == model.BodyPermission && body.Request.IsPending() && !body.Request.IsAccess():
 		base.kind, base.body = notifyPermission, L("Confirmation needed: %@", body.Request.Summary)
 		return &base
@@ -277,7 +280,7 @@ func (n *notifier) post(notification *chatNotification, chatID string) {
 		title = bot.Name
 	}
 	subtitle := ""
-	if !chat.IsDM() {
+	if !chat.IsBotDM() {
 		subtitle = store.Title(chat)
 	}
 	body := strings.Join(strings.FieldsFunc(notification.body, func(r rune) bool { return r == '\n' || r == '\r' }), " ")

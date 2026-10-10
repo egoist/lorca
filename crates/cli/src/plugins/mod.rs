@@ -7,6 +7,8 @@
 //! side, with the permission gate, is `mcp` under the `runner` feature.
 
 #[cfg(feature = "runner")]
+pub mod builtin;
+#[cfg(feature = "runner")]
 pub mod mcp;
 pub mod mcp_json;
 #[cfg(feature = "runner")]
@@ -60,6 +62,11 @@ pub struct Manifest {
     pub named_accounts: bool,
     #[serde(default)]
     pub servers: BTreeMap<String, ServerSpec>,
+    /// Servers the Runner answers itself (`ServerSpec::Builtin`), by name: the service each
+    /// serves. An index lists them here, apart from `servers`, so a build that does not know them
+    /// still reads the entry; `parse` moves them into `servers`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub builtin_servers: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub variables: Vec<VariableSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -98,6 +105,13 @@ pub enum ServerSpec {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         timeout: Option<u64>,
     },
+    /// A server Lorca answers itself, in the Runner (`plugins::builtin`): `telegram`, or `slack`
+    /// for Slack's bot. Only the marketplace service of that name runs one.
+    Builtin {
+        service: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        timeout: Option<u64>,
+    },
 }
 
 /// How long a plugin tool's call may go without an answer or progress, unless its server says.
@@ -108,7 +122,7 @@ impl ServerSpec {
     /// ten minutes.
     pub fn call_timeout(&self) -> std::time::Duration {
         let own = match self {
-            ServerSpec::Stdio { timeout, .. } | ServerSpec::Http { timeout, .. } => *timeout,
+            ServerSpec::Stdio { timeout, .. } | ServerSpec::Http { timeout, .. } | ServerSpec::Builtin { timeout, .. } => *timeout,
         };
         own.filter(|seconds| *seconds > 0).map(std::time::Duration::from_secs).unwrap_or(CALL_TIMEOUT)
     }
@@ -209,6 +223,40 @@ pub struct ToolHints {
     /// `toolExposure`: an exact name decides first, then the first pattern that matches.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exposure: Vec<ToolRule>,
+    /// Tools that write a message to people, and which of their arguments hold its parts: in a
+    /// chat, a bot's call to one waits as a draft card for the user to send ([`crate::drafts`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub messages: Vec<MessageTool>,
+}
+
+/// A tool that writes an email or a chat message, as a draft card reads and edits it: the
+/// argument that holds each part. A part the tool lacks is None.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct MessageTool {
+    /// The tool's name or a pattern ending in `*`.
+    pub tool: String,
+    /// `email` or `slack`, which decides the card's fields and words.
+    pub kind: String,
+    /// The recipients: an array of addresses, or one channel id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cc: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bcc: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+    pub body: String,
+    /// An array of `{ filename, mimeType, content }`, the content base64.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachments: Option<String>,
+    /// The message or thread it answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply: Option<String>,
+    /// How a draft the tool made is sent, for a server that only drafts: `gmail` sends it with
+    /// Gmail's API. None when the tool sends the message itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub send: Option<String>,
 }
 
 /// One `toolExposure` entry: a tool's name or a pattern ending in `*`, and whether it is hidden.
@@ -220,7 +268,12 @@ pub struct ToolRule {
 
 impl ToolHints {
     fn is_empty(&self) -> bool {
-        self.readonly.is_empty() && self.draft.is_empty() && self.hide.is_empty() && self.exposure.is_empty()
+        self.readonly.is_empty() && self.draft.is_empty() && self.hide.is_empty() && self.exposure.is_empty() && self.messages.is_empty()
+    }
+
+    /// The message tool `tool` is, when it writes to people.
+    pub fn message(&self, tool: &str) -> Option<&MessageTool> {
+        self.messages.iter().find(|message| pattern_matches(&message.tool, tool))
     }
 
     /// Whether `tool` is kept from bots: by its `exposure` rule (its exact name first, then the
@@ -245,7 +298,10 @@ pub fn pattern_matches(pattern: &str, name: &str) -> bool {
 impl Manifest {
     /// Reads a manifest, refusing one that could not be installed.
     pub fn parse(value: &Value) -> Result<Manifest, String> {
-        let manifest: Manifest = serde_json::from_value(value.clone()).map_err(|e| format!("Not a plugin manifest: {e}"))?;
+        let mut manifest: Manifest = serde_json::from_value(value.clone()).map_err(|e| format!("Not a plugin manifest: {e}"))?;
+        for (name, service) in std::mem::take(&mut manifest.builtin_servers) {
+            manifest.servers.entry(name).or_insert(ServerSpec::Builtin { service, timeout: None });
+        }
         manifest.check()?;
         Ok(manifest)
     }
@@ -509,7 +565,7 @@ impl Store {
     fn server_origin(&self, id: &str, server: &str) -> Option<String> {
         match self.get(id)?.manifest.servers.get(server)? {
             ServerSpec::Http { url, .. } => Some(origin_of(url)),
-            ServerSpec::Stdio { .. } => None,
+            ServerSpec::Stdio { .. } | ServerSpec::Builtin { .. } => None,
         }
     }
 
@@ -829,8 +885,11 @@ pub fn note(app: &Arc<App>, id: &str, state: Option<(&str, &str)>) {
     announce(app);
 }
 
-/// The Runner's plugin list changed: the machine blob and the local app hear.
+/// The Runner's plugin list changed: the machine blob and the local app hear, and the channels
+/// whose accounts it names say how they stand now.
 pub(crate) fn announce(app: &Arc<App>) {
+    #[cfg(feature = "runner")]
+    crate::channels::refresh(app);
     app.push_machine_blob_if_changed();
     app.emit(app.roster_summary());
 }
@@ -849,6 +908,7 @@ pub fn detail(app: &Arc<App>, id: &str) -> Result<Value, String> {
         .map(|(name, spec)| {
             let (kind, auth) = match spec {
                 ServerSpec::Stdio { command, .. } => ("stdio", json!({ "command": command })),
+                ServerSpec::Builtin { service, .. } => ("builtin", json!({ "service": service })),
                 ServerSpec::Http { url, auth, .. } => {
                     let waiting = store.codes.get(id).filter(|code| &code.server == name);
                     // A server that signs in only when asked shows its sign-in once it has asked.
@@ -1034,6 +1094,17 @@ pub async fn serve_request(app: &Arc<App>, verb: &str, body: &Value, requested_b
             let message_id = body["message_id"].as_str().ok_or("missing message_id")?;
             let decision = body["decision"].as_str().and_then(mcp::Decision::parse).ok_or("decision is allow, always, or deny")?;
             let chat_id = body["chat_id"].as_str().ok_or("missing chat_id")?;
+            // A secret request: the values are kept here first, then the waiting call hears it.
+            if let Some(message) = app.message(chat_id, message_id).filter(|message| matches!(&message.body, crate::model::Body::Permission { tool, .. } if tool == "secret")) {
+                if decision != mcp::Decision::Denied {
+                    crate::secrets::answer(app, &message, body["values"].as_object())?;
+                }
+                let decision = if decision == mcp::Decision::Denied { decision } else { mcp::Decision::Allowed };
+                return match mcp::answer(app, message_id, decision) {
+                    true => Ok(json!({ "answered": true })),
+                    false => Err("This request is no longer waiting for an answer.".into()),
+                };
+            }
             // An access request is only ever dismissed: access changes in the bot's Access sheet.
             if let Some(mut message) = app.message(chat_id, message_id) {
                 if let crate::model::Body::Permission { tool, decision: current, .. } = &mut message.body {

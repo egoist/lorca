@@ -10,7 +10,7 @@ import { t } from "../i18n";
 import { exactAnswer, ExactNumber, ExactObject, stringifyExact } from "./exactJson";
 import { reviewEditParams } from "./reviewEdit";
 import { hostFacts } from "./host";
-import { orderProjectEntries, providerConnectMethod, withReviewModel, type PlaybookContent, type PlaybookRecord, type PlaybookScope, type ProjectContext, type ProjectEntry, type ProjectKind, type ProjectSource, type Attachment, type AutoReview, type Bot, type BrowserProfile, type BudgetLimits, type BudgetState, type CallLimits, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type DurableTask, type Message, type ReviewItem, type PluginDetail, type PluginStatus, type ProviderKind, type ProviderStatus } from "./model";
+import { orderProjectEntries, providerConnectMethod, withReviewModel, sameDraft, type PlaybookContent, type PlaybookRecord, type PlaybookScope, type ProjectContext, type ProjectEntry, type ProjectKind, type ProjectSource, type Attachment, type AutoReview, type Bot, type BrowserProfile, type BudgetLimits, type BudgetState, type CallLimits, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type DurableTask, type Message, type MessageDraft, type ReviewItem, type PluginDetail, type PluginStatus, type ProviderKind, type ProviderStatus, type SavedSecret } from "./model";
 import { coreHome, loadPrefs, pathOf, wipePrefs } from "./prefs";
 import type { SharedLink, TemplateContents, TemplateImportPreview, TemplateSelection } from "./templates";
 import { clearPushes, installPushHandlers, registerForPushes } from "./push";
@@ -26,6 +26,8 @@ import {
   markFileError,
   markRead,
   patchRoutine,
+  patchChannel,
+  channelById,
   removeChat,
   removeMessage,
   removeRoutine,
@@ -351,13 +353,62 @@ class Engine {
     return this.reviewRequest("reviews.approve", { id: shown.id, expected_version: shown.version });
   }
 
+  /// Sends a draft card's message as `fields` shows it: an edit first, as the review item's next
+  /// version, then that version approved, which the bot's Runner sends. `always` then turns
+  /// drafts off for the bot, so its next messages go out directly. Rejects with why it was not
+  /// sent, with the card back as it was.
+  async sendDraft(chatId: string, messageId: string, fields: MessageDraft, always: boolean) {
+    const message = chatById(chatId)?.messages.find((m) => m.id === messageId);
+    if (!message || message.body.kind !== "draft") return;
+    const card = message.body;
+    const sending: Message = { ...message, body: { ...card, state: "approved", draft: fields } };
+    this.replaceMessage(chatId, message, sending);
+    try {
+      let version = card.version;
+      if (!sameDraft(fields, card.draft)) {
+        const edited = await this.reviewRequest("reviews.edit", { id: card.review_id, expected_version: version, message: fields });
+        version = edited.version;
+      }
+      await this.reviewRequest("reviews.approve", { id: card.review_id, expected_version: version });
+    } catch (error) {
+      this.replaceMessage(chatId, sending, message);
+      throw error;
+    }
+    if (always && message.author.kind === "bot") {
+      const botId = message.author.bot_id;
+      useStore.setState((s) => ({ bots: s.bots.map((bot) => (bot.id === botId ? { ...bot, permissions: { ...bot.permissions, drafts: false } } : bot)) }));
+      await core.request("bots.update", { id: botId, drafts: false });
+    }
+  }
+
+  /// Discards a draft card's message: nothing is sent.
+  async discardDraft(chatId: string, messageId: string) {
+    const message = chatById(chatId)?.messages.find((m) => m.id === messageId);
+    if (!message || message.body.kind !== "draft") return;
+    const discarded: Message = { ...message, body: { ...message.body, state: "rejected" } };
+    this.replaceMessage(chatId, message, discarded);
+    try {
+      await this.reviewRequest("reviews.reject", { id: message.body.review_id, expected_version: message.body.version });
+    } catch (error) {
+      this.replaceMessage(chatId, discarded, message);
+      throw error;
+    }
+  }
+
+  /// Puts `to` where `from` is in the chat, unless the core changed the message meanwhile.
+  private replaceMessage(chatId: string, from: Message, to: Message) {
+    useStore.setState((s) => ({
+      chats: s.chats.map((c) => (c.id === chatId ? { ...c, messages: c.messages.map((m) => (m === from ? to : m)) } : c)),
+    }));
+  }
+
   rejectReview(item: ReviewItem): Promise<ReviewItem> {
     return this.reviewRequest("reviews.reject", { id: item.id, expected_version: item.version });
   }
 
   /// A decision goes to the item's Runner through the core; the item it answers with is kept
   /// unless a newer revision arrived first.
-  private async reviewRequest(method: string, params: { id: string; expected_version: number }): Promise<ReviewItem> {
+  private async reviewRequest(method: string, params: { id: string; expected_version: number; message?: MessageDraft }): Promise<ReviewItem> {
     const item = await core.request<ReviewItem>(method, params);
     acceptReview(item);
     return item;
@@ -863,6 +914,35 @@ class Engine {
   /// Types the user's answer into a command running in its terminal, then Return. It goes
   /// through the core, sealed to the bot's Runner, and nothing keeps it. Rejects with why it
   /// could not, such as the Runner being offline.
+  /// Answers a secret request with a value for each of its fields, by name. The core seals them to
+  /// the bot's Runner; the card reads Saved once the Runner has them. Rejects with why they did
+  /// not go, such as the Runner being offline.
+  async answerSecret(chatId: string, messageId: string, values: Record<string, string>) {
+    await core.request("chats.permission", { chat_id: chatId, message_id: messageId, decision: "allow", values });
+    useStore.setState((s) => ({
+      chats: s.chats.map((c) =>
+        c.id !== chatId
+          ? c
+          : { ...c, messages: c.messages.map((m) => (m.id === messageId && m.body.kind === "permission" && m.body.decision === "pending" ? { ...m, body: { ...m.body, decision: "allowed" as const } } : m)) },
+      ),
+    }));
+  }
+
+  /// The secrets a Runner keeps for its bots, asked of it through the relay.
+  async secrets(runnerId: string): Promise<SavedSecret[]> {
+    const { secrets } = await core.request<{ secrets: SavedSecret[] }>("secrets.list", { runner_id: runnerId });
+    return secrets;
+  }
+
+  /// A new value for one of a Runner's secrets; it goes sealed to the Runner.
+  async replaceSecret(runnerId: string, id: string, value: string) {
+    await core.request("secrets.set", { runner_id: runnerId, id, value });
+  }
+
+  async deleteSecret(runnerId: string, id: string) {
+    await core.request("secrets.delete", { runner_id: runnerId, id });
+  }
+
   async answerCommand(chatId: string, messageId: string, text: string) {
     await core.request("bash.stdin", { chat_id: chatId, message_id: messageId, text });
   }
@@ -895,6 +975,33 @@ class Engine {
   deleteRoutine(id: string) {
     removeRoutine(id);
     void core.request("routines.delete", { id });
+  }
+
+  // MARK: - Channels
+
+  /// Pauses or resumes a channel on its Runner. Paused, it takes no new messages.
+  setChannelPaused(id: string, paused: boolean) {
+    const found = channelById(id);
+    if (!found) return;
+    patchChannel(id, (c) => ({ ...c, state: paused ? "paused" : "listening" }));
+    void core.request(paused ? "events.pause" : "events.resume", { runner_id: found.runnerId, id });
+  }
+
+  /// Tries the message that holds a channel again, or skips it, which lets the next ones run.
+  settleHeldMessage(id: string, retry: boolean) {
+    const found = channelById(id);
+    const held = found?.channel.held_delivery;
+    if (!found || !held) return;
+    patchChannel(id, (c) => ({ ...c, state: "listening", held_delivery: null, detail: "" }));
+    void core.request(retry ? "events.retry" : "events.discard", { runner_id: found.runnerId, id: held });
+  }
+
+  /// Removes a channel from its Runner; its conversations stay.
+  removeChannel(id: string) {
+    const found = channelById(id);
+    if (!found) return;
+    patchChannel(id, () => null);
+    void core.request("events.delete", { runner_id: found.runnerId, id });
   }
 
   /// The change shows at once; the core's roster event confirms it.
@@ -965,7 +1072,7 @@ export const engine = new Engine();
 // MARK: - Helpers
 
 export function chatTitle(chat: ChatMeta): string {
-  if (chat.kind === "group" && chat.title?.trim()) return chat.title.trim();
+  if ((chat.kind === "group" || chat.channel) && chat.title?.trim()) return chat.title.trim();
   const names = chat.bot_ids.map((id) => botById(id)?.name).filter((n): n is string => !!n);
   if (chat.kind === "dm") return names[0] ?? t("Chat");
   return names.length ? names.join(", ") : t("Group");

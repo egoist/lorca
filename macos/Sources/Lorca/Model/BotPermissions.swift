@@ -13,19 +13,22 @@ struct BotPermissions: Decodable, Hashable {
     var connections: [String: Connection]? = nil
     var filesystem = AccessLevel.write
     var shell = true
+    /// Whether the bot's emails and Slack messages wait in the chat as drafts for the user to send.
+    var drafts = true
 
     init() {}
 
-    enum CodingKeys: CodingKey { case connections, filesystem, shell }
+    enum CodingKeys: CodingKey { case connections, filesystem, shell, drafts }
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         connections = try values.decodeIfPresent([String: Connection].self, forKey: .connections)
         filesystem = AccessLevel(rawValue: try values.decodeIfPresent(String.self, forKey: .filesystem) ?? "write") ?? .none
         shell = try values.decodeIfPresent(Bool.self, forKey: .shell) ?? true
+        drafts = try values.decodeIfPresent(Bool.self, forKey: .drafts) ?? true
     }
 
     var json: [String: Any] {
-        var result: [String: Any] = ["filesystem": filesystem.rawValue, "shell": shell]
+        var result: [String: Any] = ["filesystem": filesystem.rawValue, "shell": shell, "drafts": drafts]
         if let connections {
             result["connections"] = connections.mapValues { grant in
                 var value: [String: Any] = ["capabilities": grant.capabilities.sorted()]

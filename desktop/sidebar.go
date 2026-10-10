@@ -222,7 +222,7 @@ func (m *mainWindow) chatRow(c *ui.Context, chat *model.Chat, selected, listFocu
 		}
 		menu.Separator()
 		remove := L("Delete Chat")
-		if chat.IsDM() {
+		if chat.IsBotDM() {
 			remove = L("Delete Bot")
 		}
 		if menu.Item(remove).Chosen() {

@@ -24,6 +24,7 @@ type botAccessSheet struct {
 	expanded   map[string]bool
 	filesystem model.AccessLevel
 	shell      bool
+	drafts     bool
 	// problem is why the tools could not be listed.
 	problem string
 	closed  bool
@@ -41,7 +42,7 @@ func (w *appWindow) presentBotAccess(botID string) *botAccessSheet {
 	st := &botAccessSheet{
 		botID: botID, botName: bot.Name, runner: store.Device(bot.RunnerID), saved: saved.Clone(),
 		levels: map[string]model.AccessLevel{}, chosen: map[string][]string{}, expanded: map[string]bool{},
-		filesystem: saved.Filesystem, shell: saved.Shell,
+		filesystem: saved.Filesystem, shell: saved.Shell, drafts: saved.Drafts,
 	}
 	// The Runner's own list first, so the sheet opens complete while it is asked for tools.
 	var listed []model.AccessPlugin
@@ -132,7 +133,7 @@ func (st *botAccessSheet) toggleTool(plugin model.AccessPlugin, name string, on 
 // policy is what Save writes. Every plugin fully open is the Runner's every plugin, one installed
 // later included.
 func (st *botAccessSheet) policy() *model.BotPermissions {
-	policy := &model.BotPermissions{Filesystem: st.filesystem, Shell: st.shell}
+	policy := &model.BotPermissions{Filesystem: st.filesystem, Shell: st.shell, Drafts: st.drafts}
 	open := true
 	for _, plugin := range st.plugins {
 		if _, picked := st.chosen[plugin.ID]; st.levels[plugin.ID] != model.AccessWrite || picked {
@@ -173,6 +174,14 @@ func (st *botAccessSheet) view(c *ui.Context, s *sheet) {
 				}
 			})
 		}
+		ui.Column(c).Gap(6).Margin(4, 0, 0, 0).Children(func() {
+			section(c, L("Messages"), sectionCaption, nil, func(k *card) {
+				accessoryRow(c, k, L("Draft first"), "", func() {
+					settingsSwitch(c, &st.drafts, L("Draft first"), false)
+				})
+			})
+			ui.Text(c, L("Emails and Slack messages wait in the chat for you to send. Off, %@ sends them itself where the service can.", st.botName)).FontSize(textCaption).TextColor(p.Label2).LineHeight(1.4)
+		})
 		ui.Column(c).Gap(6).Margin(4, 0, 0, 0).Children(func() {
 			// Files and shell commands are the Runner's, so its card goes by the Runner's name.
 			title := L("Runner")

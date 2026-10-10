@@ -394,12 +394,13 @@ final class BotRow: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    /// `title` names the row when it is about something of the bot's, beside its avatar.
     @discardableResult
-    func configure(bot: Bot, detailText: String, accessorySymbol: String? = nil, tooltip: String = "")
+    func configure(bot: Bot, title: String? = nil, detailText: String, accessorySymbol: String? = nil, tooltip: String = "")
         -> BotRow
     {
         avatar.content = AvatarView.content(for: bot)
-        name.stringValue = bot.name
+        name.stringValue = title ?? bot.name
         detail.stringValue = detailText
         if let accessorySymbol {
             accessory.image = NSImage(systemSymbolName: accessorySymbol, accessibilityDescription: tooltip)
@@ -987,9 +988,8 @@ final class SwitchRow: NSView {
     /// A routine stopped at its limits says so before anything else, as a problem the user has
     /// to act on: it runs again only once the user resumes it.
     func configure(routine: Routine, stopped: String? = nil) {
-        let symbol = routine.isRunning ? "arrow.triangle.2.circlepath" : (routine.isEnabled ? "clock" : "pause.circle")
         configure(
-            symbol: symbol,
+            symbol: routine.symbol,
             tint: routine.isRunning ? .controlAccentColor : (routine.isEnabled ? .secondaryLabelColor : .tertiaryLabelColor),
             title: routine.name, detail: routine.detail, isOn: routine.isEnabled,
             toggleTooltip: routine.isEnabled ? L("Pause %@", routine.name) : L("Resume %@", routine.name), tooltip: routine.prompt)
@@ -1003,10 +1003,44 @@ final class SwitchRow: NSView {
         }
     }
 
+    /// A channel: where it listens and what it takes, after its state in orange when the user has
+    /// something to do about it.
+    func configure(channel: ChannelStatus) {
+        let paused = channel.state == .paused
+        configure(
+            symbol: channel.service == "slack" ? "number" : "paperplane", tint: paused ? .tertiaryLabelColor : .secondaryLabelColor,
+            title: channel.name, detail: channel.listen.summary, isOn: !paused,
+            toggleTooltip: paused ? L("Resume %@", channel.name) : L("Pause %@", channel.name), tooltip: channel.task)
+        let problem: String? = switch channel.state {
+        case .held: L("On hold")
+        case .offline: L("Can’t connect")
+        default: nil
+        }
+        if let problem {
+            let line = NSMutableAttributedString(string: problem, attributes: [.foregroundColor: NSColor.systemOrange, .font: Theme.Font.caption])
+            line.append(NSAttributedString(
+                string: " · \(channel.listen.summary)", attributes: [.foregroundColor: NSColor.secondaryLabelColor, .font: Theme.Font.caption]))
+            detail.attributedStringValue = line
+        }
+        // What it takes wraps rather than lose its last tag.
+        detail.maximumNumberOfLines = 2
+        detail.lineBreakMode = .byWordWrapping
+        detail.cell?.truncatesLastVisibleLine = true
+        // The service's mark, as the plugin rows show its account.
+        if let tile = PluginLogo.tile(for: channel.service, size: 18) {
+            icon.image = tile
+            icon.symbolConfiguration = nil
+            icon.contentTintColor = nil
+            icon.alphaValue = paused ? 0.5 : 1
+        }
+        toggle.setAccessibilityLabel(channel.name)
+    }
+
     func configure(symbol: String, tint: NSColor, title: String, detail detailText: String, isOn: Bool, toggleTooltip: String, tooltip: String) {
         icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
         icon.contentTintColor = tint
+        icon.alphaValue = 1
         name.stringValue = title
         detail.stringValue = detailText
         toggle.state = isOn ? .on : .off

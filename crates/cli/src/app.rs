@@ -236,6 +236,8 @@ pub struct App {
     pub shell_sessions: crate::shell::Sessions,
     /// What this Runner has installed, with the secrets kept apart.
     pub plugins: Mutex<crate::plugins::Store>,
+    /// This Runner's channels as its machine blob advertises them, and its accounts' readers.
+    pub channels: crate::channels::Channels,
     /// The marketplace index in use, and the checks for a newer one.
     pub marketplace: crate::marketplace::Updates,
     /// Serializes guided setup resource creation and installation on this Device.
@@ -252,6 +254,9 @@ pub struct App {
     /// The bots' browser profiles on this Runner and their open browsers.
     #[cfg(feature = "runner")]
     pub browser_sessions: crate::browser::Sessions,
+    /// The secrets the user saved for this Runner's bots.
+    #[cfg(feature = "runner")]
+    pub secrets: crate::secrets::Store,
     /// The checks of this Runner's routines.
     #[cfg(feature = "runner")]
     pub routine_checks: crate::routines::Checks,
@@ -350,6 +355,7 @@ impl App {
             #[cfg(feature = "runner")]
             shell_sessions: crate::shell::Sessions::default(),
             plugins: Mutex::new(plugins),
+            channels: crate::channels::Channels::default(),
             marketplace,
             workflow_editing: tokio::sync::Mutex::new(()),
             catalog: crate::catalog::Updates::default(),
@@ -359,6 +365,8 @@ impl App {
             mcp: crate::plugins::mcp::Pool::new(),
             #[cfg(feature = "runner")]
             browser_sessions: crate::browser::Sessions::default(),
+            #[cfg(feature = "runner")]
+            secrets: crate::secrets::Store::default(),
             #[cfg(feature = "runner")]
             routine_checks: crate::routines::Checks::default(),
             feedback_lock: tokio::sync::Mutex::new(()),
@@ -601,6 +609,8 @@ impl App {
         self.step_interrupts.lock().unwrap().clear();
         #[cfg(feature = "runner")]
         self.browser_sessions.reset();
+        #[cfg(feature = "runner")]
+        self.secrets.reset();
         *self.identity.lock().unwrap() = None;
         *self.machine.lock().unwrap() = None;
         *self.credentials.lock().unwrap() = Credentials::default();
@@ -615,7 +625,7 @@ impl App {
         *self.relay_problem.lock().unwrap() = None;
         // The sync session ends on this instead of waiting for its socket to say something.
         self.outbox_notify.notify_waiters();
-        for path in [self.config.identity_path(), self.config.machine_path(), self.config.credentials_path(), self.config.settings_path(), self.config.home.join("playbooks.enc")] {
+        for path in [self.config.identity_path(), self.config.machine_path(), self.config.credentials_path(), self.config.settings_path(), self.config.home.join("playbooks.enc"), self.config.home.join("secrets.enc")] {
             if path.exists() {
                 std::fs::remove_file(&path)?;
             }
@@ -648,6 +658,7 @@ impl App {
             os_version,
             box_pubkey: keys.box_pubkey(),
             plugins: self.plugins.lock().unwrap().statuses(),
+            channels: self.channels.statuses(),
             version: config::VERSION.into(),
             update: self.update_status(),
             updated_at: config::now_unix(),
@@ -810,13 +821,14 @@ impl App {
         let turns = self.turns_here();
         let budgets = self.budgets.local_snapshots(self);
         let fingerprint = format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
             device.id,
             device.name,
             device.model,
             device.os,
             device.os_version,
             serde_json::to_string(&device.plugins).unwrap_or_default(),
+            serde_json::to_string(&device.channels).unwrap_or_default(),
             device.version,
             serde_json::to_string(&device.update).unwrap_or_default(),
             serde_json::to_string(&turns).unwrap_or_default(),
@@ -1241,6 +1253,8 @@ impl App {
         crate::feedback::forget_bot(self, id);
         crate::playbooks::forget_scopes(self, &[id.to_string()], &removed_chat_ids);
         #[cfg(feature = "runner")]
+        crate::secrets::forget_bots(self, &[id.to_string()]);
+        #[cfg(feature = "runner")]
         self.shell_sessions.close_orphans(self);
         self.roster_changed(true);
         Ok(())
@@ -1285,7 +1299,10 @@ impl App {
             meta.created_at = config::now_secs();
         }
         let ids: Vec<String> = if meta.kind == "dm" {
-            meta.title = None;
+            // A channel's conversation is named after where it happens.
+            if meta.channel.is_none() {
+                meta.title = None;
+            }
             meta.description = None;
             meta.bot_ids.iter().take(1).cloned().collect()
         } else {
@@ -1327,7 +1344,7 @@ impl App {
             .unwrap()
             .chats
             .iter()
-            .find(|c| c.meta.kind == "dm" && c.meta.bot_ids == vec![bot_id.to_string()])
+            .find(|c| c.meta.kind == "dm" && c.meta.channel.is_none() && c.meta.bot_ids == vec![bot_id.to_string()])
             .cloned()
         {
             return Ok(existing);
@@ -1341,6 +1358,7 @@ impl App {
             description: None,
             is_pinned: false,
             created_at: 0.0,
+            channel: None,
         })
     }
 
@@ -1491,8 +1509,37 @@ impl App {
 
     fn routine_out_with_state(&self, routine: &Routine, state: &State) -> Value {
         let mut out = serde_json::to_value(routine).unwrap_or_default();
-        out["schedule_text"] = json!(crate::schedule::parse(&routine.schedule).map(|s| s.describe()).unwrap_or_else(|_| routine.schedule.clone()));
+        out["schedule_text"] = json!(crate::routine_triggers::describe(routine));
         out["next_run_at"] = json!(crate::routines::next_run_shown(routine).map(|t| t as f64));
+        // What the apps word themselves: a one-time routine's instant, a watch's pull request,
+        // and the event a routine around events runs for next. What the Runner keeps to compare
+        // reads stays out.
+        if let Ok(schedule @ crate::schedule::Schedule::Once(_)) = crate::schedule::parse(&routine.schedule) {
+            out["once_at"] = json!(schedule.once_instant(&routine.timezone).map(|t| t as f64));
+        }
+        if let Some(watch) = &routine.pull_request {
+            let seen = watch.seen.as_ref();
+            out["pull_request"] = json!({
+                "repo": watch.repo,
+                "number": watch.number,
+                "title": seen.map(|seen| seen.title.clone()).unwrap_or_default(),
+                "url": seen.map(|seen| seen.url.clone()).filter(|url| !url.is_empty()).unwrap_or_else(|| format!("https://github.com/{}/pull/{}", watch.repo, watch.number)),
+            });
+        }
+        if let Some(calendar) = &routine.calendar {
+            let offset = match crate::schedule::parse(&routine.schedule) {
+                Ok(crate::schedule::Schedule::Events(offset)) => Some(offset),
+                _ => None,
+            };
+            let next = offset.and_then(|offset| crate::routine_triggers::next_event_run(routine, offset)).map(|(_, event)| json!({ "title": event.title, "start": event.start, "end": event.end }));
+            out["calendar"] = json!({
+                "account": calendar.account,
+                "matching": calendar.matching,
+                "minutes": offset.map(|offset| offset.minutes),
+                "after": offset.map(|offset| offset.after),
+                "next_event": next,
+            });
+        }
         let running = self.is_routine_running(&routine.id);
         out["is_running"] = json!(running);
         out["state"] = json!(self.routine_state(routine, state, running));
@@ -1883,6 +1930,7 @@ impl App {
                     "status": status,
                     "last_seen": seen as f64,
                     "plugins": device.plugins,
+                    "channels": device.channels,
                     "version": device.version,
                     "update": device.update,
                 })
@@ -2077,7 +2125,7 @@ mod tests {
                 owner_bot_id: owner.map(str::to_string),
                 description: None,
                 is_pinned: false,
-                created_at: 1.0,
+                created_at: 1.0, channel: None,
             },
             unread_count: 0,
             usage: None,
@@ -2103,6 +2151,8 @@ mod tests {
             last_outcome: None,
             paused_reason: None,
             check: None,
+            pull_request: None,
+            calendar: None,
             created_at: 1.0,
         }
     }

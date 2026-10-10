@@ -103,7 +103,7 @@ var commandTable = []command{
 		enabled: func() bool { return chatSelected() && len(store.ForegroundCommands(app.main.selection.ChatID)) > 0 },
 	},
 	{id: "deleteChat", title: func() string {
-		if chatSelected() && store.Chat(app.main.selection.ChatID).IsDM() {
+		if chatSelected() && store.Chat(app.main.selection.ChatID).IsBotDM() {
 			return L("Delete Bot")
 		}
 		return L("Delete Chat")

@@ -52,6 +52,14 @@ const NO_SHELL: &str = "Commands run in Git for Windows' bash, and none was foun
      %LOCALAPPDATA%\\Programs\\Git, or beside a git.exe on PATH. Install Git for Windows from https://git-scm.com/downloads/win, \
      and commands run from the next message on; or set LORCA_SHELL to the full path of a bash.exe and restart Lorca.";
 
+/// Saved secrets a call may name in `secrets`, looked up by the host as the call starts: each
+/// becomes an environment variable of that one command, so the command reads `$NAME` and the
+/// model never holds the value.
+pub trait SecretVariables: Send + Sync {
+    /// The variables for `names`, or why one cannot be had (no such secret).
+    fn variables(&self, names: &[String]) -> Result<Vec<(std::ffi::OsString, std::ffi::OsString)>, String>;
+}
+
 pub struct BashTool {
     cwd: PathBuf,
     /// None on a Windows computer without Git for Windows' bash: every call then fails saying so.
@@ -59,11 +67,19 @@ pub struct BashTool {
     sessions: Option<Arc<dyn BashSessions>>,
     waiting_after: Duration,
     extras: Arc<crate::login_shell::Extras>,
+    secrets: Option<Arc<dyn SecretVariables>>,
 }
 
 impl BashTool {
     pub fn new(cwd: PathBuf) -> Self {
-        BashTool { cwd, shell: shell(), sessions: None, waiting_after: WAITING_AFTER, extras: Arc::default() }
+        BashTool { cwd, shell: shell(), sessions: None, waiting_after: WAITING_AFTER, extras: Arc::default(), secrets: None }
+    }
+
+    /// Lets a call name saved secrets (`secrets`) that `secrets` turns into environment variables
+    /// of its command.
+    pub fn with_secrets(mut self, secrets: Arc<dyn SecretVariables>) -> Self {
+        self.secrets = Some(secrets);
+        self
     }
 
     /// Runs each command in a terminal session `sessions` keeps, so a command waiting for input
@@ -90,6 +106,25 @@ impl BashTool {
     /// ([`super::bash_session::terminals`]).
     fn terminal(&self) -> Option<&Arc<dyn BashSessions>> {
         self.sessions.as_ref().filter(|_| super::bash_session::terminals())
+    }
+}
+
+impl BashTool {
+    /// What this call's command gets over the login shell's environment: the tool's own extras,
+    /// and the secrets the call names, as variables.
+    fn extras_for(&self, args: &Value) -> Result<Arc<crate::login_shell::Extras>, ToolError> {
+        let names: Vec<String> = match args.get("secrets") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(Value::Array(names)) => names.iter().map(|name| name.as_str().map(str::to_string).ok_or_else(|| ToolError("secrets is a list of names".into()))).collect::<Result<_, _>>()?,
+            Some(_) => return Err(ToolError("secrets is a list of names".into())),
+        };
+        if names.is_empty() {
+            return Ok(self.extras.clone());
+        }
+        let secrets = self.secrets.as_ref().ok_or_else(|| ToolError("This bash takes no secrets.".into()))?;
+        let mut extras = (*self.extras).clone();
+        extras.variables.extend(secrets.variables(&names).map_err(ToolError)?);
+        Ok(Arc::new(extras))
     }
 }
 
@@ -240,6 +275,13 @@ impl Tool for BashTool {
             },
             "required": ["command", "description"]
         });
+        if self.secrets.is_some() {
+            parameters["properties"]["secrets"] = json!({
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Names of saved secrets this command needs, each set as the environment variable of that name ($NAME) for this command only"
+            });
+        }
         if self.terminal().is_some() {
             parameters["properties"]["background"] = json!({
                 "type": "boolean",
@@ -277,13 +319,14 @@ impl Tool for BashTool {
             return Err(ToolError(format!("Working directory does not exist: {}\nCannot execute bash commands.", self.cwd.display())));
         }
         let shell = self.shell.as_deref().ok_or_else(|| ToolError(NO_SHELL.into()))?;
+        let extras = self.extras_for(&args)?;
         if let Some(sessions) = self.terminal() {
             let background = args["background"].as_bool().unwrap_or(false);
-            return super::bash_session::run(shell, &command, &self.cwd, timeout, background, &self.extras, sessions, id, self.waiting_after, cancel, on_update).await;
+            return super::bash_session::run(shell, &command, &self.cwd, timeout, background, &extras, sessions, id, self.waiting_after, cancel, on_update).await;
         }
 
         let mut cmd = crate::login_shell::command(shell).await;
-        self.extras.apply(&mut cmd);
+        extras.apply(&mut cmd);
         cmd.arg("-c").arg(&command).current_dir(&self.cwd).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
         // A kill reaches everything the shell started: its process group on Unix; on Windows
         // its job object, which holds a process whose parent has exited too, where `taskkill /T`
@@ -424,6 +467,29 @@ mod tests {
         let text = result.text_content();
         assert!(text.contains("this Runner's lorca on 4899"), "{text}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    struct Saved;
+    impl SecretVariables for Saved {
+        fn variables(&self, names: &[String]) -> Result<Vec<(std::ffi::OsString, std::ffi::OsString)>, String> {
+            names.iter().map(|name| if name == "API_KEY" { Ok((name.into(), "s3cret-value".into())) } else { Err(format!("No secret {name}")) }).collect()
+        }
+    }
+
+    /// A call names the secrets its command needs; only that command gets them, as variables.
+    #[tokio::test]
+    async fn a_call_gets_the_secrets_it_names_in_its_environment() {
+        let tool = BashTool::new(std::env::temp_dir()).with_secrets(Arc::new(Saved));
+        assert_eq!(tool.parameters()["properties"]["secrets"]["type"], "array");
+        let named = tool.execute("1", json!({ "command": "printf %s \"$API_KEY\"", "secrets": ["API_KEY"] }), CancellationToken::new(), Arc::new(|_| {})).await.unwrap();
+        assert_eq!(named.text_content(), "s3cret-value");
+        let unnamed = tool.execute("2", json!({ "command": "printf %s \"${API_KEY:-unset}\"" }), CancellationToken::new(), Arc::new(|_| {})).await.unwrap();
+        assert_eq!(unnamed.text_content(), "unset");
+        let unknown = tool.execute("3", json!({ "command": "true", "secrets": ["OTHER"] }), CancellationToken::new(), Arc::new(|_| {})).await.unwrap_err();
+        assert_eq!(unknown.0, "No secret OTHER");
+        let without = BashTool::new(std::env::temp_dir());
+        assert!(without.parameters()["properties"].get("secrets").is_none());
+        assert!(without.execute("4", json!({ "command": "true", "secrets": ["API_KEY"] }), CancellationToken::new(), Arc::new(|_| {})).await.is_err());
     }
 
     #[tokio::test]

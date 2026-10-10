@@ -60,6 +60,23 @@ class GatewayContract(unittest.TestCase):
         with self.assertRaises(ValueError):
             gateway.github_envelope(self.route, self.secret, body, signature, 1700000000)
 
+    def test_a_routine_webhook_takes_any_body_from_its_key_holder(self):
+        key = b"a-private-routine-webhook-key-with-entropy"
+        headers = {"Authorization": "Bearer " + key.decode()}
+        event = gateway.webhook_envelope(self.route, key, b'{"status":"deployed"}', headers, 1700000000)
+        self.assertEqual((event["event_type"], event["payload"]), ("webhook", '{"status":"deployed"}'))
+        text = gateway.webhook_envelope(self.route, key, "plain words 🌱".encode(), {"X-Lorca-Key": key.decode()}, 1700000000)
+        self.assertEqual(json.loads(text["payload"]), "plain words 🌱")
+        self.assertNotEqual(event["delivery_id"], gateway.webhook_envelope(self.route, key, b'{"status":"deployed"}', headers, 1700000000)["delivery_id"])
+        repeat = dict(headers, **{"Idempotency-Key": "deploy-7"})
+        self.assertEqual(
+            gateway.webhook_envelope(self.route, key, b"{}", repeat, 1700000000)["delivery_id"],
+            gateway.webhook_envelope(self.route, key, b"{}", repeat, 1700000001)["delivery_id"],
+        )
+        for bad in [{}, {"Authorization": "Bearer wrong"}, {"X-Lorca-Key": key.decode() + "x"}]:
+            with self.assertRaises(ValueError):
+                gateway.webhook_envelope(self.route, key, b"{}", bad, 1700000000)
+
 
 def free_port():
     with socket.socket() as listener:
@@ -166,6 +183,77 @@ def smoke(binary):
                         process.wait()
 
 
+def smoke_webhook(binary):
+    """A routine's webhook: any body from the key's holder reaches the routine's inbox."""
+    with tempfile.TemporaryDirectory(prefix="lorca-webhook-smoke-") as folder:
+        home = pathlib.Path(folder)
+        port, gateway_port = free_port(), free_port()
+        env = dict(os.environ, LORCA_HOME=str(home), LORCA_PORT=str(port), LORCA_RELAY_URL="")
+        env.pop("LORCA_DEFAULT_RELAY_URL", None)
+        env.pop("LORCA_DEV", None)
+        def cli(*args):
+            result = subprocess.run([binary, *args], env=env, capture_output=True, timeout=20)
+            if result.returncode:
+                raise AssertionError("Lorca CLI failed: " + " ".join(args[:2]))
+            return result.stdout.decode()
+        cli("identity", "new")
+        with sqlite3.connect(home / "lorca.sqlite3") as db:
+            bot = json.loads(db.execute("SELECT json FROM bots LIMIT 1").fetchone()[0])["id"]
+        config = {
+            "name": "Deploys", "source": "gateway_hmac", "bot_id": bot,
+            "prompt": "Tell me when a deploy fails.", "event_types": ["webhook"], "filters": [], "is_enabled": False,
+        }
+        config_file = home / "subscription.json"
+        config_file.write_text(json.dumps(config))
+        sub = json.loads(cli("events", "add", str(config_file)))
+        route_file = home / "route.json"
+        cli("events", "route", sub["id"], str(route_file))
+        key = b"a-random-routine-webhook-key-of-32-bytes"
+        key_file = home / "webhook-key"
+        key_file.write_bytes(key)
+        serve = subprocess.Popen([binary, "serve", "--ready-stdout"], env=env, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        adapter = None
+        try:
+            for listening in [port, None]:
+                if listening is None:
+                    adapter = subprocess.Popen([
+                        "python3", str(pathlib.Path(__file__).with_name("event-gateway.py")),
+                        "--route", str(route_file), "--webhook-key-file", str(key_file),
+                        "--lorca", binary, "--port", str(gateway_port),
+                    ], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    listening = gateway_port
+                for _ in range(100):
+                    with socket.socket() as s:
+                        if s.connect_ex(("127.0.0.1", listening)) == 0:
+                            break
+                    time.sleep(0.05)
+                else:
+                    raise AssertionError("nothing listened")
+            def post(headers, body=b'{"deploy":"failed"}'):
+                request = urllib.request.Request(f"http://127.0.0.1:{gateway_port}/hook", data=body, headers=headers)
+                try:
+                    with urllib.request.urlopen(request, timeout=20) as response:
+                        return response.status
+                except urllib.error.HTTPError as error:
+                    return error.code
+            assert post({"Authorization": "Bearer wrong"}) == 403
+            assert post({"Authorization": "Bearer " + key.decode(), "Idempotency-Key": "deploy-7"}) == 202
+            assert post({"X-Lorca-Key": key.decode(), "Idempotency-Key": "deploy-7"}) == 202
+            assert post({"X-Lorca-Key": key.decode()}, b"plain text") == 202
+            listing = json.loads(cli("events", "list"))["subscriptions"][0]
+            assert listing["pending"] == 2, listing
+            print("routine webhook -> local CLI -> encrypted inbox: passed")
+        finally:
+            for process in [adapter, serve]:
+                if process:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--lorca")
@@ -175,3 +263,4 @@ if __name__ == "__main__":
         raise SystemExit(1)
     if args.lorca:
         smoke(str(pathlib.Path(args.lorca).resolve()))
+        smoke_webhook(str(pathlib.Path(args.lorca).resolve()))
