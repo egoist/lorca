@@ -53,6 +53,8 @@ pub mod routine_triggers;
 pub mod runtime;
 pub mod schedule;
 #[cfg(feature = "runner")]
+pub mod secrets;
+#[cfg(feature = "runner")]
 pub mod scripts;
 pub mod served;
 #[cfg(feature = "cli")]

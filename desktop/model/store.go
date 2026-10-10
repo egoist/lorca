@@ -221,6 +221,7 @@ type Store struct {
 	// mockFeedback is the demo's workflow feedback, changed in place by the same calls.
 	mockFeedback map[string]BotFeedback
 	mockBrowser  map[string][]BrowserProfile
+	mockSecrets  []mockSecret
 }
 
 type pendingEvent struct {

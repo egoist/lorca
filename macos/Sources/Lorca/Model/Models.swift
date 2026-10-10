@@ -694,6 +694,9 @@ struct PermissionRequest: Hashable {
     var rule: String? = nil
     /// A shell card's whole command, where `summary` is its first line.
     var command: String? = nil
+    /// A secret request: what the bot asks for and where its Runner uses it. The card takes the
+    /// values; they go sealed to the Runner and never come back.
+    var secret: SecretAsk? = nil
 
     /// The command as the card and its sheet show it, without the summary's `$ ` prompt.
     var fullCommand: String {
@@ -723,11 +726,20 @@ struct PermissionRequest: Hashable {
     var isShell: Bool { pluginID == "computer" && !isAccess }
     /// A sign-in card: Sign in starts the OAuth flow on the Runner.
     var isConnect: Bool { tool == "connect" }
+    /// A secret request: the card holds a field for each value.
+    var isSecret: Bool { tool == "secret" && secret != nil }
 
     /// "wants to use GitHub" / "wants to install GitHub" / "needs a sign-in to GitHub" /
     /// "wants to run a command on Workbench"
     var verbPhrase: String {
         if isAccess { return L("needs more access") }
+        if let secret, isSecret {
+            switch secret.use {
+            case .browser: return L("needs a secret for %@", secret.site ?? pluginName)
+            case .plugin: return L("needs a secret for %@", pluginName)
+            case .command: return L("needs a secret for its commands")
+            }
+        }
         if isConnect { return L("needs a sign-in to %@", pluginName) }
         if isShell { return L("wants to run a command on %@", pluginName) }
         return isInstall ? L("wants to install %@", pluginName) : L("wants to use %@", pluginName)
@@ -736,6 +748,8 @@ struct PermissionRequest: Hashable {
     var decisionText: String {
         switch decision {
         case .pending: L("Waiting for you")
+        case .allowed where isSecret: L("Saved")
+        case .denied where isSecret: L("Not now")
         case .allowed: isConnect ? L("Signing in") : L("Allowed once")
         case .always: L("Always allowed")
         case .denied: isConnect ? L("Not now") : L("Denied")
@@ -755,6 +769,40 @@ struct PermissionRequest: Hashable {
         if isShell && rule == nil { return [(L("Allow once"), "allow"), (L("Deny"), "deny")] }
         return [(L("Allow once"), "allow"), (L("Always allow"), "always"), (L("Deny"), "deny")]
     }
+}
+
+/// What a secret request asks for: the values the bot names, and where its Runner uses them.
+struct SecretAsk: Hashable {
+    enum Use: String, Hashable {
+        /// Typed into a sign-in page of `site` in the bot's Browser.
+        case browser
+        /// An environment variable of the bot's commands.
+        case command
+        /// A setting of the card's plugin.
+        case plugin
+    }
+
+    struct Field: Hashable {
+        /// How the bot refers to it.
+        var name: String
+        /// What the card calls it: "GitHub password".
+        var label: String
+    }
+
+    var use: Use
+    var site: String?
+    var fields: [Field]
+}
+
+/// A secret kept on a Runner for one of its bots, as the Secrets pane lists it: never its value.
+struct SavedSecret: Identifiable, Hashable {
+    let id: String
+    var botID: Bot.ID
+    var name: String
+    var label: String
+    var use: SecretAsk.Use
+    var site: String?
+    var updatedAt: Date
 }
 
 /// A bot's memory as its Runner reports it: the curated index with its load budget, and the

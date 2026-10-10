@@ -1184,6 +1184,13 @@ enum MockData {
         ]
     }
 
+    /// The secrets the demo Runners keep, with the Runner each is on.
+    static var secrets: [(runnerID: Device.ID, secret: SavedSecret)] = [
+        ("dev-studio", SavedSecret(id: "secret-github", botID: "bot-patch", name: "github_password", label: "GitHub password", use: .browser, site: "github.com", updatedAt: minutesAgo(60 * 26))),
+        ("dev-studio", SavedSecret(id: "secret-s2", botID: "bot-scout", name: "S2_API_KEY", label: "Semantic Scholar API key", use: .command, site: nil, updatedAt: minutesAgo(60 * 24 * 6))),
+        ("dev-workbench", SavedSecret(id: "secret-medium", botID: "bot-quill", name: "medium_password", label: "Medium password", use: .browser, site: "medium.com", updatedAt: minutesAgo(60 * 50))),
+    ]
+
     private static func researcherThread() -> [Message] {
         [
             Message(

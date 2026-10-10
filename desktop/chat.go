@@ -262,7 +262,11 @@ func (m *mainWindow) chatRowView(c *ui.Context, chat *model.Chat, row chatRow, s
 		case model.BodyNotice:
 			noticeCell(c, body.Text, row.groupStart)
 		case model.BodyPermission:
-			m.permissionCard(c, chat, message, cardAvatar, row.groupStart)
+			if body.Request.IsSecret() {
+				m.secretCard(c, chat, message, cardAvatar, row.groupStart)
+			} else {
+				m.permissionCard(c, chat, message, cardAvatar, row.groupStart)
+			}
 		}
 	}
 }

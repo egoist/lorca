@@ -284,7 +284,28 @@ export type Body =
   /// The bot asks before a plugin or shell action, or before installing a plugin (`tool` is `install`).
   /// `rule` is the rule Always allow adds, which Auto-review proposed for a shell command (`plugin_id` is `computer`);
   /// `command` is that command in full, where `summary` is its first line.
-  | { kind: "permission"; plugin_id: string; plugin_name: string; tool: string; summary: string; decision: "pending" | "allowed" | "always" | "denied" | "expired" | "dismissed" | "connected" | "failed"; reason?: string; rule?: string; command?: string; link?: string; code?: string };
+  | { kind: "permission"; plugin_id: string; plugin_name: string; tool: string; summary: string; decision: "pending" | "allowed" | "always" | "denied" | "expired" | "dismissed" | "connected" | "failed"; reason?: string; rule?: string; command?: string; link?: string; code?: string; secret?: SecretAsk };
+
+/// What a secret request asks for (a permission card with `tool` `secret`): the values the bot
+/// names, and where its Runner uses them. The card takes the values; they go sealed to the Runner
+/// and never come back.
+export interface SecretAsk {
+  /** `browser` (typed into a sign-in page of `site` in the bot's Browser), `command` (an environment variable of its commands), or `plugin` (a setting of the card's plugin). */
+  use: "browser" | "command" | "plugin";
+  site?: string;
+  fields: { name: string; label: string }[];
+}
+
+/// A secret kept on a Runner for one of its bots, as Settings lists it: never its value.
+export interface SavedSecret {
+  id: string;
+  bot_id: string;
+  name: string;
+  label: string;
+  use: SecretAsk["use"];
+  site?: string;
+  updated_at: number;
+}
 
 /// Where a bash call's command stands: Auto-review checking it, the question it asks, the command
 /// running in its terminal, what the command asks, and that it ended. While it asks, its card takes

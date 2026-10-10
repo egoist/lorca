@@ -252,6 +252,9 @@ pub struct App {
     /// The bots' browser profiles on this Runner and their open browsers.
     #[cfg(feature = "runner")]
     pub browser_sessions: crate::browser::Sessions,
+    /// The secrets the user saved for this Runner's bots.
+    #[cfg(feature = "runner")]
+    pub secrets: crate::secrets::Store,
     /// The checks of this Runner's routines.
     #[cfg(feature = "runner")]
     pub routine_checks: crate::routines::Checks,
@@ -359,6 +362,8 @@ impl App {
             mcp: crate::plugins::mcp::Pool::new(),
             #[cfg(feature = "runner")]
             browser_sessions: crate::browser::Sessions::default(),
+            #[cfg(feature = "runner")]
+            secrets: crate::secrets::Store::default(),
             #[cfg(feature = "runner")]
             routine_checks: crate::routines::Checks::default(),
             feedback_lock: tokio::sync::Mutex::new(()),
@@ -601,6 +606,8 @@ impl App {
         self.step_interrupts.lock().unwrap().clear();
         #[cfg(feature = "runner")]
         self.browser_sessions.reset();
+        #[cfg(feature = "runner")]
+        self.secrets.reset();
         *self.identity.lock().unwrap() = None;
         *self.machine.lock().unwrap() = None;
         *self.credentials.lock().unwrap() = Credentials::default();
@@ -615,7 +622,7 @@ impl App {
         *self.relay_problem.lock().unwrap() = None;
         // The sync session ends on this instead of waiting for its socket to say something.
         self.outbox_notify.notify_waiters();
-        for path in [self.config.identity_path(), self.config.machine_path(), self.config.credentials_path(), self.config.settings_path(), self.config.home.join("playbooks.enc")] {
+        for path in [self.config.identity_path(), self.config.machine_path(), self.config.credentials_path(), self.config.settings_path(), self.config.home.join("playbooks.enc"), self.config.home.join("secrets.enc")] {
             if path.exists() {
                 std::fs::remove_file(&path)?;
             }
@@ -1240,6 +1247,8 @@ impl App {
         }
         crate::feedback::forget_bot(self, id);
         crate::playbooks::forget_scopes(self, &[id.to_string()], &removed_chat_ids);
+        #[cfg(feature = "runner")]
+        crate::secrets::forget_bots(self, &[id.to_string()]);
         #[cfg(feature = "runner")]
         self.shell_sessions.close_orphans(self);
         self.roster_changed(true);

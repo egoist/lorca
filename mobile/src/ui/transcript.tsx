@@ -26,6 +26,7 @@ import { Symbol } from "./Symbol";
 import { usePaneWidth } from "./layout";
 import { Font, usePalette } from "./theme";
 import { alert } from "./alert";
+import { secretCaption, secretTitle } from "./secrets";
 
 export const SEPARATOR_GAP_SECS = 15 * 60;
 const AVATAR = 28;
@@ -382,7 +383,63 @@ export const NoticeRow = memo(function NoticeRow({ row }: { row: Extract<Row, { 
 /// call; an Always allow keeps its rule. A bot's Access refusing a call asks for more access: Edit
 /// Access… opens the bot's Access, and Dismiss puts the request away; neither runs the call. In a
 /// group the card sits in the bubbles' column, the bot's avatar beside its bottom edge.
-export const PermissionRow = memo(function PermissionRow({ row, isGroup, onDecide }: { row: Extract<Row, { type: "permission" }>; isGroup: boolean; onDecide: (message: Message, decision: "allow" | "always" | "deny") => void }) {
+export const PermissionRow = memo(function PermissionRow({ row, isGroup, onDecide, onFill }: { row: Extract<Row, { type: "permission" }>; isGroup: boolean; onDecide: (message: Message, decision: "allow" | "always" | "deny") => void; onFill: (message: Message) => void }) {
+  if (row.body.tool === "secret" && row.body.secret) return <SecretRow row={row} isGroup={isGroup} onDecide={onDecide} onFill={onFill} />;
+  return <AskRow row={row} isGroup={isGroup} onDecide={onDecide} />;
+});
+
+/// A bot asking for a secret, as the Mac's card: who asks and where it goes, why, Fill In, which
+/// opens `SecretSheet` with a field for each value, and Not now, then that the value stays on the
+/// Runner and the bot never sees it. Once answered, the answer and what was asked for: "Saved · npm
+/// token". In a group the card sits in the bubbles' column, the bot's avatar beside its bottom edge.
+function SecretRow({ row, isGroup, onDecide, onFill }: { row: Extract<Row, { type: "permission" }>; isGroup: boolean; onDecide: (message: Message, decision: "allow" | "always" | "deny") => void; onFill: (message: Message) => void }) {
+  useLanguage();
+  const p = usePalette();
+  const runner = useStore((s) => s.devices.find((d) => d.id === row.bot?.runner_id)?.name) ?? t("its Runner");
+  const showsAvatar = isGroup && row.message.author.kind === "bot";
+  const body = row.body;
+  const pending = body.decision === "pending";
+  const who = row.bot?.name ?? t("The bot");
+  const title = secretTitle(body, who);
+  const caption = secretCaption(body);
+  return (
+    <View style={[styles.messageRow, { paddingTop: row.groupStart ? 14 : 6 }]}>
+      {showsAvatar && (
+        <View style={{ width: AVATAR + GUTTER, alignSelf: "flex-end" }}>
+          <BotAvatar bot={row.bot} size={AVATAR} />
+        </View>
+      )}
+      <View style={[styles.permission, { backgroundColor: p.cell, borderColor: p.separator }]}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <Symbol name="key" size={16} color={pending ? p.tint : p.secondaryLabel} />
+          <Text style={[styles.permissionTitle, { color: p.label }]} numberOfLines={2}>
+            {title}
+          </Text>
+        </View>
+        {caption ? (
+          <Text style={[pending ? styles.reasonText : styles.caption, { color: p.secondaryLabel }]} numberOfLines={4}>
+            {caption}
+          </Text>
+        ) : null}
+        {pending ? (
+          <>
+            <View style={{ flexDirection: "row", gap: 8, marginTop: 4 }}>
+              <Pressable onPress={() => onFill(row.message)} style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill }]} accessibilityRole="button">
+                <Text style={{ color: p.tint, fontSize: 13, fontWeight: "600" }}>{t("Fill In")}</Text>
+              </Pressable>
+              <Pressable onPress={() => onDecide(row.message, "deny")} style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill }]} accessibilityRole="button">
+                <Text style={{ color: p.label, fontSize: 13, fontWeight: "600" }}>{t("Not now")}</Text>
+              </Pressable>
+            </View>
+            <Text style={[styles.ruleNote, { color: p.secondaryLabel }]}>{t("Saved on {runner}. {who} never sees it.", { runner, who })}</Text>
+          </>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+const AskRow = memo(function AskRow({ row, isGroup, onDecide }: { row: Extract<Row, { type: "permission" }>; isGroup: boolean; onDecide: (message: Message, decision: "allow" | "always" | "deny") => void }) {
   useLanguage();
   const p = usePalette();
   const [copied, setCopied] = useState(false);
