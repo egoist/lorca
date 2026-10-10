@@ -1595,15 +1595,28 @@ final class AppStore {
         perform("routines.run", ["id": id])
     }
 
-    /// The link a user follows to set a routine's receiver up, such as the Lorca GitHub App's
-    /// install, from the relay through the CLI.
-    func receiverSetupURL(_ receiver: String) async throws -> URL {
+    /// The link a user follows to set a routine's receiver up for what it listens to, such as the
+    /// Lorca GitHub App's install, or its authorization where it is installed already, from the
+    /// relay through the CLI.
+    func receiverSetupURL(_ receiver: String, subject: String) async throws -> URL {
         if isMock { return URL(string: "https://github.com/apps/lorca/installations/new")! }
-        let data = try await client.request("receivers.setup", ["receiver": receiver])
+        let data = try await client.request("receivers.setup", ["receiver": receiver, "subject": subject])
         guard let text = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["url"] as? String, let url = URL(string: text) else {
             throw CLIClient.RequestError(message: L("Request failed"))
         }
         return url
+    }
+
+    /// The routines on events that wait on the user's setup, such as installing the GitHub App.
+    var routinesAwaitingSetup: [Routine.ID] {
+        routines.filter { $0.events?.status == "needs_setup" }.map(\.id)
+    }
+
+    /// Has each routine that waits on the user's setup subscribe again on its Runner: the user is
+    /// back, likely from finishing the setup in the browser, so it needn't wait for its next try.
+    func resubscribeAwaitingSetup() {
+        guard !isMock else { return }
+        for id in routinesAwaitingSetup { perform("routines.subscribe", ["id": id]) }
     }
 
     /// A new key for a routine's webhook, made on its bot's Runner; the old one stops working.

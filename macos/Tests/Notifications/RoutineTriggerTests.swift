@@ -50,6 +50,8 @@ final class RoutineTriggerTests: XCTestCase {
         guard AppStore.shared.isMock else { throw XCTSkip("The sheets run against the demo roster: set LORCA_MOCK=1") }
         _ = NSApplication.shared
         AppStore.shared.start()
+        // Coming back to the app, only the routine waiting on setup subscribes again.
+        XCTAssertEqual(AppStore.shared.routinesAwaitingSetup, ["rt-docs-pr"])
         for (id, botID) in [("rt-login-pr", "bot-patch"), ("rt-deploys", "bot-patch"), ("rt-docs-pr", "bot-scout"), ("rt-tag-release", "bot-patch"), ("rt-call-prep", "bot-scout")] {
             let bot = try XCTUnwrap(AppStore.shared.bot(botID))
             let controller = RoutineViewController(routineID: id, bot: bot)

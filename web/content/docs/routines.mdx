@@ -51,7 +51,7 @@ A routine that watches for something, such as an inbox, a feed, or a page, can c
 - a review (approved, changes requested, or comments), a review comment, a comment, a review thread resolved or reopened
 - a failed check, check suite, workflow run, or commit status
 
-GitHub sends these to Lorca through the **Lorca GitHub App**. The first time you watch a pull request in a repository, the routine says **App not installed**: click **Install App…** on its **GitHub** row, choose the repository on GitHub, and approve the sign-in. The page you land on says whether it worked, and the watch starts on its own. The App only reads (pull requests and their comments, checks, statuses, and workflow runs) and changes nothing; the bot reads the pull request through your own [GitHub plugin](/docs/plugins) when it runs.
+GitHub sends these to Lorca through the **Lorca GitHub App**. The first time you watch a pull request in a repository, the routine says **App not installed**: click **Install App…** on its **GitHub** row, choose the repository on GitHub, and approve the sign-in. Where the App is installed already, by you or an organization's owner, you only approve the sign-in. The page you land on says whether it worked, and the watch starts as soon as you're back in Lorca. Lorca watches only repositories your GitHub account can see. The App only reads (pull requests and their comments, checks, statuses, and workflow runs) and changes nothing; the bot reads the pull request through your own [GitHub plugin](/docs/plugins) when it runs.
 
 When the pull request merges or closes, the bot runs one last time and the watch removes itself. GitHub sends nothing when the base branch moves on and makes a conflict, so a watch doesn't notice that.
 

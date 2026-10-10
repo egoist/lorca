@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { Routine } from "../core/model";
+import { routinesAwaitingSetup, type Routine } from "../core/model";
 import { aroundEvents, lastCheck, lastEvent, lastRun, looksFirst, missedRuns, nextRunText, onceText, problemExplanation, problemNeedsUser, problemWord, routineDetail, routineProblem, routineSchedule, routineSymbol, timezoneLabel } from "./routines";
 
 // A routine as the core sends it: its timezone, missed-run policy, state, and check health.
@@ -77,6 +77,8 @@ describe("routines", () => {
     expect(problemExplanation(setup, "Scout", "Workbench")).toContain("installed on acme/docs,");
     expect(lastEvent(waiting.events!)).toEqual({ when: "None yet" });
     expect(routineProblem({ ...waiting, is_enabled: false })).toBeUndefined();
+    // Coming back to the app, only the routine waiting on setup subscribes again.
+    expect(routinesAwaitingSetup([watch, { ...waiting, id: "rt-waiting" }])).toEqual(["rt-waiting"]);
     const hook = routine({ schedule: "on events", schedule_text: "When its webhook is called", events: { receiver: "webhook", status: "subscribed", endpoint: "https://hooks.lorca.app/r/abc", key: "k3y" } });
     expect(routineSchedule(hook)).toBe("When its webhook is called");
     expect(routineSymbol(hook)).toBe("link");

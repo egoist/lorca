@@ -227,7 +227,7 @@ func (w *appWindow) routineEventRows(c *ui.Context, k *card, events *model.Routi
 		}
 		row := keyValueRow(c.Key("service"), k, service, action, false, &p.Orange).Tooltip(L("Opens the page that sets it up for this account")).Cursor(ui.CursorPointer)
 		if row.Clicked() {
-			store.ReceiverSetupURL(events.Receiver, func(url string, err error) {
+			store.ReceiverSetupURL(events.Receiver, events.Subject, func(url string, err error) {
 				if err != nil {
 					w.showAlert(alertOptions{Message: L("Request failed"), Informative: model.ErrorText(err)}, nil)
 					return

@@ -329,6 +329,8 @@ func (a *appDelegate) showMainWindow() {
 			if id := m.selectedChatID(); id != "" {
 				store.MarkRead(id)
 			}
+			// Back from the browser, perhaps from a routine's setup: what waits on it tries now.
+			store.ResubscribeAwaitingSetup()
 		})
 		win.OnClose(func(e *mygo.CloseEvent) {
 			if a.quitting || !a.keepsRunning() || a.main == nil || win.ID() != a.main.win.ID() {

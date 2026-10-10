@@ -91,6 +91,10 @@ func TestRoutineTriggerWords(t *testing.T) {
 	if waiting.Problem() != model.ProblemAppNotInstalled || !strings.HasPrefix(waiting.Detail(), L("App not installed")) {
 		t.Errorf("problem %v %q", waiting.Problem(), waiting.Detail())
 	}
+	// Coming back to the app, only the routine waiting on setup subscribes again.
+	if got := store.RoutinesAwaitingSetup(); len(got) != 1 || got[0] != "rt-docs-pr" {
+		t.Errorf("awaiting setup %v", got)
+	}
 	// A paused one waits for nothing.
 	waiting.IsEnabled = false
 	if waiting.Problem() != model.ProblemNone {

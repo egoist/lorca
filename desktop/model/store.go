@@ -2121,9 +2121,10 @@ func (s *Store) RunRoutine(id string) {
 	s.perform("routines.run", map[string]any{"id": id})
 }
 
-// ReceiverSetupURL is the page that sets a receiver up for this account: where the Lorca GitHub
-// App installs.
-func (s *Store) ReceiverSetupURL(receiver string, done func(string, error)) {
+// ReceiverSetupURL is the page that sets a receiver up for this account and what a routine
+// listens to: where the Lorca GitHub App installs, or where the user authorizes it when it is
+// installed on the subject's repository already.
+func (s *Store) ReceiverSetupURL(receiver, subject string, done func(string, error)) {
 	if s.IsMock {
 		s.post(func() { done("https://github.com/apps/lorca/installations/new", nil) })
 		return
@@ -2131,9 +2132,33 @@ func (s *Store) ReceiverSetupURL(receiver string, done func(string, error)) {
 	Async(s, func() (string, error) {
 		answer, err := call[struct {
 			URL string `json:"url"`
-		}](s, "receivers.setup", map[string]any{"receiver": receiver})
+		}](s, "receivers.setup", map[string]any{"receiver": receiver, "subject": subject})
 		return answer.URL, err
 	}, done)
+}
+
+// RoutinesAwaitingSetup are the routines on events that wait on the user's setup, such as
+// installing the GitHub App.
+func (s *Store) RoutinesAwaitingSetup() []string {
+	var ids []string
+	for _, routine := range s.Routines {
+		if routine.Events != nil && routine.Events.Status == "needs_setup" {
+			ids = append(ids, routine.ID)
+		}
+	}
+	return ids
+}
+
+// ResubscribeAwaitingSetup has each routine that waits on the user's setup subscribe again on its
+// Runner: the user is back, likely from finishing the setup in the browser, so it needn't wait
+// for its next try.
+func (s *Store) ResubscribeAwaitingSetup() {
+	if s.IsMock {
+		return
+	}
+	for _, id := range s.RoutinesAwaitingSetup() {
+		s.perform("routines.subscribe", map[string]any{"id": id})
+	}
 }
 
 // RegenerateRoutineKey makes a new key for a routine's webhook on its bot's Runner; the old one

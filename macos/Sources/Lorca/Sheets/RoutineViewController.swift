@@ -217,7 +217,7 @@ final class RoutineViewController: SheetViewController {
         case "needs_setup":
             let row = KeyValueRow(key: service, value: events.isGitHub ? L("Install App…") : L("Set Up…"), tint: .systemOrange)
             row.toolTip = L("Opens the page that sets it up for this account")
-            row.addGestureRecognizer(ClickHandler { [weak self] in self?.openSetup(events.receiver) })
+            row.addGestureRecognizer(ClickHandler { [weak self] in self?.openSetup(events) })
             rows.append(row)
         case "gateway":
             rows.append(KeyValueRow(key: service, value: L("Your gateway")))
@@ -263,10 +263,10 @@ final class RoutineViewController: SheetViewController {
         NSPasteboard.general.setString(text, forType: .string)
     }
 
-    private func openSetup(_ receiver: String) {
+    private func openSetup(_ events: RoutineEvents) {
         Task { @MainActor in
             do {
-                NSWorkspace.shared.open(try await store.receiverSetupURL(receiver))
+                NSWorkspace.shared.open(try await store.receiverSetupURL(events.receiver, subject: events.subject))
             } catch {
                 _ = presentError(error)
             }

@@ -74,9 +74,9 @@ export default function RoutineScreen() {
     setCopied(row);
   }
 
-  async function openSetup(receiver: string) {
+  async function openSetup(receiver: string, subject?: string) {
     try {
-      openLink(await engine.receiverSetupURL(receiver));
+      openLink(await engine.receiverSetupURL(receiver, subject));
     } catch (error) {
       alert(t("Request failed"), error instanceof Error ? error.message : String(error));
     }
@@ -143,7 +143,7 @@ export default function RoutineScreen() {
             its Runner is off. */}
         <Section title={t("Schedule")} footer={routine.once_at || events ? undefined : missed.note}>
           <Row title={routineSchedule(routine)} titleLines={2} detail={timezoneLabel(routine)} />
-          {events ? <EventRows events={events} bot={bot.name} onSetup={() => void openSetup(events.receiver)} /> : null}
+          {events ? <EventRows events={events} bot={bot.name} onSetup={() => void openSetup(events.receiver, events.subject)} /> : null}
           {/* The calendar names its account. */}
           {routine.calendar?.account ? <Row title={t("Calendar")} detail={routine.calendar.account} /> : null}
           {events ? null : <Row title={looksFirst(routine) ? t("Next check") : t("Next run")} subtitle={routine.calendar?.next_event?.title} detail={nextRunText(routine) ?? "—"} />}

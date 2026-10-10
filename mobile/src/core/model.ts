@@ -228,6 +228,9 @@ export interface RoutineEvents {
   last_event?: { summary: string; at: number } | null;
 }
 
+/// The routines on events that wait on the user's setup, such as installing the GitHub App.
+export const routinesAwaitingSetup = (routines: Routine[]) => routines.filter((routine) => routine.events?.status === "needs_setup").map((routine) => routine.id);
+
 /// How a routine's checks and runs have gone, as its Runner records them.
 export interface RoutineHealth {
   last_check_at?: number | null;
