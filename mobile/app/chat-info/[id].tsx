@@ -12,8 +12,8 @@ import { CheckRow, FieldRow, MenuRow, Row, Section, ToggleRow } from "../../src/
 import { projectKindTitle, projectProblem, projectRowDetail } from "../../src/ui/project";
 import * as DocumentPicker from "expo-document-picker";
 import { pluginStateWord } from "../../src/ui/plugins";
-import { lastSeen, scheduleText } from "../../src/ui/format";
-import { problemNeedsUser, routineDetail, routineProblem } from "../../src/ui/routines";
+import { lastSeen } from "../../src/ui/format";
+import { problemNeedsUser, routineDetail, routineProblem, routineSchedule, routineSymbol } from "../../src/ui/routines";
 import { Symbol } from "../../src/ui/Symbol";
 import { usePalette } from "../../src/ui/theme";
 import { deviceSymbol } from "../../src/ui/devices";
@@ -381,8 +381,8 @@ export default function ChatInfoScreen() {
             <Row
               key={routine.id}
               title={routine.name}
-              subtitle={stoppedRoutine(routine) ? `${stoppedLabel(stoppedRoutine(routine)!)} · ${scheduleText(routine.schedule_text)}` : routineDetail(routine)}
-              icon={routine.is_running ? "arrow.triangle.2.circlepath" : routine.is_enabled ? "clock" : "pause.circle"}
+              subtitle={stoppedRoutine(routine) ? `${stoppedLabel(stoppedRoutine(routine)!)} · ${routineSchedule(routine)}` : routineDetail(routine)}
+              icon={routineSymbol(routine)}
               leading={routineNeedsUser(routine) ? <Symbol name="exclamationmark.circle.fill" size={20} color={orange} /> : undefined}
               accessory={
                 <Switch

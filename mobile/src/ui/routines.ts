@@ -3,8 +3,8 @@
 // happened and how to fix it, the schedule with its timezone, and its last check.
 
 import type { Routine } from "../core/model";
-import { t } from "../i18n";
-import { daySeparator, scheduleText, upcoming } from "./format";
+import { language, t } from "../i18n";
+import { daySeparator, monthDay, scheduleText, time, upcoming } from "./format";
 
 /// What went wrong with a routine: three failed sign-ins in a row paused it, of its runs
 /// (`model`) or its check; its Runner is offline; its checks or runs can't connect or sign in and
@@ -15,16 +15,19 @@ export type RoutineProblem =
   | { kind: "cantConnect"; model: boolean }
   | { kind: "signInFailed"; model: boolean }
   | { kind: "checkFailed" }
-  | { kind: "checkBlocked" };
+  | { kind: "checkBlocked" }
+  /** A watch couldn't read its pull request, or a routine around events its calendar. */
+  | { kind: "readFailed"; calendar: boolean };
 
 /// What went wrong, while something did: the core's `state` with the kind of failure.
 export function routineProblem(routine: Routine): RoutineProblem | undefined {
   if (routine.is_running) return undefined;
   const health = routine.health;
   const model = !!health?.model?.status;
+  const read: RoutineProblem | undefined = routine.pull_request || routine.calendar ? { kind: "readFailed", calendar: !!routine.calendar } : undefined;
   switch (routine.state) {
     case "blocked":
-      if (routine.paused_reason !== "authentication") return { kind: "checkBlocked" };
+      if (routine.paused_reason !== "authentication") return read ?? { kind: "checkBlocked" };
       return { kind: "signedOut", model: (health?.model?.authentication_failures ?? 0) >= 3 };
     case "waiting_for_runner":
       return { kind: "offline" };
@@ -32,7 +35,7 @@ export function routineProblem(routine: Routine): RoutineProblem | undefined {
       if (model) return (health?.model?.authentication_failures ?? 0) > 0 ? { kind: "signInFailed", model: true } : { kind: "cantConnect", model: true };
       if ((health?.authentication_failures ?? 0) > 0) return { kind: "signInFailed", model: false };
       if ((health?.connection_failures ?? 0) > 0) return { kind: "cantConnect", model: false };
-      return { kind: "checkFailed" };
+      return read ?? { kind: "checkFailed" };
   }
   return undefined;
 }
@@ -50,6 +53,7 @@ export function problemWord(problem: RoutineProblem): string {
       return t("Sign-in failed");
     case "checkFailed":
     case "checkBlocked":
+    case "readFailed":
       return t("Check failed");
   }
 }
@@ -78,7 +82,57 @@ export function problemExplanation(problem: RoutineProblem, bot: string, runner:
       return t("The check stopped with an error. {bot} got the error and can fix the check.", { bot });
     case "checkBlocked":
       return t("The check tried to change something, or to use something this bot's Access leaves out. Ask {bot} to fix it.", { bot });
+    case "readFailed":
+      return problem.calendar
+        ? t("The last check couldn’t read the calendar. Make sure {bot} may use it in Access, and that it’s signed in on {runner}.", { bot, runner })
+        : t("The last check couldn’t read the pull request. {bot} got the error and can fix the watch.", { bot });
   }
+}
+
+/// Whether its Runner looks before it runs: a check, or a watch's read of its pull request.
+export const looksFirst = (routine: Routine) => !!routine.check || !!routine.pull_request;
+
+/// The symbol of its row: what places its runs, while it is on.
+export function routineSymbol(routine: Routine): string {
+  if (routine.is_running) return "arrow.triangle.2.circlepath";
+  if (!routine.is_enabled) return "pause.circle";
+  if (routine.pull_request) return "arrow.triangle.pull";
+  if (routine.calendar) return "calendar";
+  if (routine.once_at) return "alarm";
+  return "clock";
+}
+
+/// A time around calendar events: "15 minutes before each event", "When events matching
+/// “Customer” end".
+export function aroundEvents(minutes: number, after: boolean, matching?: string | null): string {
+  const span = minutes === 60 ? t("1 hour") : minutes > 60 && minutes % 60 === 0 ? t("{count} hours", { count: minutes / 60 }) : minutes === 1 ? t("1 minute") : t("{count} minutes", { count: minutes });
+  if (!matching) {
+    if (minutes === 0) return after ? t("When each event ends") : t("When each event starts");
+    return after ? t("{span} after each event ends", { span }) : t("{span} before each event", { span });
+  }
+  if (minutes === 0) return after ? t("When events matching “{words}” end", { words: matching }) : t("When events matching “{words}” start", { words: matching });
+  return after ? t("{span} after events matching “{words}” end", { span, words: matching }) : t("{span} before events matching “{words}”", { span, words: matching });
+}
+
+/// A one-time routine's date and time on its own clock: "Once on Oct 12 at 9:00 AM", with the
+/// year when it is not this one.
+export function onceText(unix: number, zone?: string): string {
+  const at = new Date(unix * 1000);
+  // A Date whose local fields read the routine's clock.
+  const there = zone ? offsetIn(zone, at) : undefined;
+  const clock = there === undefined ? at : new Date(at.getTime() + (there + at.getTimezoneOffset()) * 60_000);
+  let day = monthDay(clock);
+  if (clock.getFullYear() !== new Date().getFullYear()) day = language === "zh" ? `${clock.getFullYear()}年${day}` : `${day}, ${clock.getFullYear()}`;
+  return t("Once on {date} at {time}", { date: day, time: time(clock) });
+}
+
+/// The routine's schedule in words: a watch's pull request, a time around events, a one-time
+/// date, or the core's sentence for a repeating schedule.
+export function routineSchedule(routine: Routine): string {
+  if (routine.pull_request) return t("Watches {pr}", { pr: `${routine.pull_request.repo}#${routine.pull_request.number}` });
+  if (routine.calendar) return aroundEvents(routine.calendar.minutes ?? 0, !!routine.calendar.after, routine.calendar.matching);
+  if (routine.once_at) return onceText(routine.once_at, routine.timezone);
+  return scheduleText(routine.schedule_text);
 }
 
 /// The offset from UTC, in minutes, that `zone` keeps at `at`; undefined for a zone the phone
@@ -99,7 +153,8 @@ function offsetIn(zone: string, at: Date): number | undefined {
 /// schedule; the phone's Schedule section gives it a row's value.
 export function timezoneLabel(routine: Routine, now = new Date()): string | undefined {
   const zone = routine.timezone;
-  if (!zone || routine.schedule.startsWith("every ")) return undefined;
+  // A watch reads on an interval, and events keep their own times.
+  if (!zone || routine.schedule.startsWith("every ") || routine.pull_request || routine.calendar) return undefined;
   const differs = [now, new Date(now.getTime() + 182 * 86_400_000)].some((at) => {
     const there = offsetIn(zone, at);
     return there !== undefined && there !== -at.getTimezoneOffset();
@@ -111,7 +166,7 @@ export function timezoneLabel(routine: Routine, now = new Date()): string | unde
 /// check that has run.
 export function lastCheck(routine: Routine): { when: string; outcome?: string } | undefined {
   const at = routine.health?.last_check_at;
-  if (!routine.check || !at) return undefined;
+  if (!looksFirst(routine) || !at) return undefined;
   const outcome = { quiet: t("nothing new"), ready: t("found something"), failed: t("failed"), blocked: t("failed") }[routine.health?.status ?? ""];
   return { when: daySeparator(new Date(at * 1000)), outcome: outcome && capitalized(outcome) };
 }
@@ -131,7 +186,7 @@ export const checkIsFailing = (routine: Routine) => routine.health?.status === "
 
 /// "Tomorrow 9:00 AM": the next run on a line of its own, as the last check and run read.
 export function nextRunText(routine: Routine): string | undefined {
-  if (!routine.next_run_at) return undefined;
+  if (!routine.next_run_at) return routine.calendar && routine.is_enabled ? t("None in the next day") : undefined;
   return capitalized(upcoming(routine.next_run_at));
 }
 
@@ -145,14 +200,14 @@ export function missedRuns(routine: Routine, runner: string): { value: string; n
 /// The line under the name in Details: what went wrong first, else the schedule and what is
 /// going on.
 export function routineDetail(routine: Routine): string {
-  const schedule = scheduleText(routine.schedule_text);
+  const schedule = routineSchedule(routine);
   if (routine.is_running) return `${schedule} · ${t("Running…")}`;
   const problem = routineProblem(routine);
   if (problem) return `${problemWord(problem)} · ${schedule}`;
   if (!routine.is_enabled) return `${schedule} · ${routine.paused_reason === "away" ? t("Paused while you were away") : t("Paused")}`;
   if (routine.next_run_at) {
     const when = upcoming(routine.next_run_at);
-    return `${schedule} · ${routine.check ? t("Next check {when}", { when }) : t("Next {when}", { when })}`;
+    return `${schedule} · ${looksFirst(routine) ? t("Next check {when}", { when }) : t("Next {when}", { when })}`;
   }
   return schedule;
 }

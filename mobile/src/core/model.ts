@@ -198,6 +198,12 @@ export interface Routine {
   /** The script the Runner runs at each due time before the bot does; `next_run_at` is then the next check. */
   check?: string | null;
   created_at: number;
+  /** When a one-time routine runs; its Runner removes it after that run. */
+  once_at?: number | null;
+  /** The pull request a watch reads at each due time, until it merges or closes. */
+  pull_request?: { repo: string; number: number; title?: string; url?: string } | null;
+  /** The calendar events a routine around events runs before or after: so many minutes before they start, or after they end. */
+  calendar?: { account?: string; matching?: string | null; minutes?: number | null; after?: boolean | null; next_event?: { title?: string; start?: number; end?: number } | null } | null;
 }
 
 /// How a routine's checks and runs have gone, as its Runner records them.

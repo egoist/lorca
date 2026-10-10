@@ -67,6 +67,10 @@ const ANDROID: Record<string, string> = {
   // Durable tasks' states and evidence.
   "circle": "radio_button_unchecked",
   "arrow.triangle.2.circlepath": "sync",
+  clock: "schedule",
+  "pause.circle": "pause_circle",
+  alarm: "alarm",
+  "arrow.triangle.pull": "merge",
   "exclamationmark.circle.fill": "error",
   "checkmark.circle": "check_circle",
   "xmark.circle": "cancel",
