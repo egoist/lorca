@@ -69,15 +69,32 @@ pub fn send_user_message(
     if let Some(id) = message_id.filter(|id| !id.is_empty()) {
         message.id = id;
     }
+    admit_user_message(app, &chat, message, &mentions, replied_bot.as_deref())
+}
+
+/// The user's message with what they recorded in one of `bot_id`'s browser profiles, addressed
+/// to that bot: the bot reads the recording with it.
+pub fn send_recording(app: Arc<App>, chat_id: &str, bot_id: &str, text: &str, recording: RecordingRef) -> anyhow::Result<Message> {
+    let chat = app.chat(chat_id).ok_or_else(|| anyhow::anyhow!("Unknown chat"))?;
+    if !chat.meta.bot_ids.iter().any(|id| id == bot_id) {
+        anyhow::bail!("The bot isn't in this chat");
+    }
+    let mentions = if chat.meta.is_group() { vec![bot_id.to_string()] } else { Vec::new() };
+    let mut message = Message::new(chat_id, Author::You, Body::Text { text: text.trim().to_string(), attachments: Vec::new(), mentions: mentions.clone(), reply_to: None });
+    message.recording = Some(recording);
+    admit_user_message(app, &chat, message, &mentions, None)
+}
+
+fn admit_user_message(app: Arc<App>, chat: &Chat, message: Message, mentions: &[String], replied_bot: Option<&str>) -> anyhow::Result<Message> {
     app.upsert_message(message.clone(), true);
     #[cfg(feature = "runner")]
     crate::turns::hear_user_message(&app, &message);
 
     if chat.meta.is_group() {
-        let members = turn_order(&chat.meta, &app, &mentions, replied_bot.as_deref());
-        start_room(app.clone(), chat_id.to_string(), message.id.clone(), members);
+        let members = turn_order(&chat.meta, &app, mentions, replied_bot);
+        start_room(app.clone(), chat.meta.id.clone(), message.id.clone(), members);
     } else if let Some(bot) = chat.meta.bot_ids.first().and_then(|id| app.bot(id)) {
-        start_turn(&app, user_turn_job(&app, chat_id, &bot.id, &message.id));
+        start_turn(&app, user_turn_job(&app, &chat.meta.id, &bot.id, &message.id));
     }
     Ok(message)
 }

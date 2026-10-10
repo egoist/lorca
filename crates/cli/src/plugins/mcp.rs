@@ -3182,6 +3182,71 @@ for line in sys.stdin:
         }), calls)
     }
 
+    /// What a scripted Browser server answers a call with: a result's `content`, or an error's text.
+    pub(crate) type BrowserAnswer = Arc<dyn Fn(&str, &Value) -> Result<Value, String> + Send + Sync>;
+
+    /// A Browser server over an in-memory MCP transport that lists `tools` and answers each call
+    /// as `answer` says, recording the calls with their arguments.
+    pub(crate) async fn scripted_browser(app: &Arc<App>, tools: &[&str], answer: BrowserAnswer) -> (Arc<Server>, Arc<Mutex<Vec<(String, Value)>>>) {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+        let (client_io, server_io) = tokio::io::duplex(1 << 20);
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let recorded = calls.clone();
+        let (read, mut write) = tokio::io::split(server_io);
+        let listed: Vec<Value> = tools.iter().map(|name| json!({ "name": name, "inputSchema": { "type": "object" } })).collect();
+        tokio::spawn(async move {
+            let mut lines = tokio::io::BufReader::new(read).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let request: Value = serde_json::from_str(&line).unwrap();
+                let Some(id) = request.get("id").cloned() else { continue };
+                let result = match request["method"].as_str() {
+                    Some("initialize") => json!({ "protocolVersion": request["params"]["protocolVersion"], "capabilities": { "tools": {} }, "serverInfo": { "name": "scripted-browser", "version": "1" } }),
+                    Some("tools/list") => json!({ "tools": listed }),
+                    Some("tools/call") => {
+                        let name = request["params"]["name"].as_str().unwrap_or_default().to_string();
+                        let arguments = request["params"]["arguments"].clone();
+                        recorded.lock().unwrap().push((name.clone(), arguments.clone()));
+                        match answer(&name, &arguments) {
+                            Ok(content) => json!({ "content": content }),
+                            Err(error) => json!({ "content": [{ "type": "text", "text": format!("### Error\nError: {error}") }], "isError": true }),
+                        }
+                    }
+                    _ => json!({}),
+                };
+                let line = format!("{}\n", json!({ "jsonrpc": "2.0", "id": id, "result": result }));
+                if write.write_all(line.as_bytes()).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let service = Client { info: ClientConfig::default(), app: Arc::downgrade(app), plugin_id: crate::browser::PLUGIN_ID.into(), server: "browser".into(), generation: app.mcp.generation(crate::browser::PLUGIN_ID) }.serve(client_io).await.unwrap();
+        let tools = service.peer().list_all_tools().await.unwrap();
+        (Arc::new(Server {
+            plugin_id: crate::browser::PLUGIN_ID.into(), name: "browser".into(), service,
+            tools: std::sync::RwLock::new(tools), instructions: None, resources: false, auth: None, bearer_expires_at: None,
+            generation: app.mcp.generation(crate::browser::PLUGIN_ID),
+        }), calls)
+    }
+
+    /// A headless Browser server from this computer's Playwright MCP (`npx`), as a profile's but
+    /// without a window, on `LORCA_TEST_CHROMIUM` or else Playwright's Chrome for Testing.
+    pub(crate) async fn headless_browser(app: &Arc<App>, cwd: &std::path::Path) -> Arc<Server> {
+        let plugin = app.plugins.lock().unwrap().get(crate::browser::PLUGIN_ID).cloned().unwrap();
+        let chromium = std::env::var("LORCA_TEST_CHROMIUM").unwrap_or_else(|_| {
+            let cache = dirs::home_dir().unwrap().join("Library/Caches/ms-playwright");
+            let build = std::fs::read_dir(&cache).unwrap().flatten().map(|entry| entry.path()).filter(|path| path.file_name().unwrap().to_string_lossy().starts_with("chromium-")).max().unwrap();
+            build.join("chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing").display().to_string()
+        });
+        let args = ["-y", "@playwright/mcp@latest", "--headless", "--isolated", "--image-responses", "allow", "--executable-path", &chromium].map(String::from).to_vec();
+        let spec = ServerSpec::Stdio { command: "npx".into(), args, env: BTreeMap::new(), cwd: Some(cwd.display().to_string()), timeout: None };
+        Arc::new(connect(app, &plugin, "browser", &spec, &BTreeMap::new(), app.mcp.generation(crate::browser::PLUGIN_ID)).await.unwrap())
+    }
+
+    /// A screenshot's content, a 1×1 PNG.
+    pub(crate) fn png_content() -> Value {
+        json!([{ "type": "image", "data": PNG, "mimeType": "image/png" }])
+    }
+
     /// One of the Browser plugin's tools as a bot's turn has it.
     pub(crate) fn browser_tool(app: &Arc<App>, bot: &Bot, chat_id: &str, name: &str) -> PluginTool {
         PluginTool {

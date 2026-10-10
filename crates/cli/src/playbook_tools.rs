@@ -56,7 +56,7 @@ impl Tool for PlaybookTool {
         match self.name {
             "list_playbooks" => "Search the user's saved skills (yours, and this group's in a group) by name or description. With sources=true, also list this chat's completed text messages with their ids, to cite in propose_playbook.",
             "read_playbook" => "Read a saved skill's SKILL.md, or one of its bundled references or scripts, by playbook:// path. Reading a script never runs it.",
-            _ => "Draft a skill for the user to review: a workflow from completed work in this chat, or a standing instruction from at least two of the user's repeated corrections. Cite the source message ids (list_playbooks with sources=true lists them). The draft is used only once the user saves it under Skills in the inspector, and it never grants permissions.",
+            _ => "Draft a skill for the user to review: a workflow from completed work in this chat, a standing instruction from at least two of the user's repeated corrections, or a browser workflow from the user's message with a recording (kind recording). Cite the source message ids (list_playbooks with sources=true lists them). The draft is used only once the user saves it under Skills in the inspector, and it never grants permissions.",
         }
     }
     fn parameters(&self) -> Value {
@@ -69,7 +69,7 @@ impl Tool for PlaybookTool {
             }
             _ => json!({"type":"object","properties":{
                 "scope":{"type":"string","enum":["bot","project"]},
-                "kind":{"type":"string","enum":["workflow","corrections"]},
+                "kind":{"type":"string","enum":["workflow","corrections","recording"]},
                 "message_ids":{"type":"array","items":{"type":"string"},"minItems":1,"maxItems":20},
                 "content":content_schema(), "note":{"type":"string"}
             },"required":["scope","kind","message_ids","content"],"additionalProperties":false}),

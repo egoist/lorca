@@ -212,7 +212,7 @@ async fn run_budgeted_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) 
     // allows Browser.
     let browser = app.plugins.lock().unwrap().get(crate::browser::PLUGIN_ID).is_some();
     if browser && bot.permissions.as_ref().is_none_or(|policy| policy.allows_connection(crate::browser::PLUGIN_ID)) {
-        tools.push(Arc::new(crate::browser::SessionTool { app: app.clone(), bot: bot.clone() }));
+        tools.push(Arc::new(crate::browser::SessionTool { app: app.clone(), bot: bot.clone(), chat_id: chat.meta.id.clone() }));
     }
     tools.extend(memory_tools(app, &store, &chat));
     tools.extend(crate::playbook_tools::tools(app, &bot.id, &chat.meta.id));
@@ -553,7 +553,7 @@ fn steering_message(
     let (Author::You, Body::Text { text, attachments, mentions, reply_to }) = (&message.author, &message.body) else { return None };
     let timestamp = (message.promoted_at.unwrap_or(message.created_at) * 1000.0) as u64;
     let text = user_words(app, bot, text, mentions, reply_to.as_ref());
-    if attachments.is_empty() {
+    if attachments.is_empty() && message.recording.is_none() {
         return Some(user(&text, timestamp));
     }
     let mut content = Vec::new();
@@ -562,6 +562,9 @@ fn steering_message(
     }
     for attachment in attachments {
         content.extend(crate::files::content_parts(app, attachment, workdir, pixels));
+    }
+    if let Some(recording) = &message.recording {
+        content.extend(crate::browser::recording_content(app, &message.id, recording, pixels));
     }
     Some(AgentMessage::User(UserMessage { content, timestamp }))
 }
@@ -1962,7 +1965,9 @@ fn transcript_bounded(app: &App, chat: &Chat, bot: &Bot, workdir: &std::path::Pa
             out.push(compaction::summary_message(&c.summary, c.tokens_before));
         }
     }
-    for message in &messages {
+    // A recording's screenshots go to the model while it is the user's latest word.
+    let latest_from_user = messages.iter().rposition(|message| message.author == Author::You);
+    for (index, message) in messages.iter().enumerate() {
         if !message.is_complete() {
             if let MessageState::Failed { .. } = message.state {
                 continue;
@@ -1986,7 +1991,7 @@ fn transcript_bounded(app: &App, chat: &Chat, bot: &Bot, workdir: &std::path::Pa
                 }
                 out.push(AgentMessage::User(UserMessage { content, timestamp }));
             }
-            (Author::You, Body::Text { text, attachments, mentions, reply_to }) if attachments.is_empty() => {
+            (Author::You, Body::Text { text, attachments, mentions, reply_to }) if attachments.is_empty() && message.recording.is_none() => {
                 out.push(user(&user_words(app, bot, text, mentions, reply_to.as_ref()), timestamp))
             }
             (Author::You, Body::Text { text, attachments, mentions, reply_to }) => {
@@ -1998,6 +2003,9 @@ fn transcript_bounded(app: &App, chat: &Chat, bot: &Bot, workdir: &std::path::Pa
                 }
                 for attachment in attachments {
                     content.extend(crate::files::content_parts(app, attachment, workdir, pixels));
+                }
+                if let Some(recording) = &message.recording {
+                    content.extend(crate::browser::recording_content(app, &message.id, recording, pixels && latest_from_user == Some(index)));
                 }
                 out.push(AgentMessage::User(UserMessage { content, timestamp }));
             }
