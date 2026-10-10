@@ -149,3 +149,5 @@ Every run takes a `CancellationToken` (for `Agent`, `AgentHandle::abort` cancels
 - A tool that sees it returns early. The built-in `bash` kills the command's whole process group.
 
 If cancellation arrives while tools run, the tools already running finish or bail out and their results are appended; calls not yet started get an `Operation aborted` error result instead of running (a sequential batch stops after the current call). The run ends no later than its next model call.
+
+A tool, or a `before_tool_call` hook, that does not end once its token is cancelled (a read blocked on a named pipe, a server that never answers) holds the run for `AgentLoopConfig::stop_grace` at most: `STOP_GRACE`, 15 seconds, unless `with_stop_grace` sets another. The loop then drops the call's future and gives it an error result that starts `Cut off:` and says it may have done part of its work and may still be running, so a later run knows. Work the future handed to a thread of its own, as `spawn_blocking` does, goes on there. The same holds for the step a `StepInterrupt` cuts short.
