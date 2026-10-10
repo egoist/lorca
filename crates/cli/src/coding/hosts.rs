@@ -522,7 +522,11 @@ fn follow(pane: Arc<InPane>, events: Events) {
                     if let Some(screen) = &screen {
                         let _ = events.send(Event::Screen(screen.clone()));
                     }
-                    let said = screen.map(|screen| screen.lines().rev().take(30).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n"));
+                    let said = screen.map(|screen| {
+                        let body = super::screen::body(&screen);
+                        let lines: Vec<&str> = body.lines().collect();
+                        lines[lines.len().saturating_sub(30)..].join("\n")
+                    });
                     let _ = events.send(Event::Idle(said));
                 }
                 _ => {}

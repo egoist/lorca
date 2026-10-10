@@ -792,14 +792,19 @@ async fn handle(app: &Arc<App>, agent: &Arc<Agent>, event: Event, generation: u6
             true
         }
         Event::Screen(screen) => {
-            let changed = agent.transcript.lock().unwrap().screen.as_deref() != Some(screen.as_str());
+            let previous = agent.transcript.lock().unwrap().screen.clone();
+            let changed = previous.as_deref() != Some(screen.as_str());
             if changed {
                 if let Some(link) = screen.lines().filter_map(proof::pull_request).last() {
                     agent.record.lock().unwrap().pull_request = Some(link);
                 }
+                // A spinner's timer ticking is not progress: only a change past its digits is.
+                let progressed = previous.is_none_or(|previous| without_digits(&previous) != without_digits(&screen));
                 agent.transcript.lock().unwrap().screen = Some(screen);
-                *agent.active_at.lock().unwrap() = Instant::now();
-                unstall(app, agent);
+                if progressed {
+                    *agent.active_at.lock().unwrap() = Instant::now();
+                    unstall(app, agent);
+                }
             }
             changed
         }
@@ -886,6 +891,10 @@ async fn handle(app: &Arc<App>, agent: &Arc<Agent>, event: Event, generation: u6
             false
         }
     }
+}
+
+fn without_digits(text: &str) -> String {
+    text.chars().filter(|c| !c.is_ascii_digit()).collect()
 }
 
 /// The agent shows something new: it is no longer stalled.
