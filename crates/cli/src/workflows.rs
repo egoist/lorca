@@ -659,7 +659,7 @@ fn materialize(app: &Arc<App>, setup: &mut Setup, answers: BTreeMap<String, Stri
                 last_outcome: None,
                 paused_reason: None,
                 check: None,
-                pull_request: None,
+                events: None,
                 calendar: None,
                 created_at: now,
             };

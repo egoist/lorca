@@ -1011,19 +1011,19 @@ struct Routine: Identifiable, Hashable {
     var health = RoutineHealth()
     /// When a one-time routine runs; its Runner removes it after that run.
     var onceAt: Date? = nil
-    /// The pull request a watch reads at each due time, until it merges or closes.
-    var pullRequest: RoutineWatch? = nil
+    /// What a routine on events listens to: a pull request through GitHub, or its own webhook.
+    var events: RoutineEvents? = nil
     /// The calendar events a routine around events runs before or after.
     var calendar: RoutineCalendar? = nil
 
-    /// Whether its Runner looks before it runs: a check, or a watch's read of its pull request.
-    var looksFirst: Bool { check != nil || pullRequest != nil }
+    /// Whether its Runner looks before it runs: a routine with a check.
+    var looksFirst: Bool { check != nil }
 
     /// The symbol of its row: what places its runs, while it is on.
     var symbol: String {
         if isRunning { return "arrow.triangle.2.circlepath" }
         if !isEnabled { return "pause.circle" }
-        if pullRequest != nil { return "arrow.triangle.pull" }
+        if let events { return events.isWebhook ? "link" : "arrow.triangle.pull" }
         if calendar != nil { return "calendar" }
         if onceAt != nil { return "alarm" }
         return "clock"
@@ -1037,22 +1037,25 @@ struct Routine: Identifiable, Hashable {
         case "blocked" where pausedReason == "authentication":
             return .signedOut(model: health.modelAuthenticationFailures >= 3)
         case "waiting_for_runner": return .offline
-        case "blocked": return pullRequest != nil || calendar != nil ? .readFailed(calendar: calendar != nil) : .checkBlocked
+        case "blocked": return calendar != nil ? .readFailed(calendar: true) : .checkBlocked
         case "failed":
             if model { return health.modelAuthenticationFailures > 0 ? .signInFailed(model: true) : .cantConnect(model: true) }
             if health.authenticationFailures > 0 { return .signInFailed(model: false) }
             if health.connectionFailures > 0 { return .cantConnect(model: false) }
-            if pullRequest != nil || calendar != nil { return .readFailed(calendar: calendar != nil) }
+            if calendar != nil { return .readFailed(calendar: true) }
             return .checkFailed
-        default: return nil
+        // A routine on events whose receiver waits for the user.
+        default:
+            guard isEnabled, let events, events.status == "needs_setup" else { return nil }
+            return .needsSetup(gitHub: events.isGitHub, subject: events.subject)
         }
     }
 
     /// The schedule in words, with its timezone when this Mac keeps other hours, now or in half a
     /// year: "Weekdays at 9:00 AM (New York time)". An interval counts time, whatever the zone.
     var scheduleSummary: String {
-        // A watch reads on an interval, and events keep their own times.
-        guard !schedule.hasPrefix("every "), pullRequest == nil, calendar == nil, let zone = TimeZone(identifier: timezone) else { return scheduleText }
+        // Events keep their own times.
+        guard !schedule.hasPrefix("every "), events == nil, calendar == nil, let zone = TimeZone(identifier: timezone) else { return scheduleText }
         let now = Date()
         let differs = [now, now.addingTimeInterval(182 * 86_400)].contains { zone.secondsFromGMT(for: $0) != TimeZone.current.secondsFromGMT(for: $0) }
         guard differs else { return scheduleText }
@@ -1096,15 +1099,38 @@ struct Routine: Identifiable, Hashable {
     }
 }
 
-/// The pull request a watch follows, as the CLI gives it.
-struct RoutineWatch: Hashable {
-    var repo: String
-    var number: Int
+/// What a routine on events listens to, as the CLI gives it: a receiver on the relay (`github`,
+/// `webhook`), a subject (`acme/project#42`), how it listens, and the latest event.
+struct RoutineEvents: Hashable {
+    var receiver: String
+    var subject: String
+    /// "pending", "subscribed", "needs_setup", or "gateway".
+    var status: String
+    var sourceName: String
     var title: String
     var url: URL?
+    /// A webhook's URL and the key its senders include.
+    var endpoint: String
+    var key: String
+    var lastEvent: LastEvent?
 
-    /// "acme/project#42"
-    var label: String { "\(repo)#\(number)" }
+    struct LastEvent: Hashable {
+        var summary: String
+        var at: Date
+    }
+
+    var isWebhook: Bool { receiver == "webhook" || !endpoint.isEmpty }
+    var isGitHub: Bool { receiver == "github" }
+
+    /// What starts the routine: "Watches acme/project#42", "When its webhook is called".
+    var words: String {
+        if !subject.isEmpty { return L("Watches %@", subject) }
+        if isWebhook { return L("When its webhook is called") }
+        return L("On %@ events", sourceName.isEmpty ? receiver : sourceName)
+    }
+
+    /// The header line a sender pastes: "Authorization: Bearer <key>".
+    var authorizationHeader: String { "Authorization: Bearer \(key)" }
 }
 
 /// The calendar events a routine runs around: so many minutes before they start, or after they
@@ -1140,8 +1166,10 @@ enum RoutineProblem: Hashable {
     case checkFailed
     /// The check called something that could change things.
     case checkBlocked
-    /// A watch couldn't read its pull request, or a routine around events its calendar.
+    /// A routine around events couldn't read its calendar.
     case readFailed(calendar: Bool)
+    /// A routine on events waits for the user: the GitHub App installed on its repository.
+    case needsSetup(gitHub: Bool, subject: String)
 
     /// One or two words for the row and the sheet's State.
     var text: String {
@@ -1151,6 +1179,8 @@ enum RoutineProblem: Hashable {
         case .cantConnect: return L("Can’t connect")
         case .signInFailed: return L("Sign-in failed")
         case .checkFailed, .checkBlocked, .readFailed: return L("Check failed")
+        case .needsSetup(gitHub: true, _): return L("App not installed")
+        case .needsSetup: return L("Needs setup")
         }
     }
 
@@ -1181,10 +1211,14 @@ enum RoutineProblem: Hashable {
             return L("The check stopped with an error. %@ got the error and can fix the check.", bot)
         case .checkBlocked:
             return L("The check tried to change something, or to use something this bot's Access leaves out. Ask %@ to fix it.", bot)
-        case .readFailed(calendar: false):
-            return L("The last check couldn’t read the pull request. %@ got the error and can fix the watch.", bot)
-        case .readFailed(calendar: true):
+        case .readFailed(calendar: false), .readFailed(calendar: true):
             return L("The last check couldn’t read the calendar. Make sure %@ may use it in Access, and that it’s signed in on %@.", bot, runner)
+        case .needsSetup(gitHub: true, let subject):
+            // The repository of "acme/project#42".
+            let repo = subject.split(separator: "#").first.map(String.init) ?? subject
+            return L("The Lorca GitHub App isn’t installed on %@, or isn’t connected to this account yet. Install it from the GitHub row: the watch starts once it’s in.", repo)
+        case .needsSetup:
+            return L("The service needs you first. %@ said what to do in the chat.", bot)
         }
     }
 }

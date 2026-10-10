@@ -1,12 +1,12 @@
 ---
 title: Webhooks and events
-description: Start a bot's work when a service sends an event, such as a pull request update, through a small gateway you run.
+description: Start a bot's work when any service sends an event, through a small gateway you run.
 icon: Webhook
 ---
 
 An **event subscription** starts a bot's work when a service sends something: a pull request changes, a payment comes in, a script finishes. Each event runs the subscription's task in the bot's direct chat on its Runner.
 
-Services send webhooks unencrypted, so Lorca's relay doesn't take them: it only ever holds ciphertext. A **gateway** you run receives the service's request on your own HTTPS address, checks it, and hands it to Lorca, which encrypts it for the bot's Runner. To follow a single pull request you need none of this: ask the bot to [watch it](/docs/routines#pull-request-watches).
+A **gateway** you run receives the service's request on your own HTTPS address, checks it, and hands it to Lorca, which encrypts it for the bot's Runner, so the request never leaves your computers unencrypted. To follow a pull request, or to give a routine a URL any service can call, you need none of this: Lorca hosts both, see [pull request watches](/docs/routines#pull-request-watches) and [webhooks](/docs/routines#webhooks).
 
 ## Set up GitHub pull request events
 
@@ -65,10 +65,6 @@ In the repository's webhook settings, set your public URL, JSON content, the sam
 
 </Step>
 </Steps>
-
-## A routine's webhook
-
-Any service or script can start a [routine](/docs/routines) with a URL and a key of its own. Make a subscription whose `routine_id` is the routine and whose `event_types` is `["webhook"]`, export its route, and run the gateway with `--webhook-key-file` instead (a key of at least 32 characters). It listens on `127.0.0.1:8984/hook` and takes a request that sends the key as `Authorization: Bearer <key>` or `X-Lorca-Key`. The body, JSON or text, is what the bot reads. Send an `Idempotency-Key` header to have a repeated request run once.
 
 ## What a bot does with an event
 

@@ -27,6 +27,8 @@ Everything with meaning: bot names and descriptions, chat titles, messages, atta
 | Which device keys are online, and when they last connected | Which devices are Runners |
 | A phone's push token | What a notification says |
 
+A pull request watch and a routine's webhook are the exception: see [Webhooks](#webhooks).
+
 Devices prove who they are by signing a challenge with their key. There is nothing to phish.
 
 ## Pairing
@@ -66,7 +68,7 @@ A bot's turn sends the conversation, its description, and its tool results to th
 
 ## Webhooks
 
-Lorca's relay takes no webhooks from other services, since they arrive unencrypted. Events reach a bot through a [gateway](/docs/events) you run on one of your own computers, which checks the service's signature and hands the event to Lorca to encrypt.
+Services send webhooks unencrypted. For a [pull request watch](/docs/routines#pull-request-watches) and a [routine's webhook](/docs/routines#webhooks), Lorca's relay receives them: it checks GitHub's signature or the routine's key, encrypts the event for the routine's Runner, and keeps only the encrypted copy, so it reads each request while it does that. For each such routine it keeps the pull request it watches, which of your computers runs it, a hash of the webhook's key, and the secret it signs the routine's events with, all deleted with the routine. To keep a service's requests off the relay entirely, use a [gateway](/docs/events) you run on one of your own computers, which checks the service's signature and hands the event to Lorca to encrypt.
 
 ## Updates
 

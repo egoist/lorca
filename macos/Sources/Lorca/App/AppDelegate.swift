@@ -123,6 +123,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         showMainWindow()
     }
 
+    /// Back in front, likely from finishing a routine's setup in the browser: the routines that
+    /// wait on it subscribe again now.
+    func applicationDidBecomeActive(_ notification: Notification) {
+        store.resubscribeAwaitingSetup()
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
     }

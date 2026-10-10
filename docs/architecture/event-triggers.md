@@ -1,6 +1,6 @@
 # Event triggers
 
-An event subscription starts work in a bot's DM on its assigned Runner when a service sends an event: a PR update, an incoming message, a finished meeting transcript. A user-controlled gateway verifies the service, signs a Lorca envelope with the subscription's secret, and seals it to the Runner. The Runner checks the signature, filters the event, and queues it in an encrypted inbox that deduplicates, orders or coalesces deliveries, and starts an `event` Job through the normal runtime. `crates/cli/src/event_triggers.rs` holds subscriptions, delivery, health, and the inbox. Routines keep their scheduled checks beside this; an event runs its subscription's task directly. A [channel](channels.md) is a subscription whose source is Telegram or Slack, which the Runner reads itself.
+An event subscription starts work in a bot's DM on its assigned Runner when a service sends an event: a PR update, an incoming message, a finished meeting transcript. Something that takes the service's request verifies it, signs a Lorca envelope with the subscription's secret, and seals it to the Runner: one of the relay's [hosted receivers](receivers.md), for a [routine on events](routine-triggers.md#routines-on-events), or a gateway the user runs. The Runner checks the signature, filters the event, and queues it in an encrypted inbox that deduplicates, orders or coalesces deliveries, and starts an `event` Job through the normal runtime. `crates/cli/src/event_triggers.rs` holds subscriptions, delivery, health, and the inbox. Routines keep their scheduled checks beside this; an event runs its subscription's task directly, or its routine's for a routine on events. A [channel](channels.md) is a subscription whose source is Telegram or Slack, which the Runner reads itself.
 
 ## Configuration and health
 
@@ -24,7 +24,7 @@ An event subscription starts work in a bot's DM on its assigned Runner when a se
 }
 ```
 
-`source` is `gateway_hmac` for a gateway's subscription, or `telegram` or `slack` with a `channel` for a [channel](channels.md#a-channel), which has no route or generation to rotate. The CLI generates the subscription id and a random signing secret. A filter is an RFC 6901 JSON pointer into the payload and the value it must equal; an event passes when its type is listed and every filter matches. `routine_id` names one of the bot's routines: the event's Job carries it as its scope, and a paused routine holds the event's work, but the event runs the subscription's own prompt, never the routine's check, and leaves the routine's schedule and last outcome alone.
+`source` is `gateway_hmac` for a gateway's or a receiver's subscription, or `telegram` or `slack` with a `channel` for a [channel](channels.md#a-channel), which has no route or generation to rotate. A routine on events makes its own subscription, which carries `receiver { receiver, subject, relay_id? }` and the routine's name and task; it goes with its routine, and the CLI's commands leave its receiver and subject as they are. The CLI generates the subscription id and a random signing secret. A filter is an RFC 6901 JSON pointer into the payload and the value it must equal; an event passes when its type is listed and every filter matches. `routine_id` names one of the bot's routines: the event's Job carries it as its scope, and a paused routine holds the event's work, but the event runs the subscription's own prompt, never the routine's check, and leaves the routine's schedule and last outcome alone. A routine on events is the exception: its own subscription's events are its runs.
 
 - `events list` shows each subscription's configuration, state (`idle`, `ready`, `running`, `paused`, `expired`, `blocked`, `attention`), pending count, its twenty newest deliveries and their states, the last authenticated receipt and last successful turn, and why work is held. It never shows the secret or a payload.
 - `events edit <id> <config.json>` replaces the configuration; the target bot and routine stay fixed.
@@ -40,37 +40,23 @@ The local API has `events.list/create/update/pause/resume/reconnect/route/delete
 
 ## User-controlled gateway
 
-The gateway is the assigned Runner or another paired Device of the account. It receives the service's plaintext on the user's HTTPS endpoint, verifies the service's signature, signs a Lorca envelope, and pipes it to `lorca events forward <route.json>`. The CLI checks the envelope's signature, subscription, and generation against the route, refuses an expired route, then:
+A gateway takes a service's events where no hosted receiver does: a subscription the user sets up for any service, or a routine on events whose relay has no such receiver (a self-hosted relay, GitHub Enterprise Server). It is the assigned Runner or another paired Device of the account. It receives the service's plaintext on the user's HTTPS endpoint, verifies the service's signature, signs a Lorca envelope, and pipes it to `lorca events forward <route.json>`. The CLI checks the envelope's signature, subscription, and generation against the route, refuses an expired route, then:
 
 - on the assigned Runner, verifies and stores it in the inbox directly;
 - on another Device, checks that the route's Runner is a paired Runner whose box key matches, seals the envelope to that key, and queues the ciphertext in its durable relay outbox under a random blob id. A running `lorca serve` uploads it, so it survives a relay outage and a gateway restart.
 
 The gateway uses its existing machine and relay bearer, registers nothing new, and keeps the service's token and webhook secret to itself.
 
-`scripts/event-gateway.py` is the gateway for GitHub pull requests:
+`scripts/event-gateway.py` is the gateway for GitHub and for a routine's webhook:
 
-1. On the Runner, create the subscription above and export its route with `lorca events route <id> /private/path/pr-route.json`.
-2. Put the route on the gateway (or keep it on the Runner), with a random GitHub webhook secret of at least 32 bytes in another private file, and run `lorca serve` there.
-3. Run `python3 scripts/event-gateway.py --route /private/path/pr-route.json --github-secret-file /private/path/github-secret --lorca /absolute/path/lorca`. It listens on `127.0.0.1:8984/github`; put the user's HTTPS reverse proxy in front of it.
-4. In the repository's webhook settings, set that URL, JSON content, the same secret, and Pull requests events.
+1. Export the subscription's route with `lorca events route <id> /private/path/route.json` (a routine on events names its subscription in the bot's setup message).
+2. Put the route on the gateway (or keep it on the Runner), with a random GitHub webhook secret, or a random key for the webhook, of at least 32 bytes in another private file, and run `lorca serve` there.
+3. Run `python3 scripts/event-gateway.py --route <route.json> --github-secret-file <secret> --lorca /absolute/path/lorca`, with `--routine` for a pull request watch, or `--webhook-key-file <key>` for a routine's webhook. It listens on `127.0.0.1:8984` (`/github`, `/hook`); put the user's HTTPS reverse proxy in front of it.
+4. For GitHub, set that URL in the repository's webhook settings with JSON content and the same secret: Pull requests events for a subscription, and for a watch also reviews, review comments and threads, issue comments, check runs and suites, statuses, and workflow runs.
 
-The script compares `X-Hub-Signature-256` with HMAC-SHA256 of the exact body in constant time ([GitHub's contract](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)). GitHub does not sign its event and delivery headers, so the script takes the type from the signed body (`github.pull_request`) and the delivery id from SHA-256 of the body: identical bodies are one delivery whatever the headers say. It answers `202` once Lorca has stored or queued the envelope, `200` to GitHub's signed ping, `403` to a bad signature or another event, `413` to a body over 64 KiB, and `503` when Lorca cannot take it; GitHub's delivery history redelivers a refused one. It logs no bodies or secrets, and reads the route and secret on every request, so a new route takes effect at once.
+For GitHub the script compares `X-Hub-Signature-256` with HMAC-SHA256 of the exact body in constant time ([GitHub's contract](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)). GitHub does not sign its event and delivery headers, so a subscription's event type comes from the signed body (`github.pull_request`) and the delivery id from SHA-256 of the body: identical bodies are one delivery whatever the headers say. With `--routine` it words each event as the [GitHub App](receivers.md#the-lorca-github-app) does, one envelope per pull request it concerns, with the pull request as GitHub spells it as the subject, and keeps each pull request's head commit beside the route (`<route>.heads.json`) to match commit statuses. With `--webhook-key-file` it takes a body from a sender that holds the key, as `Authorization: Bearer <key>` or `X-Lorca-Key: <key>`, and seals what a hosted webhook would: JSON as it came, any other text as a string, one delivery per `Idempotency-Key`. It answers `202` once Lorca has stored or queued the envelope, `200` to GitHub's signed ping, `403` to a bad signature or key, `413` to a body over 64 KiB, and `503` when Lorca cannot take it; GitHub's delivery history redelivers a refused one. It logs no bodies or secrets, and reads the route and secret on every request, so a new route takes effect at once.
 
 An adapter for another service follows the same contract: verify the provider's signature and replay protection, pick a stable delivery id, sign the envelope.
-
-## A routine's webhook
-
-A routine can take any service's or script's request, with a URL and a key of its own: an event subscription whose `routine_id` is the routine and whose `event_types` is `["webhook"]`, and the gateway in webhook mode. `python3 scripts/event-gateway.py --route <route.json> --webhook-key-file <key-file> --lorca <path>` listens on `127.0.0.1:8984/hook` behind the user's HTTPS proxy and takes a body from a sender that holds the key, as `Authorization: Bearer <key>` or `X-Lorca-Key: <key>`, compared in constant time; the key has at least 32 bytes. The body is the event's `payload`: JSON as it came, any other text as a JSON string. Nothing signs a generic body, so an `Idempotency-Key` header makes a repeat one delivery, and without one every request is its own. Each routine's webhook is its own subscription, route, key, and gateway, so rotating one (`events reconnect`) leaves the others as they are. The run reads the body as untrusted data, like any event's.
-
-### No webhook inbox on the relay
-
-A webhook inbox on the relay, a public URL per routine whose requests the relay seals to the Runner, would spare the user the gateway and its HTTPS endpoint. The relay has none:
-
-- It would read every request in plaintext before sealing it. Services send webhooks unencrypted, so for that traffic the relay would stop being the store of ciphertext the [constraints](../../ARCHITECTURE.md#constraints) require: whoever runs it, lorca.app included, could read the pull requests, payments, and messages passing through.
-- A service's signature is checked with its secret. On the relay that is one more secret its operator holds; without it the relay keeps whatever anyone posts to a leaked URL until the Runner turns it away.
-- The relay takes only requests signed by an account's Devices. A public inbox is unauthenticated ingress with its own abuse, quota, and rate limits, and new relay endpoints that every client and relay must follow.
-
-The gateway keeps plaintext on a Device the user owns, and a tunnel or reverse proxy gives it the public URL. Following one pull request needs no webhook: a [watch](routine-triggers.md#watches) reads it through GitHub on the Runner.
 
 ## Signed delivery contract
 
@@ -93,7 +79,7 @@ The gateway keeps plaintext on a Device the user owns, and a tunnel or reverse p
 [version, subscription_id, generation, delivery_id, occurred_at, event_type, payload]
 ```
 
-so it covers every routing, replay, and filter field as well as the body. The Runner verifies it in constant time before anything else, relay deliveries included. An unknown version, a bad signature or generation, malformed JSON, a payload over 64 KiB, a timestamp more than five minutes ahead, or one more than seven days old (the relay's retention of envelopes; UTC Unix seconds) starts no work, and an authentication failure shows in the subscription's health. The signature says the configured gateway sent it; the content is still untrusted data.
+so it covers every routing, replay, and filter field as well as the body. The Runner verifies it in constant time before anything else, relay deliveries included. An unknown version, a bad signature or generation, malformed JSON, a payload over 64 KiB, a timestamp more than five minutes ahead, or one more than seven days old (the relay's retention of envelopes; UTC Unix seconds) starts no work, and an authentication failure shows in the subscription's health. The signature says the configured gateway or receiver sent it; the content is still untrusted data.
 
 ## Durable ordering and execution
 
@@ -109,8 +95,8 @@ A Runner that restarts with a delivery still running marks it interrupted: a too
 
 An event's turn counts toward its DM's [limits](budgets.md), or its routine's when the subscription targets one. A routine stopped at its limits holds the events aimed at it until the user resumes it. A turn its limits stop fails its delivery; Resume in its Limits sheet (`budgets.resume { kind: job, run: true }`) puts the delivery back in the inbox, which admits it again in its place under the same Job id and what it used.
 
-While a delivery has failed or was interrupted, the bot's DM has a quiet blocker in [Coordinator attention](attention.md), "Events on hold: Name" ("Channel on hold: Name" for a channel, whose sheet in every app offers Try Again and Skip), which every app lists and which opens the DM; a gateway that stopped authenticating has another, "Events refused: Name". The first settles once the delivery is retried or discarded, the second once a delivery authenticates again or the subscription is reconnected, and removing the subscription settles both.
+While a delivery has failed or was interrupted, the bot's DM has a quiet blocker in [Coordinator attention](attention.md), "Events on hold: Name" ("Channel on hold: Name" for a channel, whose sheet in every app offers Try Again and Skip), which every app lists and which opens the DM; a gateway or receiver that stopped authenticating has another, "Events refused: Name". The first settles once the delivery is retried or discarded, the second once a delivery authenticates again or the subscription is reconnected, and removing the subscription settles both.
 
 ## Relay transport
 
-Relay protocol 3 adds `kind=event` to the relay and to what Devices poll. A protocol-3 relay must be deployed before clients that ask for this kind, since an older one refuses the unknown kind. An `event` blob is sealed to `recipient_machine_pubkey`, with no slot or group; the relay refuses one without a recipient. It stores the ciphertext and metadata as for other machine envelopes, only the recipient lists or opens it, and an unconsumed one goes after seven days with other sealed work.
+Relay protocol 3 adds `kind=event` to the relay and to what Devices poll. A protocol-3 relay must be deployed before clients that ask for this kind, since an older one refuses the unknown kind. An `event` blob is sealed to `recipient_machine_pubkey`, with no slot or group; the relay refuses one without a recipient. A Device's outbox uploads it, or a hosted receiver stores it directly for the subscription's machine. The relay keeps the ciphertext and metadata as for other machine envelopes, only the recipient lists or opens it, and an unconsumed one goes after seven days with other sealed work.

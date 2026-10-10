@@ -110,7 +110,59 @@ const MIGRATIONS: &[&str] = &[
         updated_at      INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS shares_identity ON shares(identity_pubkey);",
+    // 3: receivers: the redirects in flight, the service accounts identities proved they hold,
+    // and the routines' subscriptions.
+    "CREATE TABLE IF NOT EXISTS receiver_states (
+        state           TEXT PRIMARY KEY,
+        receiver        TEXT NOT NULL,
+        identity_pubkey TEXT NOT NULL,
+        created_at      INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS receiver_accounts (
+        receiver        TEXT NOT NULL,
+        account         TEXT NOT NULL,
+        identity_pubkey TEXT NOT NULL,
+        label           TEXT NOT NULL,
+        scope           TEXT NOT NULL,
+        bound_at        INTEGER NOT NULL,
+        PRIMARY KEY (receiver, account, identity_pubkey)
+    );
+    CREATE TABLE IF NOT EXISTS receiver_subscriptions (
+        id              TEXT PRIMARY KEY,
+        receiver        TEXT NOT NULL,
+        identity_pubkey TEXT NOT NULL,
+        machine_pubkey  TEXT NOT NULL,
+        subject         TEXT NOT NULL,
+        subscription_id TEXT NOT NULL,
+        generation      INTEGER NOT NULL,
+        secret          TEXT NOT NULL,
+        key_hash        TEXT,
+        account         TEXT,
+        state           TEXT,
+        created_at      INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS receiver_subscriptions_subject ON receiver_subscriptions(receiver, subject);
+    CREATE INDEX IF NOT EXISTS receiver_subscriptions_identity ON receiver_subscriptions(identity_pubkey);",
 ];
+
+const RECEIVER_SUB_COLUMNS: &str = "id, receiver, identity_pubkey, machine_pubkey, subject, subscription_id, generation, secret, key_hash, account, state, created_at";
+
+fn receiver_sub(row: &rusqlite::Row) -> rusqlite::Result<crate::db::ReceiverSub> {
+    Ok(crate::db::ReceiverSub {
+        id: row.get(0)?,
+        receiver: row.get(1)?,
+        identity_pubkey: row.get(2)?,
+        machine_pubkey: row.get(3)?,
+        subject: row.get(4)?,
+        subscription_id: row.get(5)?,
+        generation: row.get(6)?,
+        secret: row.get(7)?,
+        key_hash: row.get(8)?,
+        account: row.get(9)?,
+        state: row.get(10)?,
+        created_at: row.get(11)?,
+    })
+}
 
 pub struct Sqlite {
     path: String,
@@ -351,7 +403,7 @@ pub fn delete_identity(connection: &mut Connection, identity_pubkey: &str, revok
     }
     tx.prepare_cached("DELETE FROM challenges WHERE machine_pubkey IN (SELECT machine_pubkey FROM machines WHERE identity_pubkey = ?1)")?
         .execute(params![identity_pubkey])?;
-    for table in ["push_tokens", "pairings", "blobs", "deleted_groups", "sequences", "usage", "shares", "machines"] {
+    for table in ["push_tokens", "pairings", "blobs", "deleted_groups", "sequences", "usage", "shares", "receiver_states", "receiver_accounts", "receiver_subscriptions", "machines"] {
         tx.prepare_cached(&format!("DELETE FROM {table} WHERE identity_pubkey = ?1"))?.execute(params![identity_pubkey])?;
     }
     tx.prepare_cached("DELETE FROM identities WHERE pubkey = ?1")?.execute(params![identity_pubkey])?;
@@ -926,6 +978,133 @@ impl Store for Sqlite {
     async fn delete_share(&self, identity_pubkey: &str, id: &str) -> ApiResult<bool> {
         let (identity_pubkey, id) = (identity_pubkey.to_string(), id.to_string());
         self.write(move |db| Ok(db.execute("DELETE FROM shares WHERE id = ?1 AND identity_pubkey = ?2", params![id, identity_pubkey])? > 0)).await
+    }
+
+    async fn receiver_state_put(&self, state: &str, receiver: &str, identity_pubkey: &str) -> ApiResult<()> {
+        let (state, receiver, identity_pubkey) = (state.to_string(), receiver.to_string(), identity_pubkey.to_string());
+        self.write(move |db| {
+            // States an hour old are done with: a redirect takes minutes.
+            db.execute("DELETE FROM receiver_states WHERE created_at < ?1", params![now() - 3600])?;
+            db.execute("INSERT INTO receiver_states (state, receiver, identity_pubkey, created_at) VALUES (?1, ?2, ?3, ?4)", params![state, receiver, identity_pubkey, now()])?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn receiver_state_take(&self, state: &str, receiver: &str, not_before: i64) -> ApiResult<Option<String>> {
+        let (state, receiver) = (state.to_string(), receiver.to_string());
+        self.write(move |db| {
+            let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let identity: Option<String> = tx
+                .query_row("SELECT identity_pubkey FROM receiver_states WHERE state = ?1 AND receiver = ?2 AND created_at >= ?3", params![state, receiver, not_before], |row| row.get(0))
+                .optional()?;
+            tx.execute("DELETE FROM receiver_states WHERE state = ?1", params![state])?;
+            tx.commit()?;
+            Ok(identity)
+        })
+        .await
+    }
+
+    async fn receiver_bind(&self, receiver: &str, account: &str, identity_pubkey: &str, label: &str, scope: &str) -> ApiResult<()> {
+        let (receiver, account, identity_pubkey, label, scope) = (receiver.to_string(), account.to_string(), identity_pubkey.to_string(), label.to_string(), scope.to_string());
+        self.write(move |db| {
+            db.execute(
+                "INSERT INTO receiver_accounts (receiver, account, identity_pubkey, label, scope, bound_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT (receiver, account, identity_pubkey) DO UPDATE SET label = excluded.label, scope = excluded.scope, bound_at = excluded.bound_at",
+                params![receiver, account, identity_pubkey, label, scope, now()],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn receiver_scope(&self, receiver: &str, account: &str, identity_pubkey: &str) -> ApiResult<Option<String>> {
+        let (receiver, account, identity_pubkey) = (receiver.to_string(), account.to_string(), identity_pubkey.to_string());
+        self.read(move |db| {
+            Ok(db
+                .query_row("SELECT scope FROM receiver_accounts WHERE receiver = ?1 AND account = ?2 AND identity_pubkey = ?3", params![receiver, account, identity_pubkey], |row| row.get(0))
+                .optional()?)
+        })
+        .await
+    }
+
+    async fn receiver_unbind(&self, receiver: &str, account: &str) -> ApiResult<Vec<crate::db::ReceiverSub>> {
+        let (receiver, account) = (receiver.to_string(), account.to_string());
+        self.write(move |db| {
+            let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let removed = tx
+                .prepare(&format!("SELECT {RECEIVER_SUB_COLUMNS} FROM receiver_subscriptions WHERE receiver = ?1 AND account = ?2"))?
+                .query_map(params![receiver, account], receiver_sub)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            tx.execute("DELETE FROM receiver_subscriptions WHERE receiver = ?1 AND account = ?2", params![receiver, account])?;
+            tx.execute("DELETE FROM receiver_accounts WHERE receiver = ?1 AND account = ?2", params![receiver, account])?;
+            tx.commit()?;
+            Ok(removed)
+        })
+        .await
+    }
+
+    async fn receiver_subscribe(&self, sub: &crate::db::ReceiverSub, max: i64) -> ApiResult<()> {
+        let sub = sub.clone();
+        self.write(move |db| {
+            let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let count: i64 = tx.query_row("SELECT COUNT(*) FROM receiver_subscriptions WHERE identity_pubkey = ?1 AND receiver = ?2", params![sub.identity_pubkey, sub.receiver], |row| row.get(0))?;
+            if count >= max {
+                return Err(ApiError::conflict("This account has as many of these subscriptions as the relay keeps"));
+            }
+            tx.execute(
+                &format!("INSERT INTO receiver_subscriptions ({RECEIVER_SUB_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)"),
+                params![sub.id, sub.receiver, sub.identity_pubkey, sub.machine_pubkey, sub.subject, sub.subscription_id, sub.generation, sub.secret, sub.key_hash, sub.account, sub.state, sub.created_at],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn receiver_unsubscribe(&self, identity_pubkey: &str, receiver: &str, id: &str) -> ApiResult<bool> {
+        let (identity_pubkey, receiver, id) = (identity_pubkey.to_string(), receiver.to_string(), id.to_string());
+        self.write(move |db| Ok(db.execute("DELETE FROM receiver_subscriptions WHERE id = ?1 AND receiver = ?2 AND identity_pubkey = ?3", params![id, receiver, identity_pubkey])? > 0))
+            .await
+    }
+
+    async fn receiver_sub(&self, receiver: &str, id: &str) -> ApiResult<Option<crate::db::ReceiverSub>> {
+        let (receiver, id) = (receiver.to_string(), id.to_string());
+        self.read(move |db| {
+            Ok(db
+                .query_row(&format!("SELECT {RECEIVER_SUB_COLUMNS} FROM receiver_subscriptions WHERE id = ?1 AND receiver = ?2"), params![id, receiver], receiver_sub)
+                .optional()?)
+        })
+        .await
+    }
+
+    async fn receiver_subs(&self, receiver: &str, prefix: &str) -> ApiResult<Vec<crate::db::ReceiverSub>> {
+        let (receiver, prefix) = (receiver.to_string(), prefix.to_string());
+        self.read(move |db| {
+            // `substr` instead of LIKE: a subject is the service's spelling, and may hold `%` or `_`.
+            Ok(db
+                .prepare(&format!("SELECT {RECEIVER_SUB_COLUMNS} FROM receiver_subscriptions WHERE receiver = ?1 AND substr(subject, 1, length(?2)) = ?2"))?
+                .query_map(params![receiver, prefix], receiver_sub)?
+                .collect::<rusqlite::Result<Vec<_>>>()?)
+        })
+        .await
+    }
+
+    async fn receiver_set_key(&self, identity_pubkey: &str, receiver: &str, id: &str, key_hash: &str) -> ApiResult<bool> {
+        let (identity_pubkey, receiver, id, key_hash) = (identity_pubkey.to_string(), receiver.to_string(), id.to_string(), key_hash.to_string());
+        self.write(move |db| {
+            Ok(db.execute("UPDATE receiver_subscriptions SET key_hash = ?1 WHERE id = ?2 AND receiver = ?3 AND identity_pubkey = ?4", params![key_hash, id, receiver, identity_pubkey])? > 0)
+        })
+        .await
+    }
+
+    async fn receiver_set_state(&self, receiver: &str, id: &str, state: &str) -> ApiResult<()> {
+        let (receiver, id, state) = (receiver.to_string(), id.to_string(), state.to_string());
+        self.write(move |db| {
+            db.execute("UPDATE receiver_subscriptions SET state = ?1 WHERE id = ?2 AND receiver = ?3", params![state, id, receiver])?;
+            Ok(())
+        })
+        .await
     }
 
     async fn inactive_identities(&self, before: i64) -> ApiResult<Vec<String>> {

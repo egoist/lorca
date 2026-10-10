@@ -43,6 +43,15 @@ lorca-relay --bind 0.0.0.0:8787 --db lorca-relay.db
 | `--ip-per-minute`、`--identity-per-second` | 限流。 |
 | `LORCA_RELAY_METRICS_TOKEN` | 设置后，携带此 Bearer 令牌即可从 `GET /metrics` 读取 Prometheus 格式的指标。 |
 
+### pull request 关注与 Webhook
+
+Lorca 的中继托管了[关注 pull request](/zh/docs/routines#关注-pull-request)和[例行任务的 Webhook](/zh/docs/routines#webhook)的接收端。你自己的中继也可以：`LORCA_RELAY_PUBLIC_URL` 设为中继自己的公网地址，就会开启 Webhook（`<地址>/webhooks/<id>`）；再用 [`crates/relay/github-app.json`](https://github.com/egoist/lorca/blob/main/crates/relay/github-app.json) 注册一个你自己的 GitHub 应用，把其中的地址改成你中继的地址（`/webhooks/github` 和 `/webhooks/github/callback`），并设置 `LORCA_RELAY_GITHUB_APP_ID`、`LORCA_RELAY_GITHUB_APP_SLUG`、`LORCA_RELAY_GITHUB_CLIENT_ID`、`LORCA_RELAY_GITHUB_CLIENT_SECRET`、`LORCA_RELAY_GITHUB_WEBHOOK_SECRET` 和 `LORCA_RELAY_GITHUB_PRIVATE_KEY`，就会开启关注。
+
+没有这些设置时，这类例行任务会显示 **你的网关**，事件要通过你在自己电脑上运行的[网关](/zh/docs/events)送达。智能体会告诉你例行任务的订阅 id；用 `lorca events route <id> route.json` 导出它的路由，然后：
+
+- 关注 pull request：用 `--github-secret-file <secret> --routine` 运行网关，并在仓库里添加一个 webhook：填你的公网地址、JSON 格式、同一个密钥，事件选 Pull requests、Pull request reviews、Pull request review comments 和 threads、Issue comments、Check runs、Check suites、Statuses 和 Workflow runs。
+- Webhook：用 `--webhook-key-file <key>` 运行网关（至少 32 个字符的随机密钥）。它监听 `127.0.0.1:8984/hook`，以 `Authorization: Bearer <key>` 接收密钥。
+
 ### Postgres
 
 使用 `postgres://` URL，可以让多个中继进程共用一个数据库，实现无间断部署。它们必须共用 `LORCA_RELAY_SECRET`，并把附件存在 S3 兼容的存储桶里。
