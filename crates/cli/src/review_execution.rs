@@ -254,7 +254,19 @@ pub async fn mutate(
     params: &Value,
     actor: &str,
 ) -> Result<ReviewItem, String> {
-    let cancel = CancellationToken::new();
+    mutate_until(app, method, params, actor, &CancellationToken::new()).await
+}
+
+/// `mutate`, for a turn's own staging: Stop ends the server connection it waits on, and an item
+/// a stopped turn proposed is never saved.
+pub async fn mutate_until(
+    app: &Arc<App>,
+    method: &str,
+    params: &Value,
+    actor: &str,
+    cancel: &CancellationToken,
+) -> Result<ReviewItem, String> {
+    let cancel = cancel.clone();
     if method == "reviews.create" {
         let bot_id = params["bot_id"].as_str().ok_or("missing bot_id")?;
         let bot = app.bot(bot_id).ok_or("Unknown bot")?;
@@ -322,6 +334,9 @@ pub async fn mutate(
                     return Err("This request id was already used for another proposal.".into());
                 }
                 return Ok(existing);
+            }
+            if cancel.is_cancelled() {
+                return Err("Stopped".into());
             }
             authorize_execution(app, &item)?;
             item.record(ReviewChange::Created, actor, None);
@@ -673,7 +688,9 @@ pub async fn run(app: Arc<App>) {
 }
 
 /// Stages the exact held call. It returns at once, with no permission waiter or model turn
-/// retained. A repeat of the same call id resolves to the same durable item.
+/// retained. A repeat of the same call id resolves to the same durable item. Stopping the turn
+/// (`cancel`) stages nothing.
+#[allow(clippy::too_many_arguments)]
 pub async fn stage_call(
     app: &Arc<App>,
     bot: &crate::model::Bot,
@@ -683,11 +700,12 @@ pub async fn stage_call(
     payload: ReviewPayload,
     target: ReviewTarget,
     reason: Option<&str>,
+    cancel: &CancellationToken,
 ) -> Result<ReviewItem, String> {
-    mutate(app, "reviews.create", &json!({ "bot_id": bot.id, "request_id": format!("{}:{call_id}", trigger.message_id),
+    mutate_until(app, "reviews.create", &json!({ "bot_id": bot.id, "request_id": format!("{}:{call_id}", trigger.message_id),
         "origin": { "chat_id": chat_id, "message_id": (!trigger.message_id.is_empty()).then_some(&trigger.message_id),
             "routine_id": trigger.routine.as_ref().map(|routine| &routine.id), "task_id": null },
-        "payload": payload, "target": target, "rationale": reason.unwrap_or("This action needs your approval.") }), &bot.runner_id).await
+        "payload": payload, "target": target, "rationale": reason.unwrap_or("This action needs your approval.") }), &bot.runner_id, cancel).await
 }
 
 pub struct StageReview {

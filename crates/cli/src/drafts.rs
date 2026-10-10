@@ -271,14 +271,18 @@ pub fn forget(app: &App, item: &ReviewItem) {
     }
     let Some((tool, _)) = tool_of(app, &item.payload) else { return };
     let ReviewPayload::Plugin { arguments, .. } = &item.payload else { return };
-    let files = stashed(&tool, arguments);
+    forget_files(app, stashed(&tool, arguments), Some(&item.id));
+}
+
+/// Deletes `files` from the stash, apart from those an open draft other than `except` names.
+fn forget_files(app: &App, files: Vec<String>, except: Option<&str>) {
     if files.is_empty() {
         return;
     }
     let open: Vec<String> = crate::review_queue::list(app)
         .unwrap_or_default()
         .iter()
-        .filter(|other| other.id != item.id && matches!(other.state, ReviewState::Pending | ReviewState::Approved | ReviewState::Executing))
+        .filter(|other| Some(other.id.as_str()) != except && matches!(other.state, ReviewState::Pending | ReviewState::Approved | ReviewState::Executing))
         .filter_map(|other| match (&other.payload, tool_of(app, &other.payload)) {
             (ReviewPayload::Plugin { arguments, .. }, Some((tool, _))) => Some(stashed(&tool, arguments)),
             _ => None,
@@ -299,6 +303,7 @@ mod runner {
 
     use lorca_agent::BeforeToolCallResult;
     use serde_json::{json, Value};
+    use tokio_util::sync::CancellationToken;
 
     use super::*;
     use crate::model::Bot;
@@ -307,7 +312,8 @@ mod runner {
 
     /// A message call in a chat whose bot drafts: the exact call waits as a review item, which
     /// the chat shows as a draft card with Send and Discard, and the call does not run. The
-    /// script that made it stops there, and the bot hears that the draft is ready.
+    /// script that made it stops there, and the bot hears that the draft is ready. A turn the user
+    /// stopped (`cancel`) leaves no draft, and none of its files.
     #[allow(clippy::too_many_arguments)]
     pub async fn stage(
         app: &Arc<App>,
@@ -319,18 +325,31 @@ mod runner {
         name: &str,
         tool: &MessageTool,
         args: &Value,
+        cancel: &CancellationToken,
     ) -> BeforeToolCallResult {
+        if cancel.is_cancelled() {
+            return crate::local_review::blocked("Stopped".into());
+        }
         let draft = read(tool, args);
         let mut arguments = args.clone();
         let staged = match stash(app, tool, &mut arguments) {
             Ok(()) => {
+                let files = stashed(tool, &arguments);
                 let payload = ReviewPayload::Plugin { plugin_id: plugin_id.into(), server_name: server_name.into(), tool: name.into(), arguments };
                 let target = ReviewTarget { account: plugin_name.into(), resource: summary(&draft) };
                 let rationale = format!("{} wrote this for you to send.", bot.name);
-                crate::review_execution::stage_call(app, bot, chat_id, trigger, call_id, payload, target, Some(&rationale)).await
+                let staged = crate::review_execution::stage_call(app, bot, chat_id, trigger, call_id, payload, target, Some(&rationale), cancel).await;
+                if staged.is_err() {
+                    forget_files(app, files, None);
+                }
+                staged
             }
             Err(error) => Err(error),
         };
+        // A draft saved before the Stop landed stays, and the bot hears of it.
+        if staged.is_err() && cancel.is_cancelled() {
+            return crate::local_review::blocked("Stopped".into());
+        }
         crate::local_review::blocked(match staged {
             Ok(_) => format!(
                 "{} is ready as a draft in the chat, where the user can edit it, then Send or Discard it. It has not been sent. Tell the user \

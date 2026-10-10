@@ -78,7 +78,7 @@ pub async fn before_tool_call(
         let staged = crate::review_execution::stage_call(app, bot, chat_id, trigger, &ctx.tool_call.id,
             crate::review_queue::ReviewPayload::Shell { arguments: ctx.args.clone() },
             crate::review_queue::ReviewTarget { account: runner_name.clone(), resource: home_relative(&workdir) },
-            reason.as_deref()).await;
+            reason.as_deref(), ctx.cancel).await;
         let status = match staged {
             Ok(item) => format!("Staged review {} (version {}). The user can edit and approve it later; the exact call resumes on this Runner. Do not retry it now.", item.id, item.version),
             Err(error) => format!("Could not stage the action for review: {error}. Report the proposed action."),

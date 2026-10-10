@@ -14,6 +14,7 @@ On the Runner, a cancelled turn ends this way:
 - **Browser calls** return at once. A profile's browser stays the bot's until its server answers, up to ten seconds, and then closes ([Browser sessions](browser-sessions.md#taking-over)); an open profile otherwise stays open.
 - **Codemode scripts** stop, and the calls they left running get ten seconds to wind down. **Plugin calls** are called off at the server with `notifications/cancelled`.
 - **Messages** the turn held for its next step no longer wait (`App::unqueue_chat`).
+- **A review item** the turn was staging, such as an email or Slack message it was [drafting](drafts.md), is not saved: the staging gets the turn's cancellation, which ends its wait on the plugin's server, and a draft's attachment files go with it.
 
 Send now cuts a step short the same way ([Agent loop](runtime.md#agent-loop)): a call that does not end within the same 15 seconds is cut off, and the turn reads the user's message.
 
@@ -34,4 +35,5 @@ So stopping a continuation stops the rest of the work the first turn handed off,
 - Background commands, named in the notice and listed in Running tasks.
 - An open browser profile, idle once its call has answered.
 - Whatever a cut-off call, or a plugin server that ignores the cancellation, was still doing.
+- Draft cards and review items already in the chat: they wait for the user, and one the user sent or approved finishes on its Runner.
 - On a Runner that is offline, the turn until it reconnects and reads its `job_cancel` from the relay; its handoffs' cancellations are account-wide records and sync like any other.

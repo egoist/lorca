@@ -2179,7 +2179,7 @@ pub async fn review_call(
         let message = app.plugins.lock().unwrap().get(&tool.plugin_id).and_then(|plugin| plugin.manifest.tools.message(&name).cloned());
         if let Some(message) = message {
             let names = (tool.plugin_id.as_str(), tool.server_name.as_str(), tool.plugin_name.as_str());
-            return Some(crate::drafts::stage(app, bot, chat_id, trigger, &ctx.tool_call.id, names, &name, &message, ctx.args).await);
+            return Some(crate::drafts::stage(app, bot, chat_id, trigger, &ctx.tool_call.id, names, &name, &message, ctx.args, ctx.cancel).await);
         }
     }
     // The script the call comes from says what the whole batch is for.
@@ -2189,7 +2189,7 @@ pub async fn review_call(
     if unattended {
         let staged = crate::review_execution::stage_call(app, bot, chat_id, trigger, &ctx.tool_call.id,
             crate::review_queue::ReviewPayload::Plugin { plugin_id: tool.plugin_id.clone(), server_name: tool.server_name.clone(), tool: name.clone(), arguments: ctx.args.clone() },
-            crate::review_queue::ReviewTarget { account: tool.plugin_name.clone(), resource: call_summary(&name, ctx.args) }, reason.as_deref()).await;
+            crate::review_queue::ReviewTarget { account: tool.plugin_name.clone(), resource: call_summary(&name, ctx.args) }, reason.as_deref(), ctx.cancel).await;
         let status = match staged {
             Ok(item) => format!("Staged review {} (version {}). The user can edit and approve it later; the exact call resumes on this Runner. Do not retry it now.", item.id, item.version),
             Err(error) => format!("Could not stage the action for review: {error}. Report the proposed action."),
