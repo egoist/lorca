@@ -410,8 +410,31 @@ func developerThread() []*Message {
 		mockMessage(You, textBody("Check the getting-started page and make sure every download link works."), minutesAgo(55)),
 		mockMessage(BotAuthor("bot-patch"), textBody("The Windows and Linux downloads and the CLI install links work. I also checked the docs links in both languages."), minutesAgo(28)),
 		mockMessage(BotAuthor("bot-patch"), textBody("The website build passes. I've left the changes ready for review."), minutesAgo(27)),
+		mockMessage(You, textBody("Have Claude Code fix the broken docs link on the download page, with a test."), minutesAgo(12)),
+		mockMessage(BotAuthor("bot-patch"), Body{Kind: BodyTool, Tool: &ToolInvocation{
+			Name: "coding_agent", Summary: "Started Claude Code",
+			Agent: &AgentRun{
+				ID: "agent-3f9a2c1d", Kind: "claude", Task: "Fix the broken docs link on the download page, with a test",
+				Folder: "~/.lorca/worktrees/site-1a2b3c/fix-docs-link", Branch: "fix-docs-link", State: AgentWorking,
+				Output: "● Read(src/pages/download.astro)\n● Edit(src/pages/download.astro)\n  ⎿ Updated 1 line\n● Bash(bun test links)\n  ⎿ 14 pass\n    0 fail",
+				Device: "Workbench",
+			},
+		}}, minutesAgo(11)),
+		mockMessage(BotAuthor("bot-patch"), textBody("Claude Code is fixing the link in a worktree of its own. I'll check its test when it's done."), minutesAgo(11)),
 	}
 }
+
+// MockAgentTranscript is what `coding.transcript` answers in the demo.
+const MockAgentTranscript = `> Fix the broken docs link on the download page, with a test.
+I'll find the link first.
+● Grep(docs/install)
+  ⎿ src/pages/download.astro:42
+● Read(src/pages/download.astro)
+● Edit(src/pages/download.astro)
+  ⎿ Updated 1 line
+● Bash(bun test links)
+  ⎿ 14 pass
+    0 fail`
 
 func researcherThread() []*Message {
 	return []*Message{

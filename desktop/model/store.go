@@ -1778,6 +1778,21 @@ func (s *Store) AnswerPermission(chatID, messageID, decision string) {
 				request.Summary = L("Starting the sign-in…")
 			}
 			message.Body.Request = &request
+		case body.Kind == BodyTool && body.Tool.Agent != nil && body.Tool.Agent.Question != nil && body.Tool.Agent.Question.IsPermission():
+			tool := *body.Tool
+			agent := *tool.Agent
+			start := agent.Question.Kind == "start"
+			agent.Question = nil
+			switch {
+			case decision == "deny" && start:
+				agent.State = AgentDenied
+			case start:
+				agent.State = AgentStarting
+			default:
+				agent.State = AgentWorking
+			}
+			tool.Agent = &agent
+			message.Body.Tool = &tool
 		case body.Kind == BodyTool && body.Tool.Run != nil && body.Tool.Run.State == CommandAsking:
 			tool := *body.Tool
 			run := *tool.Run
@@ -1790,6 +1805,83 @@ func (s *Store) AnswerPermission(chatID, messageID, decision string) {
 		}
 	})
 	s.perform("chats.permission", map[string]any{"chat_id": chatID, "message_id": messageID, "decision": decision})
+}
+
+// MARK: - Coding agents
+
+// StopAgent stops a coding agent, here or on its bot's Runner; its card says so once the Runner has.
+func (s *Store) StopAgent(chatID, messageID string, done func(error)) {
+	if s.IsMock {
+		s.finishMockAgent(chatID, messageID, AgentStopped)
+		s.post(func() { done(nil) })
+		return
+	}
+	s.simple(done, "coding.stop", map[string]any{"chat_id": chatID, "message_id": messageID})
+}
+
+// AnswerAgentChoice answers what a coding agent's pane asks with one of the choices it offers.
+func (s *Store) AnswerAgentChoice(chatID, messageID string, choice int, done func(error)) {
+	if s.IsMock {
+		s.finishMockAgent(chatID, messageID, AgentWorking)
+		s.post(func() { done(nil) })
+		return
+	}
+	s.simple(done, "coding.answer", map[string]any{"chat_id": chatID, "message_id": messageID, "choice": choice})
+}
+
+// AnswerAgentText types an answer into what a coding agent's pane asks, then Return.
+func (s *Store) AnswerAgentText(chatID, messageID, text string, done func(error)) {
+	if s.IsMock {
+		s.finishMockAgent(chatID, messageID, AgentWorking)
+		s.post(func() { done(nil) })
+		return
+	}
+	s.simple(done, "coding.answer", map[string]any{"chat_id": chatID, "message_id": messageID, "text": text})
+}
+
+// AgentTranscript is a coding agent's transcript, from its Runner: what it was sent, said, and
+// did, or what its pane shows.
+func (s *Store) AgentTranscript(chatID, messageID string, done func(string, error)) {
+	if s.IsMock {
+		s.post(func() { done(MockAgentTranscript, nil) })
+		return
+	}
+	Async(s, func() (string, error) {
+		var answer struct {
+			Text string `json:"text"`
+		}
+		err := s.request("coding.transcript", map[string]any{"chat_id": chatID, "message_id": messageID}, &answer)
+		return answer.Text, err
+	}, done)
+}
+
+// ShowAgent brings a coding agent's pane forward on this Runner, in its terminal host.
+func (s *Store) ShowAgent(chatID, messageID string, done func(error)) {
+	s.simple(done, "coding.show", map[string]any{"chat_id": chatID, "message_id": messageID})
+}
+
+// RunsHere is whether this Device runs the bot behind `message`: only there does its pane show.
+func (s *Store) RunsHere(message *Message) bool {
+	if message == nil || message.Author.BotID == "" {
+		return false
+	}
+	bot := s.Bot(message.Author.BotID)
+	here := s.ThisDevice()
+	return bot != nil && here != nil && bot.RunnerID == here.ID
+}
+
+// finishMockAgent settles a demo agent's card at once: the demo has no Runner.
+func (s *Store) finishMockAgent(chatID, messageID string, state AgentState) {
+	s.Update(messageID, chatID, func(message *Message) {
+		if message.Body.Kind != BodyTool || message.Body.Tool.Agent == nil {
+			return
+		}
+		tool := *message.Body.Tool
+		agent := *tool.Agent
+		agent.State, agent.Question = state, nil
+		tool.Agent = &agent
+		message.Body.Tool = &tool
+	})
 }
 
 // MARK: - Commands

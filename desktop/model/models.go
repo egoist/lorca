@@ -1397,6 +1397,9 @@ type ToolInvocation struct {
 	// Run is a shell command's card, which the transcript shows only while the command needs the
 	// user (IsShown). Every `bash` row has one.
 	Run *CommandRun
+	// Agent is the card of the coding agent a `coding_agent` call started, which the transcript
+	// shows from the start.
+	Agent *AgentRun
 }
 
 // IsSentMessage is a finished message_bot call: the one tool the transcript shows, as
@@ -1408,11 +1411,163 @@ func (t *ToolInvocation) IsSentMessage() bool {
 // IsShown is whether the transcript shows the row: a sent message's marker, or a command's card
 // while the command needs the user.
 func (t *ToolInvocation) IsShown() bool {
+	if t.Agent != nil {
+		return true
+	}
 	run := t.Run
 	if run == nil {
 		return t.IsSentMessage()
 	}
 	return run.State == CommandAsking || (run.IsLive() && run.HandedOver)
+}
+
+type AgentState string
+
+const (
+	AgentChecking  AgentState = "checking"
+	AgentAsking    AgentState = "asking"
+	AgentStarting  AgentState = "starting"
+	AgentWorking   AgentState = "working"
+	AgentIdle      AgentState = "idle"
+	AgentExited    AgentState = "exited"
+	AgentFailed    AgentState = "failed"
+	AgentStopped   AgentState = "stopped"
+	AgentDenied    AgentState = "denied"
+	AgentExpired   AgentState = "expired"
+	AgentDismissed AgentState = "dismissed"
+)
+
+// AgentQuestion is what a coding agent's card asks: whether it may start (`start`) or run a
+// command (`command`), answered like a command's; or what its pane asks, with a menu of choices
+// (`choices`) or for text (`text`), answered with `coding.answer`.
+type AgentQuestion struct {
+	Kind    string
+	Text    string
+	Command string
+	Choices []string
+	Reason  string
+	Rule    string
+	HasRule bool
+}
+
+// IsPermission is a question answered with Allow once and Deny, and Always allow with a rule.
+func (q *AgentQuestion) IsPermission() bool { return q.Kind == "start" || q.Kind == "command" }
+
+// Decisions are the buttons a permission offers.
+func (q *AgentQuestion) Decisions() []Answer {
+	if !q.HasRule {
+		return []Answer{{L("Allow once"), "allow"}, {L("Deny"), "deny"}}
+	}
+	return []Answer{{L("Allow once"), "allow"}, {L("Always allow"), "always"}, {L("Deny"), "deny"}}
+}
+
+// AgentRun is a coding agent a bot runs on its Runner, Claude Code or Codex, as the card of the
+// call that started it shows it: Auto-review's question before it starts, what it works on and
+// where, how it stands, its last lines, and what it asks.
+type AgentRun struct {
+	ID string
+	// Kind is `claude` or `codex`.
+	Kind string
+	// Host is `herdr` or `luvus` when it runs in a pane of that terminal host on its Runner.
+	Host     string
+	Task     string
+	Folder   string
+	Branch   string
+	State    AgentState
+	Stalled  bool
+	Question *AgentQuestion
+	Output   string
+	Outcome  string
+	Device   string
+}
+
+// Name is its product's name, which is not translated.
+func (a *AgentRun) Name() string {
+	if a.Kind == "codex" {
+		return "Codex"
+	}
+	return "Claude Code"
+}
+
+func (a *AgentRun) HostName() string {
+	switch a.Host {
+	case "herdr":
+		return "Herdr"
+	case "luvus":
+		return "Luvus"
+	}
+	return ""
+}
+
+// IsOpen is an agent that has not ended.
+func (a *AgentRun) IsOpen() bool {
+	switch a.State {
+	case AgentChecking, AgentAsking, AgentStarting, AgentWorking, AgentIdle:
+		return true
+	}
+	return false
+}
+
+// IsRunning is an agent Stop ends: not while Auto-review decides whether it may start, and not
+// once it is done, waiting for a follow-up.
+func (a *AgentRun) IsRunning() bool {
+	return a.IsOpen() && a.State != AgentChecking && a.State != AgentIdle && (a.Question == nil || a.Question.Kind != "start")
+}
+
+// Started is an agent with a transcript to read.
+func (a *AgentRun) Started() bool {
+	switch a.State {
+	case AgentChecking, AgentDenied, AgentExpired, AgentDismissed:
+		return false
+	}
+	return a.Question == nil || a.Question.Kind != "start"
+}
+
+// Place is where it works, in a word: its branch, else its folder's name.
+func (a *AgentRun) Place() string {
+	if a.Branch != "" {
+		return a.Branch
+	}
+	if i := strings.LastIndex(a.Folder, "/"); i >= 0 {
+		return a.Folder[i+1:]
+	}
+	return a.Folder
+}
+
+// Status is how it stands, in a word or two.
+func (a *AgentRun) Status() string {
+	switch a.State {
+	case AgentChecking, AgentStarting:
+		return Lc("Starting", "coding agent")
+	case AgentAsking:
+		return Lc("Needs you", "coding agent")
+	case AgentWorking:
+		if a.Stalled {
+			return Lc("Quiet", "coding agent")
+		}
+		return Lc("Working", "coding agent")
+	case AgentIdle:
+		return Lc("Done", "coding agent")
+	case AgentExited:
+		return Lc("Ended", "coding agent")
+	case AgentFailed:
+		return Lc("Failed", "coding agent")
+	case AgentDenied:
+		return Lc("Not allowed", "coding agent")
+	case AgentExpired:
+		return Lc("No answer", "coding agent")
+	case AgentDismissed:
+		return Lc("Dismissed", "coding agent")
+	}
+	return Lc("Stopped", "coding agent")
+}
+
+// AgentOf is the coding agent card `m` shows, if it is one.
+func AgentOf(m *Message) *AgentRun {
+	if m == nil || m.Body.Kind != BodyTool || m.Body.Tool == nil {
+		return nil
+	}
+	return m.Body.Tool.Agent
 }
 
 // Attachment is a file sent with a message. The bytes live under `~/.lorca/files/<id>` once this

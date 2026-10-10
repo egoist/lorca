@@ -1170,6 +1170,11 @@ enum MockData {
                         device: "Workbench", startedAt: minutesAgo(11)))),
                 createdAt: minutesAgo(11)
             ),
+            Message(
+                author: .bot("bot-patch"),
+                body: .text("Claude Code is fixing the link in a worktree of its own. I'll check its test when it's done."),
+                createdAt: minutesAgo(11)
+            ),
         ]
     }
 

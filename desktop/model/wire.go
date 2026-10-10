@@ -129,6 +129,28 @@ type WireRun struct {
 	Background *bool   `json:"background"`
 }
 
+type WireAgent struct {
+	ID       string  `json:"id"`
+	Kind     string  `json:"kind"`
+	Host     *string `json:"host"`
+	Task     *string `json:"task"`
+	Folder   *string `json:"folder"`
+	Branch   *string `json:"branch"`
+	State    string  `json:"state"`
+	Stalled  *bool   `json:"stalled"`
+	Question *struct {
+		Kind    string   `json:"kind"`
+		Text    *string  `json:"text"`
+		Command *string  `json:"command"`
+		Choices []string `json:"choices"`
+		Reason  *string  `json:"reason"`
+		Rule    *string  `json:"rule"`
+	} `json:"question"`
+	Output  *string `json:"output"`
+	Outcome *string `json:"outcome"`
+	Device  *string `json:"device"`
+}
+
 type WireAuthor struct {
 	Kind  string  `json:"kind"`
 	BotID *string `json:"bot_id"`
@@ -157,6 +179,7 @@ type WireBody struct {
 	Rule          *string          `json:"rule"`
 	Command       *string          `json:"command"`
 	Run           *WireRun         `json:"run"`
+	Agent         *WireAgent       `json:"agent"`
 	ReplyTo       *struct {
 		MessageID string     `json:"message_id"`
 		Author    WireAuthor `json:"author"`
@@ -721,6 +744,29 @@ func ToMessage(wire WireMessage) *Message {
 				HandedOver: flag(run.HandedOver),
 				Background: flag(run.Background),
 			}
+		}
+		if agent := body.Agent; agent != nil {
+			state := AgentState(agent.State)
+			switch state {
+			case AgentChecking, AgentAsking, AgentStarting, AgentWorking, AgentIdle, AgentExited, AgentFailed, AgentStopped, AgentDenied, AgentExpired, AgentDismissed:
+			default:
+				state = AgentStopped
+			}
+			card := &AgentRun{
+				ID: agent.ID, Kind: agent.Kind, Host: str(agent.Host), Task: str(agent.Task), Folder: str(agent.Folder),
+				Branch: str(agent.Branch), State: state, Stalled: flag(agent.Stalled), Output: str(agent.Output),
+				Outcome: str(agent.Outcome), Device: str(agent.Device),
+			}
+			if q := agent.Question; q != nil {
+				switch q.Kind {
+				case "start", "command", "choices", "text":
+					card.Question = &AgentQuestion{
+						Kind: q.Kind, Text: str(q.Text), Command: str(q.Command), Choices: q.Choices,
+						Reason: str(q.Reason), Rule: str(q.Rule), HasRule: q.Rule != nil,
+					}
+				}
+			}
+			tool.Agent = card
 		}
 		message.Body = Body{Kind: BodyTool, Tool: tool}
 	case "handoff":
