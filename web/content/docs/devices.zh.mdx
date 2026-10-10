@@ -14,7 +14,7 @@ icon: MonitorSmartphone
 
 ## 配对设备
 
-配对需要一个两台设备都能访问的[中继](/zh/docs/relay)。先在 **设置 › 高级 › 中继 URL** 里设置好。
+配对要经过 Lorca 的[中继](/zh/docs/relay)，所以两台设备都需要在线。
 
 <Steps>
 <Step>
@@ -60,4 +60,4 @@ lorca pair 'lorca://pair?…'
 
 ## 在另一台电脑上恢复
 
-在桌面应用的引导流程里选择 **恢复** 并输入备份短语，或在只有 CLI 的电脑上运行 `lorca identity restore <phrase>`。Lorca 会重建你的密钥，并从中继拉回你的账户。原来运行在旧电脑上的智能体需要一个新的 Runner；它们的记忆、工作文件、[密钥](/zh/docs/secrets)和[浏览器](/zh/docs/browser)登录都留在了旧磁盘上。
+在桌面应用的引导流程里选择 **恢复** 并输入备份短语，或在只有[命令行](/zh/docs/cli#命令)的电脑上运行 `lorca identity restore <phrase>`。Lorca 会重建你的密钥，并从中继拉回你的账户。原来运行在旧电脑上的智能体需要一个新的 Runner；它们的记忆、工作文件、[密钥](/zh/docs/secrets)和[浏览器](/zh/docs/browser)登录都留在了旧磁盘上。

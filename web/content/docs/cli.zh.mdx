@@ -35,7 +35,7 @@ irm https://lorca.app/install-cli.ps1 | iex
 | `lorca` | 列出所有命令。 |
 | `lorca serve` | 运行服务。 |
 | `lorca identity new` | 创建身份并打印备份短语。 |
-| `lorca identity restore <phrase>` | 用备份短语恢复身份。 |
+| `lorca identity restore <phrase>` | 用备份短语恢复身份。没有桌面应用时，要指明 Lorca 的中继：`LORCA_RELAY_URL=https://relay.lorca.app lorca identity restore …`。 |
 | `lorca identity show` | 显示这台设备的身份。 |
 | `lorca pair` | 显示配对字符串，并等待另一台设备。 |
 | `lorca pair <string>` | 用配对字符串加入一个账户。 |
@@ -87,7 +87,6 @@ lorca mcp add-json time '{"command": "uvx", "args": ["mcp-server-time"]}'
 ## 无屏幕的 Runner
 
 ```bash
-export LORCA_RELAY_URL=https://relay.example.com
 lorca pair 'lorca://pair?…'   # 来自已有设备上的“配对设备…”或 `lorca pair`
 lorca service install
 ```
@@ -108,11 +107,10 @@ lorca service install
 | --- | --- |
 | `LORCA_HOME` | 密钥、凭据和聊天的存放位置。默认 `~/.lorca`。 |
 | `LORCA_PORT` | 应用连接的本地端口。默认 `4862`。 |
-| `LORCA_RELAY_URL` | 中继地址。 |
+| `LORCA_RELAY_URL` | 中继地址。配对的电脑会从配对码里得知它；只有在没有桌面应用时恢复身份（`https://relay.lorca.app`），或使用[你自己的中继](/zh/docs/relay#自己运行中继)时才需要设置。 |
 | `LORCA_SHELL` | 智能体运行命令所用的 shell。默认 `/bin/bash`；在 Windows 上是 Git for Windows 的 bash。在 macOS 和 Linux 上，无论用哪个 shell，命令都会得到你的登录 shell 的 `PATH` 和环境变量。 |
 | `LORCA_DEEPSEEK_MODEL`、`LORCA_ANTHROPIC_MODEL`、`LORCA_CHATGPT_MODEL`、`LORCA_GROK_MODEL` | 没有指定模型的智能体使用的默认模型。 |
-| `LORCA_MODELS_URL` | Lorca 检查更新模型目录的地址。默认 `https://lorca.app/models/v1.json`；设置 `LORCA_MODELS_FETCH=0` 则不再检查。 |
-| `LORCA_MARKETPLACE_URL` | Lorca 检查更新市场的地址。默认 `https://lorca.app/marketplace/v1.json`；设置 `LORCA_MARKETPLACE_FETCH=0` 则不再检查。 |
+| `LORCA_MODELS_FETCH=0`、`LORCA_MARKETPLACE_FETCH=0` | 不再到 lorca.app 检查新的模型目录或市场。要使用你自己托管的版本，见[中继](/zh/docs/relay#模型目录和市场)。 |
 
 ## 文件
 

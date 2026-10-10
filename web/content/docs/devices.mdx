@@ -14,7 +14,7 @@ Every computer or phone you pair is a **Device**. A Device with a desktop OS (ma
 
 ## Pair a device
 
-Pairing needs a [relay](/docs/relay) that both devices can reach. Set it in **Settings › Advanced › Relay URL** first.
+Pairing goes through Lorca's [relay](/docs/relay), so both devices need to be online.
 
 <Steps>
 <Step>
@@ -60,4 +60,4 @@ To sign a device out yourself, unpair it from its own Devices pane.
 
 ## Restore on another computer
 
-Choose **Restore** during desktop-app onboarding, or run `lorca identity restore <phrase>` on a CLI-only computer. Lorca rebuilds your keys and pulls your account from the relay. Bots that ran on the old computer need a new Runner; their memory, working files, [secrets](/docs/secrets), and [browser](/docs/browser) sign-ins stayed on the old disk.
+Choose **Restore** during desktop-app onboarding, or run `lorca identity restore <phrase>` on a computer with only the [command line](/docs/cli#commands). Lorca rebuilds your keys and pulls your account from the relay. Bots that ran on the old computer need a new Runner; their memory, working files, [secrets](/docs/secrets), and [browser](/docs/browser) sign-ins stayed on the old disk.

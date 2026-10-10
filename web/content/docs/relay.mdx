@@ -1,26 +1,33 @@
 ---
 title: Relay
-description: The relay is a mailbox for ciphertext between your devices. Run your own with one binary.
+description: Your devices sync through Lorca's relay, which can't read your chats. You can also run your own.
 icon: Server
 ---
 
-The relay stores and forwards encrypted blobs between your devices. One device needs no relay at all. You need one to pair a second computer or a phone.
+Your devices sync through Lorca's relay at `relay.lorca.app`. It stores and forwards the encrypted data your devices exchange, and sends your phone its notifications. It also takes the requests for your [pull request watches](/docs/routines#pull-request-watches) and [routines' webhooks](/docs/routines#webhooks) and encrypts each one for your computer. The apps use it from the start, so there is nothing to set up: a device you pair learns it from the pairing code.
 
-Because everything is [encrypted before upload](/docs/security), a relay needs no trust beyond staying up.
+Everything is [encrypted before upload](/docs/security), so the relay can't read your chats, bots, files, or provider keys. [Security](/docs/security#what-the-relay-sees) lists what it does see.
 
-## Point Lorca at a relay
+## Limits
 
-Set **Settings › Advanced › Relay URL** on your first device, or the `LORCA_RELAY_URL` environment variable for the CLI. Devices you pair afterwards learn the URL from the pairing code.
+- You can attach files up to **100 MiB** each. Messages and other data are limited to **4 MiB** each, encrypted.
+- An account nothing has touched for a year, with no device connected and nothing synced, is deleted from the relay. Your devices keep what they have, and the first one that comes back registers the account again.
 
-## Run your own
+## Run your own relay
 
-The relay is a single binary, `lorca-relay`, with SQLite built in:
+Lorca's relay is the same program you can run yourself: a single binary, `lorca-relay`, with SQLite built in. Your devices then sync through your server instead.
 
 ```bash
 lorca-relay --bind 0.0.0.0:8787 --db lorca-relay.db
 ```
 
 Put it behind HTTPS with a reverse proxy such as Caddy or nginx (WebSocket upgrades must pass through), and add `--trust-proxy` so rate limits see real client addresses.
+
+### Point Lorca at it
+
+Set **Settings › Advanced › Relay URL** on your first device before you pair the others, or the `LORCA_RELAY_URL` environment variable on a computer with only the [command line](/docs/cli). Devices you pair afterwards learn the URL from the pairing code. A bot [shared as a link](/docs/templates) from your relay names it in the link, so lorca.app opens it from there.
+
+### Options
 
 | Option | What it does |
 | --- | --- |
@@ -57,6 +64,11 @@ To send pushes to the phone app, give the relay an APNs key (`--apns-key`, `--ap
 
 With `LORCA_RELAY_METRICS_TOKEN` set, `GET /metrics` answers a scraper that sends the token as a bearer with Prometheus text: identities and machines, blobs and bytes by kind, open sockets, requests by route and status, rate-limit refusals, pushes sent and failed, and what the housekeeping sweeps removed. The relay cannot read what it stores, so these numbers are what there is to watch.
 
-## Limits
+### The model catalog and the marketplace
 
-You can attach files up to **100 MiB** each. Attachments transfer as encrypted binary data. The relay accepts the file plus its 40-byte encryption envelope; message and other non-file blobs are limited to **4 MiB** of ciphertext.
+Devices check lorca.app for a newer model catalog and marketplace. To serve your own copies, point the [command line](/docs/cli) at them:
+
+| Variable | What it sets |
+| --- | --- |
+| `LORCA_MODELS_URL` | Where Lorca checks for a newer model catalog. Default `https://lorca.app/models/v1.json`. |
+| `LORCA_MARKETPLACE_URL` | Where Lorca checks for a newer marketplace. Default `https://lorca.app/marketplace/v1.json`. |

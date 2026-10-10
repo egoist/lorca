@@ -1,26 +1,33 @@
 ---
 title: 中继
-description: 中继是你的设备之间存放密文的信箱。一个可执行文件就能自己运行。
+description: 你的设备通过 Lorca 的中继同步，中继读不到你的聊天。你也可以自己运行一个。
 icon: Server
 ---
 
-中继在你的设备之间存储并转发加密的数据块。只有一台设备时完全不需要中继。要配对第二台电脑或手机，才需要一个。
+你的设备通过 Lorca 位于 `relay.lorca.app` 的中继同步。它存储并转发设备之间交换的加密数据，也负责给你的手机发送通知。[关注 pull request](/zh/docs/routines#关注-pull-request)和[例行任务的 Webhook](/zh/docs/routines#webhook)收到的请求也由它接收，它把每个请求加密后交给你的电脑。应用一开始就在用它，不需要任何设置：新配对的设备会从配对码里得知它的地址。
 
-因为一切都[在上传前加密](/zh/docs/security)，你对中继的信任只需要到“它能保持在线”为止。
+一切都[在上传前加密](/zh/docs/security)，所以中继读不到你的聊天、智能体、文件或服务商密钥。它能看到什么，见[安全](/zh/docs/security#中继能看到什么)。
 
-## 让 Lorca 使用某个中继
+## 限制
 
-在第一台设备上设置 **设置 › 高级 › 中继 URL**，或者为命令行设置 `LORCA_RELAY_URL` 环境变量。之后配对的设备会从配对码里得知这个地址。
+- 每个附件最大 **100 MiB**。消息和其他数据，加密后每条最大 **4 MiB**。
+- 一个账户如果整整一年没有任何活动（没有设备连接，也没有任何同步），会从中继上删除。你的设备仍保留本地数据，第一台重新连接的设备会重新注册这个账户。
 
-## 自己运行
+## 自己运行中继
 
-中继是单个可执行文件 `lorca-relay`，内置 SQLite：
+Lorca 的中继就是你可以自己运行的同一个程序：单个可执行文件 `lorca-relay`，内置 SQLite。之后你的设备就改为通过你的服务器同步。
 
 ```bash
 lorca-relay --bind 0.0.0.0:8787 --db lorca-relay.db
 ```
 
 用 Caddy 或 nginx 这类反向代理为它加上 HTTPS（WebSocket 升级必须能通过），并加上 `--trust-proxy`，让限流看到真实的客户端地址。
+
+### 让 Lorca 使用它
+
+在第一台设备上、配对其他设备之前，设置 **设置 › 高级 › 中继 URL**；只有[命令行](/zh/docs/cli)的电脑则设置 `LORCA_RELAY_URL` 环境变量。之后配对的设备会从配对码里得知这个地址。从你的中继[作为链接分享](/zh/docs/templates)的智能体，链接里会带上中继地址，lorca.app 会从那里打开它。
+
+### 选项
 
 | 选项 | 作用 |
 | --- | --- |
@@ -33,8 +40,8 @@ lorca-relay --bind 0.0.0.0:8787 --db lorca-relay.db
 | `--s3-bucket`、`--s3-endpoint` | 改为把附件存到 S3、R2 或 MinIO。 |
 | `--min-protocol` | 拒绝使用更旧中继协议的 Lorca 版本，这些版本的应用会提示更新。 |
 | `--inactive-days` | 账户在这么多天内没有任何活动就会被删除（默认 365，`0` 表示永不删除）。各设备上的本地数据不受影响。 |
-| `LORCA_RELAY_METRICS_TOKEN` | 设置后，携带此 Bearer 令牌即可从 `GET /metrics` 读取 Prometheus 格式的指标。 |
 | `--ip-per-minute`、`--identity-per-second` | 限流。 |
+| `LORCA_RELAY_METRICS_TOKEN` | 设置后，携带此 Bearer 令牌即可从 `GET /metrics` 读取 Prometheus 格式的指标。 |
 
 ### pull request 关注与 Webhook
 
@@ -57,6 +64,11 @@ Lorca 的中继托管了[关注 pull request](/zh/docs/routines#关注-pull-requ
 
 设置 `LORCA_RELAY_METRICS_TOKEN` 后，抓取方携带该 Bearer 令牌访问 `GET /metrics`，即可得到 Prometheus 文本格式的指标：身份和设备数量、各类数据块的数量与字节数、打开的同步连接、按路由和状态码统计的请求、被限流的请求、推送的成功与失败，以及清理任务删除的内容。中继无法读取自己存储的内容，所以这些数字就是全部可观察的信息。
 
-## 限制
+### 模型目录和市场
 
-每个附件最大 **100 MiB**，以加密的二进制数据传输。中继允许文件密文包含额外的 40 字节加密封装；消息及其他非文件数据块的密文最大 **4 MiB**。
+各设备会到 lorca.app 检查有没有更新的模型目录和市场。要用你自己托管的版本，让[命令行](/zh/docs/cli)指向它们：
+
+| 变量 | 设置什么 |
+| --- | --- |
+| `LORCA_MODELS_URL` | Lorca 检查新模型目录的地址。默认 `https://lorca.app/models/v1.json`。 |
+| `LORCA_MARKETPLACE_URL` | Lorca 检查新市场的地址。默认 `https://lorca.app/marketplace/v1.json`。 |

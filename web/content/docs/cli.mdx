@@ -35,7 +35,7 @@ On Windows, bots run their commands in Git for Windows' bash, not WSL's, so inst
 | `lorca` | Lists the commands. |
 | `lorca serve` | Runs the service. |
 | `lorca identity new` | Creates an identity and prints the backup phrase. |
-| `lorca identity restore <phrase>` | Restores an identity from its phrase. |
+| `lorca identity restore <phrase>` | Restores an identity from its phrase. Without the desktop app, name Lorca's relay: `LORCA_RELAY_URL=https://relay.lorca.app lorca identity restore …`. |
 | `lorca identity show` | Shows this device's identity. |
 | `lorca pair` | Shows a pairing string and waits for the other device. |
 | `lorca pair <string>` | Joins an account with a pairing string. |
@@ -87,7 +87,6 @@ lorca mcp add-json time '{"command": "uvx", "args": ["mcp-server-time"]}'
 ## A headless Runner
 
 ```bash
-export LORCA_RELAY_URL=https://relay.example.com
 lorca pair 'lorca://pair?…'   # from Pair a Device… or `lorca pair` on an existing Device
 lorca service install
 ```
@@ -108,11 +107,10 @@ Restarting into a new release on Windows takes `lorca service`; without it, `lor
 | --- | --- |
 | `LORCA_HOME` | Where keys, credentials, and chats live. Default `~/.lorca`. |
 | `LORCA_PORT` | The local port the app connects to. Default `4862`. |
-| `LORCA_RELAY_URL` | The relay. |
+| `LORCA_RELAY_URL` | The relay. A computer that pairs learns it from the pairing code; set it to restore without the desktop app (`https://relay.lorca.app`), or to use [your own relay](/docs/relay#run-your-own-relay). |
 | `LORCA_SHELL` | The shell bots run commands in. Default `/bin/bash`; on Windows, Git for Windows' bash. On macOS and Linux, commands get your login shell's `PATH` and variables either way. |
 | `LORCA_DEEPSEEK_MODEL`, `LORCA_ANTHROPIC_MODEL`, `LORCA_CHATGPT_MODEL`, `LORCA_GROK_MODEL` | The default model for bots that do not pick one. |
-| `LORCA_MODELS_URL` | Where Lorca checks for a newer model catalog. Default `https://lorca.app/models/v1.json`; `LORCA_MODELS_FETCH=0` turns the checks off. |
-| `LORCA_MARKETPLACE_URL` | Where Lorca checks for a newer marketplace. Default `https://lorca.app/marketplace/v1.json`; `LORCA_MARKETPLACE_FETCH=0` turns the checks off. |
+| `LORCA_MODELS_FETCH=0`, `LORCA_MARKETPLACE_FETCH=0` | Turn off the checks for a newer model catalog or marketplace on lorca.app. To serve your own, see [Relay](/docs/relay#the-model-catalog-and-the-marketplace). |
 
 ## Files
 
