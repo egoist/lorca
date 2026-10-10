@@ -24,7 +24,7 @@ icon: Plug
 | 研究 | Context7（库文档）、Browser（由智能体操作的浏览器，见[浏览器](/zh/docs/browser)）、Exa（网页搜索）、DeepWiki、Hugging Face、秘塔 AI 搜索、知乎、高德地图 |
 | 支持 | Intercom |
 
-Browser、Context7、DeepWiki、Exa 和 Hugging Face 不需要账号。这里没有插件的应用，可以通过 Zapier 使用。Telegram，以及带机器人的 Slack 应用，还能让智能体在[渠道](/zh/docs/channels)里回复别人。市场里的智能体是现成的队友，参见[智能体](/zh/docs/bots#从市场添加智能体)；市场里的工作流可以一次把一件事设置好，参见[工作流](/zh/docs/workflows)。
+Browser、Context7、DeepWiki、Exa 和 Hugging Face 不需要账号。这里没有插件的应用，可以通过 Zapier 使用。Telegram，以及带机器人的 Slack 应用，还能让智能体在[频道](/zh/docs/channels)里回复别人。市场里的智能体是现成的队友，参见[智能体](/zh/docs/bots#从市场添加智能体)；市场里的工作流可以一次把一件事设置好，参见[工作流](/zh/docs/workflows)。
 
 插件**按 Runner 安装**。那台电脑上的每个智能体都能使用它们，以各自的[访问权限](/zh/docs/access)为限。密钥和登录状态留在那个 Runner 上；你的其他设备只看得到插件的名字和状态。
 
@@ -57,8 +57,8 @@ Slack、Gmail、Google Calendar、Google Drive 和 Telegram 可以在同一台 R
 这几个服务在第一次登录前，需要你自己的应用：
 
 - **Gmail、Google Calendar、Google Drive：** 一个 Google Cloud 项目里的桌面版 OAuth 客户端，项目要加入 Google Workspace MCP 预览计划，并打开对应服务的 API。填入它的客户端 ID，有密钥的话也填上。
-- **Slack：** 一个开启了 PKCE 的 Slack 应用，回调地址为 `http://localhost:3118/callback`，并且工作区已批准它使用 MCP。填入它的客户端 ID。要用[渠道](/zh/docs/channels)的话，还要填它的机器人 token 和应用 token。
-- **Telegram：** BotFather 给的机器人 token。Telegram 用于[渠道](/zh/docs/channels)。
+- **Slack：** 一个开启了 PKCE 的 Slack 应用，回调地址为 `http://localhost:3118/callback`，并且工作区已批准它使用 MCP。填入它的客户端 ID。要用[频道](/zh/docs/channels)的话，还要填它的机器人 token 和应用 token。
+- **Telegram：** BotFather 给的机器人 token。Telegram 用于[频道](/zh/docs/channels)。
 
 显示 **需要更多权限** 的账号，是登录时缺了某个工具需要的授权：重新 **登录** 即可补上。登录过期或被撤销时，会提示你重新登录。
 
