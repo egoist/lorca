@@ -1,5 +1,6 @@
-// The settings sheet's own stack: Settings first, and a Device, a provider, or the shared links
-// and a link's bot sliding in from its row, inside the one form sheet the root presents.
+// The settings sheet's own stack: Settings first, and a Device, a provider, the email address,
+// or the shared links and a link's bot sliding in from its row, inside the one form sheet the
+// root presents.
 
 import { Stack } from "expo-router";
 import { Platform } from "react-native";
@@ -25,6 +26,8 @@ export default function SettingsLayout() {
       <Stack.Screen name="provider/[kind]" />
       <Stack.Screen name="custom-provider" />
       <Stack.Screen name="custom-models" />
+      <Stack.Screen name="email" />
+      <Stack.Screen name="email-address" />
       <Stack.Screen name="shared-links" />
       <Stack.Screen name="shared-link/[id]" />
     </Stack>

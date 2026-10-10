@@ -229,7 +229,10 @@ export function ToggleRow({ title, value, onValueChange, icon }: { title: string
   );
 }
 
-export function FieldRow({ label, multiline, style, ...props }: TextInputProps & { label?: string }) {
+/// A text field in a cell, after its label. `suffix` follows what is typed, in secondary text
+/// and with no gap, as the domain after an address's name: the field ends where it starts, so
+/// give it `textAlign: "right"`.
+export function FieldRow({ label, multiline, style, suffix, ...props }: TextInputProps & { label?: string; suffix?: string }) {
   const p = usePalette();
   return (
     <View style={[styles.row, multiline && styles.rowMultiline]}>
@@ -245,6 +248,11 @@ export function FieldRow({ label, multiline, style, ...props }: TextInputProps &
         style={[styles.input, { color: p.label }, multiline && styles.inputMultiline, style]}
         {...props}
       />
+      {suffix ? (
+        <Text style={[styles.rowTitle, styles.suffix, { color: p.secondaryLabel }]} numberOfLines={1}>
+          {suffix}
+        </Text>
+      ) : null}
     </View>
   );
 }
@@ -297,5 +305,6 @@ const styles = StyleSheet.create({
   rowSubtitle: { fontSize: Font.small },
   rowDetail: { fontSize: Font.body, maxWidth: "55%" },
   input: { flex: 1, fontSize: Font.body, paddingVertical: 0 },
+  suffix: { marginLeft: -12, flexShrink: 0 },
   inputMultiline: { minHeight: 96, textAlignVertical: "top" },
 });
