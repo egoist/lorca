@@ -78,6 +78,10 @@ func autoReviewRulesEntry() settingsEntry {
 	return entry(model.PaneAutoReview, L("Auto-review Rules"), "", L("rule allow automatically ask first always allow"))
 }
 
+func emailAddressEntry() settingsEntry {
+	return entry(model.PaneEmail, L("Email Address"), L("Address"), L("mail inbox sign up verification code bots"))
+}
+
 func relayURLEntry() settingsEntry {
 	return entry(model.PaneAdvanced, L("Relay URL"), "", L("server self-host sync pairing connection"))
 }
@@ -169,6 +173,11 @@ func entriesIn(pane model.SettingsPane, device *model.Device) []settingsEntry {
 		return []settingsEntry{autoReviewSwitchEntry(), autoReviewProviderEntry(), autoReviewRulesEntry()}
 	case model.PaneSharedLinks:
 		return nil
+	case model.PaneEmail:
+		if store.Mail != nil && store.Mail.Available {
+			return []settingsEntry{emailAddressEntry()}
+		}
+		return nil
 	case model.PaneAdvanced:
 		out := []settingsEntry{relayURLEntry(), cliPortEntry(), onboardingEntry()}
 		if store.HasIdentity != nil && *store.HasIdentity {
@@ -228,7 +237,7 @@ type paneMatch struct {
 // under it. The Device panes answer for the picked Device.
 func panesMatching(query string, device *model.Device) []paneMatch {
 	var out []paneMatch
-	for _, pane := range model.SettingsPanes {
+	for _, pane := range store.ListedPanes() {
 		var entries []settingsEntry
 		for _, setting := range entriesIn(pane, device) {
 			if setting.matches(query) {

@@ -1776,13 +1776,21 @@ const (
 	PaneProviders   SettingsPane = "providers"
 	PaneAutoReview  SettingsPane = "auto-review"
 	PaneSharedLinks SettingsPane = "shared-links"
+	PaneEmail       SettingsPane = "email"
 	PanePlugins     SettingsPane = "plugins"
 	PaneBots        SettingsPane = "bots"
 	PaneDevice      SettingsPane = "device"
 	PaneAdvanced    SettingsPane = "advanced"
 )
 
-var SettingsPanes = []SettingsPane{PaneGeneral, PaneProviders, PaneAutoReview, PaneSharedLinks, PanePlugins, PaneBots, PaneDevice, PaneAdvanced}
+var SettingsPanes = []SettingsPane{PaneGeneral, PaneProviders, PaneAutoReview, PaneSharedLinks, PaneEmail, PanePlugins, PaneBots, PaneDevice, PaneAdvanced}
+
+// ListedPanes are the panes the settings sidebar, the palette, and search offer: Email only while
+// the relay offers it.
+func (s *Store) ListedPanes() []SettingsPane {
+	available := s.Mail != nil && s.Mail.Available
+	return slices.DeleteFunc(slices.Clone(SettingsPanes), func(p SettingsPane) bool { return p == PaneEmail && !available })
+}
 
 // IsDeviceScoped is a pane that shows one Device, picked at the top of the page: bots and plugins
 // live on a Runner. The others hold this computer's settings and the account's.
@@ -1798,6 +1806,8 @@ func (p SettingsPane) Title() string {
 		return L("Auto-review")
 	case PaneSharedLinks:
 		return L("Shared Links")
+	case PaneEmail:
+		return L("Email")
 	case PaneAdvanced:
 		return L("Advanced")
 	case PaneBots:
@@ -1820,6 +1830,8 @@ func (p SettingsPane) Symbol() string {
 		return "checkmark.shield"
 	case PaneSharedLinks:
 		return "link"
+	case PaneEmail:
+		return "envelope"
 	case PaneAdvanced:
 		return "slider.horizontal.3"
 	case PaneBots:

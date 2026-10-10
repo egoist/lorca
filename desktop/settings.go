@@ -29,6 +29,10 @@ type settingsPageState struct {
 
 	mcp     settingsMcpState
 	service settingsServiceState
+	// mailAsked is the Email pane having asked the relay about the address since it came up;
+	// mailCopiedAt is when Copy last copied the address, which it says for a moment.
+	mailAsked    bool
+	mailCopiedAt time.Time
 }
 
 const (
@@ -108,6 +112,10 @@ func (m *mainWindow) settingsPage(c *ui.Context, pane model.SettingsPane) {
 		// So does the Devices pane for the Runner's service.
 		m.settings.service.asked = ""
 	}
+	if pane != model.PaneEmail {
+		// And the Email pane for the account's address.
+		m.settings.mailAsked = false
+	}
 	switch pane {
 	case model.PaneGeneral:
 		s.general(c)
@@ -117,6 +125,13 @@ func (m *mainWindow) settingsPage(c *ui.Context, pane model.SettingsPane) {
 		s.autoReview(c)
 	case model.PaneSharedLinks:
 		s.sharedLinks(c)
+	case model.PaneEmail:
+		if !m.settings.mailAsked {
+			// What the relay says may have changed on another Device while the pane was away.
+			m.settings.mailAsked = true
+			store.RefreshMail()
+		}
+		s.email(c)
 	case model.PanePlugins:
 		s.plugins(c, m)
 	case model.PaneBots:

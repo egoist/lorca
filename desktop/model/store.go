@@ -85,6 +85,8 @@ const (
 	EventDurableTasksChanged
 	EventAttentionChanged
 	EventProjectContextChanged
+	// EventMailChanged is the account's email address, or the relay's email, changing.
+	EventMailChanged
 )
 
 // Event says what in the store changed.
@@ -151,6 +153,8 @@ type Store struct {
 	Attention AttentionView
 	// SharedLinks are the bots the account shares as links, shared through the roster.
 	SharedLinks []SharedLink
+	// Mail is what the relay says about the account's email address; nil until the CLI has asked.
+	Mail *MailStatus
 	// Providers are the account's provider credentials, the same on every Device.
 	Providers []ProviderCredential
 	// Models are what the CLI's catalog offers, for the Model and Thinking pickers.
@@ -493,6 +497,7 @@ func (s *Store) apply(snapshot WireSnapshot) {
 		s.Reviews = append(s.Reviews, &copy)
 	}
 	s.SharedLinks = snapshot.SharedLinks
+	s.Mail = snapshot.Mail
 	s.Providers = ToProviders(snapshot.Providers)
 	s.Models = ToModels(snapshot.Models)
 	s.Playbooks = snapshot.Playbooks
@@ -564,6 +569,10 @@ func (s *Store) handle(name string, data json.RawMessage) {
 	case "snapshot":
 		if snapshot, ok := decode[WireSnapshot](data); ok {
 			s.apply(snapshot)
+		}
+	case "mail.changed":
+		if status, ok := decode[MailStatus](data); ok {
+			s.setMail(status)
 		}
 
 	case "feedback.changed":
@@ -2745,6 +2754,7 @@ func (s *Store) ResetMockData() {
 	s.AutoReview = mockAutoReview()
 	s.Attention = DefaultAttention()
 	s.SharedLinks = mockSharedLinks()
+	s.Mail = mockMail(s.Bots)
 	s.Providers = mockProviders()
 	s.Models = mockModels()
 	s.sortChats()

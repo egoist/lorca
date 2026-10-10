@@ -311,6 +311,7 @@ type WireSnapshot struct {
 	Tasks               []DurableTask     `json:"tasks"`
 	AutoReview          *WireAutoReview   `json:"auto_review"`
 	SharedLinks         []SharedLink      `json:"shared_links"`
+	Mail                *MailStatus       `json:"mail"`
 	Providers           []WireProvider    `json:"providers"`
 	Models              []WireModel       `json:"models"`
 	Playbooks           []PlaybookSummary `json:"playbooks"`
