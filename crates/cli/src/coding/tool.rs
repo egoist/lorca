@@ -227,14 +227,15 @@ pub async fn review_start(app: &Arc<App>, bot: &Bot, chat_id: &str, trigger: &Tr
         }
     };
     let runner_name = app.device(&bot.runner_id).map(|device| device.name).unwrap_or_else(|| "this Runner".into());
+    // The agent that will start: the one asked for, else the one installed. One that cannot start
+    // is the call's to report.
+    let Ok((kind, _)) = pick(ctx.args["agent"].as_str()).await else { return None };
     update(&|card| {
         card.state = "checking".into();
+        card.kind = kind.clone();
         card.device = Some(runner_name.clone());
     });
-    let who = match ctx.args["agent"].as_str() {
-        Some(kind) if KINDS.contains(&kind) => name(kind).to_string(),
-        _ => "Claude Code or Codex".to_string(),
-    };
+    let who = name(&kind).to_string();
     let folder = ctx.args["folder"].as_str().filter(|folder| !folder.trim().is_empty()).unwrap_or("the bot's working directory");
     let description = format!(
         "Start {who}, a coding agent that edits files and runs commands as the user on {runner_name}, in {folder} (a new git worktree of it when it is a repository). It works on the prompt on its own until it is done; each command it runs is reviewed again before it runs."
