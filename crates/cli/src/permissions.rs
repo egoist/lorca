@@ -190,6 +190,9 @@ pub fn check_plugin(app: &Arc<App>, bot: &Bot, connection: &str, tool: &str) -> 
 /// What the user calls an installed plugin: its status name, which tells two accounts of one
 /// service apart.
 fn connection_name(app: &App, connection: &str) -> String {
+    if connection == crate::mail::CONNECTION {
+        return "Email".into();
+    }
     app.plugins.lock().unwrap().status(connection).map(|status| status.name).unwrap_or_else(|| connection.to_string())
 }
 

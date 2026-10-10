@@ -166,6 +166,8 @@ async fn session(app: &Arc<App>, failures: &mut u32) -> Result<(), RelayError> {
 
     let (mut pull, mut refresh) = (true, true);
     let mut credentials_due = true;
+    // The account's email address may have changed while this Device was away.
+    tokio::spawn(crate::mail::refresh_quietly(app.clone()));
     let mut wakes = app.sync_wakes.load(Ordering::Relaxed);
     loop {
         let same_machine = app.machine_file().is_some_and(|file| file.machine().is_ok_and(|m| m.pubkey() == machine.pubkey()));
@@ -205,6 +207,10 @@ async fn session(app: &Arc<App>, failures: &mut u32) -> Result<(), RelayError> {
             signal = socket.next() => match signal? {
                 Signal::Blobs => (true, false),
                 Signal::Machines => (false, true),
+                Signal::Mail => {
+                    tokio::spawn(crate::mail::refresh_quietly(app.clone()));
+                    (false, false)
+                }
             },
             // The outbox, or a wake from a phone that came back to the foreground: its socket
             // may have died unnoticed while the app was suspended, so the relay is asked to
@@ -851,8 +857,9 @@ fn apply_blob_contents(app: &Arc<App>, machine_file: &crate::keys::MachineFile, 
             let Ok(machine) = machine_file.machine() else { return };
             match crate::crypto::unseal_json::<Job>(&machine.box_secret, &ciphertext) {
                 Ok(job) => {
-                    // The signed durable inbox alone admits event work and its budget scope.
-                    if job.kind == "event" {
+                    // The signed durable inbox alone admits event work and its budget scope, and
+                    // the mail inbox alone mail work.
+                    if job.kind == "event" || job.kind == "mail" {
                         let app = app.clone();
                         let blob_id = blob.id.clone();
                         tokio::spawn(async move { delete_remote_blob(&app, &blob_id).await });

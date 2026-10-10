@@ -260,6 +260,8 @@ pub struct App {
     #[cfg(feature = "runner")]
     /// At most one bounded coordinator review per bot; exclusions cancel its token.
     pub feedback_reviews: Mutex<HashMap<String, CancellationToken>>,
+    /// The account's email address, and the bots' waits for mail on this Runner.
+    pub mail: crate::mail::Mail,
     pub http: reqwest::Client,
 }
 
@@ -288,6 +290,7 @@ impl App {
         let plugins = crate::plugins::Store::load(&config);
         let marketplace = crate::marketplace::Updates::load(&config);
         let store = LocalStore::open(&config.database_path())?;
+        let mail = crate::mail::Mail::load(&store);
         let mut state = store.load_state()?;
         for bot in &mut state.bots {
             bot.normalize_description();
@@ -364,6 +367,7 @@ impl App {
             feedback_lock: tokio::sync::Mutex::new(()),
             #[cfg(feature = "runner")]
             feedback_reviews: Mutex::new(HashMap::new()),
+            mail,
             http,
         });
         // Normalize and persist the in-memory view before background work begins.
@@ -510,7 +514,12 @@ impl App {
             // The snapshot at the end of the page carries all of this at once.
             return;
         }
+        // The roster names the bots, whose addresses and lead the account's email status lists.
+        let roster = matches!(event, Event::RosterChanged { .. });
         let _ = self.events.send(event);
+        if let Some(mail) = roster.then(|| crate::mail::status_if_address(self)).flatten() {
+            let _ = self.events.send(Event::MailChanged(mail));
+        }
     }
 
     // MARK: - Keys
@@ -1954,6 +1963,7 @@ impl App {
             "running_turns": self.running_turns(),
             "attention": crate::attention::view(self).unwrap_or_default(),
             "budgets": self.budgets.snapshots(self),
+            "mail": crate::mail::status(self),
         })
     }
 }

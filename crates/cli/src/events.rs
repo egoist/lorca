@@ -70,6 +70,9 @@ pub enum Event {
     PairCompleted { nonce: String, device: Value },
     #[serde(rename = "identity.changed")]
     IdentityChanged { has_identity: bool },
+    /// The account's email address, as `mail.get` answers it.
+    #[serde(rename = "mail.changed")]
+    MailChanged(Value),
 }
 
 /// Why this Device's last try to connect to the relay failed.

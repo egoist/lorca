@@ -21,7 +21,7 @@ cli = ["runner", "server", "dep:usage", "dep:tracing-subscriber", "dep:flate2", 
 # Connecting and disconnecting account providers. Devices use this without the agent loop.
 provider-auth = ["dep:lorca-provider-auth"]
 # Running bots: the agent loop, providers, tools. Off for a Device that only takes part.
-runner = ["provider-auth", "dep:lorca-agent", "dep:open", "dep:rmcp", "dep:mcp_http", "dep:process-wrap", "dep:sse-stream", "dep:httpdate"]
+runner = ["provider-auth", "dep:lorca-agent", "dep:open", "dep:rmcp", "dep:mcp_http", "dep:process-wrap", "dep:sse-stream", "dep:httpdate", "dep:mail-parser"]
 # The local websocket the desktop app connects to.
 server = ["dep:axum", "dep:subtle"]
 
@@ -79,6 +79,8 @@ rmcp = { version = "3.4.0", default-features = false, features = ["client", "tra
 process-wrap = { version = "10", features = ["tokio1"], optional = true }
 sse-stream = { version = "0.2.4", optional = true }
 httpdate = { version = "1", optional = true }
+# Mail a Runner receives at the account's address, parsed into headers, text, and attachments.
+mail-parser = { version = "0.11", optional = true, features = ["full_encoding"] }
 
 [target.'cfg(windows)'.dependencies]
 # `serve --parent-pid` watches the parent through a process handle; `lorca service run` leaves

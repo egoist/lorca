@@ -97,6 +97,20 @@ impl LocalStore {
                  ciphertext BLOB NOT NULL
              );
              CREATE INDEX IF NOT EXISTS event_inbox_subscription ON event_inbox(subscription_id, position);
+             CREATE TABLE IF NOT EXISTS mail_status (
+                 id   INTEGER PRIMARY KEY CHECK (id = 1),
+                 json TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS mail (
+                 position    INTEGER PRIMARY KEY AUTOINCREMENT,
+                 id          TEXT UNIQUE NOT NULL,
+                 bot_id      TEXT NOT NULL,
+                 message_key TEXT,
+                 received_at INTEGER NOT NULL,
+                 ciphertext  BLOB NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS mail_bot ON mail(bot_id, position);
+             CREATE INDEX IF NOT EXISTS mail_message_key ON mail(message_key);
              CREATE TABLE IF NOT EXISTS group_deletes (
                  id       TEXT PRIMARY KEY NOT NULL,
                  position INTEGER NOT NULL
@@ -1177,6 +1191,8 @@ impl LocalStore {
             "shared_links",
             "event_subscriptions",
             "event_inbox",
+            "mail_status",
+            "mail",
             "group_deletes",
             "blob_deletes",
             "device_seen",
@@ -1197,6 +1213,18 @@ impl LocalStore {
         }
         tx.commit()?;
         connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+        Ok(())
+    }
+
+    /// What the relay last said about the account's email address.
+    pub fn mail_status(&self) -> anyhow::Result<Option<String>> {
+        let connection = self.connection.lock().unwrap();
+        Ok(connection.query_row("SELECT json FROM mail_status WHERE id = 1", [], |row| row.get(0)).optional()?)
+    }
+
+    pub fn set_mail_status(&self, json: &str) -> anyhow::Result<()> {
+        let connection = self.connection.lock().unwrap();
+        connection.execute("INSERT OR REPLACE INTO mail_status (id, json) VALUES (1, ?1)", [json])?;
         Ok(())
     }
 

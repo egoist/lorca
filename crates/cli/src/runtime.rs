@@ -636,6 +636,11 @@ pub fn spawn_local_job(app: Arc<App>, job: Job, remote_blob_id: Option<String>) 
             if let Err(error) = crate::event_triggers::finished(&app, &job, outcome) {
                 tracing::error!(%error, "recording the event turn outcome");
             }
+        } else if job.kind == "mail" {
+            #[cfg(feature = "runner")]
+            if let Err(error) = crate::mail::finished(&app, &job) {
+                tracing::error!(%error, "recording the mail turn");
+            }
         } else if let Some(id) = &job.routine_id {
             crate::routines::finished(&app, id, outcome);
             if !cancel.is_cancelled() { crate::feedback::routine_outcome(&app, &job, outcome == TurnOutcome::Skipped || job.check.as_ref().is_some_and(|check|check.error.is_some())); }

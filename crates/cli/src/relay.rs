@@ -16,6 +16,14 @@ pub struct RelayError {
     pub message: String,
 }
 
+/// The relay refusing a mail request, with the word it gave for why.
+#[derive(Debug)]
+pub struct MailError {
+    pub status: Option<u16>,
+    pub code: Option<String>,
+    pub message: String,
+}
+
 impl RelayError {
     pub fn is_unauthorized(&self) -> bool {
         self.status == Some(401)
@@ -96,6 +104,8 @@ pub enum Signal {
     Blobs,
     /// The machine list or a machine's presence changed.
     Machines,
+    /// The account's email address changed.
+    Mail,
 }
 
 /// This machine's sync socket. It is online on the relay while this is open.
@@ -127,6 +137,7 @@ impl SyncSocket {
                 Message::Text(text) => match serde_json::from_str::<Value>(&text).ok().as_ref().and_then(|v| v["type"].as_str()) {
                     Some("blobs") => return Ok(Signal::Blobs),
                     Some("machines") => return Ok(Signal::Machines),
+                    Some("mail") => return Ok(Signal::Mail),
                     _ => {}
                 },
                 // The pong has to be flushed by hand when nothing else is written.
@@ -400,6 +411,24 @@ impl RelayClient {
             bytes.extend_from_slice(&chunk);
         }
         Ok(Some(bytes))
+    }
+
+    /// A `/v1/mail/…` request with the bearer. A refusal keeps the relay's `code` (`taken`,
+    /// `reserved`, …) beside its status and message.
+    pub async fn mail(&self, method: reqwest::Method, url: &str, token: &str, path: &str, body: Option<&Value>) -> Result<Value, MailError> {
+        let mut request = self.http().request(method, format!("{url}{path}")).bearer_auth(token);
+        if let Some(body) = body {
+            request = request.json(body);
+        }
+        let response = request.send().await.map_err(|error| MailError { status: None, code: None, message: RelayError::from(error).message })?;
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        let value: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+        if !status.is_success() {
+            let message = value["error"].as_str().map(str::to_string).unwrap_or_else(|| format!("{status}: {text}"));
+            return Err(MailError { status: Some(status.as_u16()), code: value["code"].as_str().map(str::to_string), message });
+        }
+        Ok(value)
     }
 
     pub async fn delete_blob(&self, url: &str, token: &str, id: &str) -> RelayResult<()> {

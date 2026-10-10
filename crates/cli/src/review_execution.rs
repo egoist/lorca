@@ -41,6 +41,15 @@ pub fn authorize_execution(app: &Arc<App>, item: &ReviewItem) -> Result<crate::m
         ReviewPayload::Draft { .. } => Ok(()),
     };
     access.map_err(|denied| denied.to_string())?;
+    if let ReviewPayload::Plugin { plugin_id, tool, .. } = &item.payload {
+        // A staged email goes out from the account's address, which it still has to have.
+        if plugin_id == crate::mail::CONNECTION {
+            if tool != "send_email" || crate::mail::relayed(app).is_none() {
+                return Err("The account has no email address now.".into());
+            }
+            return Ok(bot);
+        }
+    }
     if let ReviewPayload::Plugin {
         plugin_id,
         server_name,
@@ -141,6 +150,9 @@ async fn prepare(
             }
             // The bot's shell Access is checked again when the command starts.
             crate::permissions::guarded::tools(app, &bot, &item.origin.chat_id, vec![crate::shell::script_bash(app, &workdir)]).pop()
+        }
+        ReviewPayload::Plugin { plugin_id, .. } if plugin_id == crate::mail::CONNECTION => {
+            Some(crate::mail::execute_reviewed(app, &bot))
         }
         ReviewPayload::Plugin {
             plugin_id,

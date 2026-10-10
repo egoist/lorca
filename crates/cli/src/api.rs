@@ -77,6 +77,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         method if method.starts_with("templates.") => crate::templates::dispatch(app, method, &params).await,
         method if method.starts_with("playbooks.") => crate::playbooks::dispatch(app, method, params).await,
         method if method.starts_with("events.") => crate::event_triggers::dispatch(app, method, params).await,
+        method if method.starts_with("mail.") => crate::mail::dispatch(app, method, params).await,
         "projects.get" | "projects.save" | "projects.refresh" | "projects.asset" | "projects.asset_path" => {
             crate::project_context::dispatch(app, method, params).await
         }
