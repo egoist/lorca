@@ -274,7 +274,7 @@ func (s *Store) RecordFeedback(botID string, input FeedbackInput, done func(erro
 				}
 			}
 		}
-		f.Notes = slices.Insert(f.Notes, 0, FeedbackNote{ID: NewMessageID(), Kind: input.Kind, ChatID: input.ChatID, MessageID: input.MessageID, Text: text, Target: input.Target, CreatedAt: time.Now()})
+		f.Notes = slices.Insert(f.Notes, 0, FeedbackNote{ID: NewMessageID(), Kind: input.Kind, ChatID: input.ChatID, MessageID: input.MessageID, Text: text, Target: input.Target, CreatedAt: Now()})
 		f.NoteCount++
 	}, done)
 }
@@ -288,7 +288,7 @@ func (s *Store) DecideSuggestion(botID string, suggestion FeedbackSuggestion, ac
 	s.changeFeedback(botID, method, map[string]any{"id": suggestion.ID, "diff_hash": suggestion.DiffHash}, func(f *BotFeedback) {
 		f.Suggestions = slices.DeleteFunc(f.Suggestions, func(each FeedbackSuggestion) bool { return each.ID == suggestion.ID })
 		if accept {
-			f.Changes = slices.Insert(f.Changes, 0, FeedbackChange{ID: NewMessageID(), Target: suggestion.Target, Diff: suggestion.Diff, CanUndo: true, CurrentHash: "mock", CreatedAt: time.Now()})
+			f.Changes = slices.Insert(f.Changes, 0, FeedbackChange{ID: NewMessageID(), Target: suggestion.Target, Diff: suggestion.Diff, CanUndo: true, CurrentHash: "mock", CreatedAt: Now()})
 		}
 	}, done)
 }
@@ -307,7 +307,7 @@ func (s *Store) UndoChange(botID string, change FeedbackChange, done func(error)
 		for i := range f.Changes {
 			f.Changes[i].CanUndo = false
 		}
-		f.Changes = slices.Insert(f.Changes, 0, FeedbackChange{ID: NewMessageID(), Target: change.Target, Diff: strings.Join(reversed, "\n"), IsUndo: true, CanUndo: true, CurrentHash: "mock", CreatedAt: time.Now()})
+		f.Changes = slices.Insert(f.Changes, 0, FeedbackChange{ID: NewMessageID(), Target: change.Target, Diff: strings.Join(reversed, "\n"), IsUndo: true, CanUndo: true, CurrentHash: "mock", CreatedAt: Now()})
 	}, done)
 }
 

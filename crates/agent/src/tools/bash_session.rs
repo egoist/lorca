@@ -1253,6 +1253,18 @@ mod tests {
         session_of(&result.details).expect("a session id").to_string()
     }
 
+    /// Waits until the command has printed `text`: a step keyed on what it printed, never on a
+    /// clock, since a shell starts slowly on a busy machine (Git Bash on Windows above all).
+    async fn printed(session: &BashSession, text: &str) {
+        tokio::time::timeout(Duration::from_secs(20), async {
+            while !session.preview().contains(text) {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("the command printed {text:?}: {:?}", session.preview()));
+    }
+
     #[cfg(unix)]
     fn alive(pid: i32) -> bool {
         unsafe { libc::kill(pid, 0) == 0 }
@@ -1473,7 +1485,7 @@ mod tests {
         })
         .await
         .unwrap();
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        printed(&session, "tick").await;
         assert!(!running.is_finished(), "it prints, so the call waits");
 
         assert!(session.send_to_background());
@@ -1548,15 +1560,34 @@ mod tests {
         assert_eq!(result.text_content(), "tty\n24 80\n-echo \nxterm-256color cat\n");
     }
 
-    /// Ctrl-C in the console ends what runs there.
+    /// Ctrl-C in the console ends what runs there. The key goes in once the command prints,
+    /// since the call returns after 0.4 s of silence and Git Bash may still be starting then.
+    /// Git Bash's programs take the console's Ctrl-C as a signal from a thread of their own, a
+    /// moment later on a busy machine, so the end is waited for as the model would wait for it,
+    /// with bash_output, not within the 0.4 s bash_input waits.
     #[cfg(windows)]
     #[tokio::test]
     async fn ctrl_c_ends_the_command() {
         let t = tools(Duration::from_millis(400));
-        let waiting = call(&t.bash, json!({"command": "sleep 60; echo after"})).await.unwrap();
-        let interrupted = call(&t.input, json!({"session_id": session_id(&waiting), "text": "\u{3}", "enter": false})).await;
-        let interrupted = interrupted.map(|result| result.text_content()).unwrap_or_else(|error| error.0);
-        assert!(interrupted.contains("Command exited with code") && !interrupted.contains("after"), "{interrupted}");
+        let waiting = call(&t.bash, json!({"command": "echo ready; sleep 60; echo after"})).await.unwrap();
+        let id = session_id(&waiting);
+        let session = t.host.get(&id).unwrap();
+        printed(&session, "ready").await;
+        let mut result = call(&t.input, json!({"session_id": id, "text": "\u{3}", "enter": false})).await;
+        let ended = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                match result {
+                    Ok(ref running) if session_of(&running.details).is_some() => {
+                        result = call(&t.output, json!({"session_id": id, "wait_seconds": 5})).await;
+                    }
+                    Ok(ended) => return ended.text_content(),
+                    Err(ended) => return ended.0,
+                }
+            }
+        })
+        .await
+        .expect("Ctrl-C ended the command");
+        assert!(ended.contains("Command exited with code") && !ended.contains("after"), "{ended}");
         assert!(t.host.0.lock().unwrap().is_empty());
     }
 

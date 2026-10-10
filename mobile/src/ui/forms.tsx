@@ -251,20 +251,21 @@ export function FieldRow({ label, multiline, style, ...props }: TextInputProps &
 
 /// One choice of several: a checkmark after it on iOS, Material's radio button before it on
 /// Android, or its checkbox where several can be picked (`multiple`). A row that acts at once rather
-/// than marking a choice (`indicator={false}`) shows neither.
-export function CheckRow({ title, subtitle, checked, onPress, leading, multiple, indicator = true }: { title: string; subtitle?: string; checked: boolean; onPress: () => void; leading?: ReactNode; multiple?: boolean; indicator?: boolean }) {
+/// than marking a choice (`indicator={false}`) shows neither. A choice that can't be made right now
+/// (`disabled`) is dimmed and takes no tap.
+export function CheckRow({ title, subtitle, checked, onPress, leading, multiple, indicator = true, disabled }: { title: string; subtitle?: string; checked: boolean; onPress: () => void; leading?: ReactNode; multiple?: boolean; indicator?: boolean; disabled?: boolean }) {
   const p = usePalette();
   const android = Platform.OS === "android";
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.row, pressed && { backgroundColor: p.fill }]} accessibilityRole={multiple ? "checkbox" : "radio"} accessibilityState={{ checked }}>
+    <Pressable onPress={onPress} disabled={disabled} style={({ pressed }) => [styles.row, pressed && { backgroundColor: p.fill }]} accessibilityRole={multiple ? "checkbox" : "radio"} accessibilityState={{ checked, disabled }}>
       {android && indicator ? (
         <ComposeHost matchContents>
-          {multiple ? <Checkbox value={checked} onCheckedChange={onPress} /> : <RadioButton selected={checked} onClick={onPress} />}
+          {multiple ? <Checkbox value={checked} enabled={!disabled} onCheckedChange={onPress} /> : <RadioButton selected={checked} onClick={onPress} />}
         </ComposeHost>
       ) : null}
       {leading}
       <View style={styles.rowText}>
-        <Text style={[styles.rowTitle, { color: p.label }]} numberOfLines={1}>
+        <Text style={[styles.rowTitle, { color: disabled ? p.tertiaryLabel : p.label }]} numberOfLines={1}>
           {title}
         </Text>
         {subtitle ? (

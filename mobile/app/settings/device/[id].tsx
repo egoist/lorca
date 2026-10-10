@@ -1,8 +1,9 @@
 // One Device, slid in from its row in Settings inside the same sheet: the bots assigned to it,
-// its plugins when it is a Runner, and the machine itself.
+// its plugins when it is a Runner, and the machine itself, with whether `lorca service` keeps an
+// online Runner's CLI running.
 
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-native";
 import { engine } from "../../../src/core/engine";
 import { deviceName, isRunner, providerLabel, type Device, type UpdateStatus } from "../../../src/core/model";
@@ -49,12 +50,25 @@ export default function DeviceScreen() {
   const relayUpdateRequired = useStore((s) => s.relayUpdateRequired);
   const relayUrl = useStore((s) => s.relayUrl);
   const [updating, setUpdating] = useState(false);
+  // What an online Runner said of its service, asked each time the screen shows it.
+  const [service, setService] = useState<{ id: string; installed: boolean; running: boolean }>();
+  const isThis = device?.id === engine.deviceId;
+  const runner = !!device && isRunner(device);
+  const online = !!device && (isThis || deviceIsOnline(device.id));
+  useEffect(() => {
+    if (!runner || !online || isThis) return;
+    let current = true;
+    engine
+      .serviceStatus(id)
+      .then((status) => current && setService({ id, ...status }))
+      .catch(() => {});
+    return () => {
+      current = false;
+    };
+  }, [id, runner, online, isThis]);
 
   if (!device) return null;
-
-  const isThis = device.id === engine.deviceId;
-  const runner = isRunner(device);
-  const online = isThis || deviceIsOnline(device.id);
+  const shown = service?.id === device.id && online ? service : undefined;
   const bots = allBots.filter((b) => b.runner_id === device.id);
   const osName = OS_NAMES[device.os] ?? device.os;
   const relay = relayUrl?.replace(/^https?:\/\//, "");
@@ -139,7 +153,9 @@ export default function DeviceScreen() {
             device.unknown
               ? t("This machine is paired to your account but has not sent its name or system. If you don't recognize it, unpair it.")
               : runner
-                ? undefined
+                ? shown && !shown.installed
+                  ? t("Run lorca service install in Terminal on {name} to keep its bots running while Lorca is closed.", { name: deviceName(device) })
+                  : undefined
                 : t("{os} Devices hold your keys and chats but never run a bot. Assign bots to a Runner: a Device running macOS, Linux, or Windows.", { os: osName })
           }
         >
@@ -161,6 +177,7 @@ export default function DeviceScreen() {
             />
           )}
           <Row title={t("Role")} detail={runner ? t("Runner") : t("Device")} />
+          {shown && <Row title={t("Background service")} detail={shown.running ? t("Running") : shown.installed ? t("Installed, not running") : t("Not installed")} />}
           <Row title={t("Last seen")} detail={online ? t("Active now") : lastSeen(seen)} />
           <Row title={t("Relay")} detail={relay ? (relayUpdateRequired ? t("{relay} · update Lorca to sync", { relay }) : relayConnected ? relay : t("{relay} · offline", { relay })) : t("Not configured")} />
         </Section>
