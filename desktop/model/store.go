@@ -2912,6 +2912,37 @@ func (s *Store) UnpairDevice(id string, done func(error)) {
 	s.simple(finish, "device.unpair", map[string]any{"id": id})
 }
 
+// SetDeviceName names a Device on every paired Device; blank takes back the name its machine goes
+// by. The name shows at once and goes back if the CLI refuses it.
+func (s *Store) SetDeviceName(id, name string, done func(error)) {
+	device := s.Device(id)
+	if device == nil {
+		return
+	}
+	name = strings.TrimSpace(name)
+	before := *device
+	if device.MachineName == "" {
+		device.MachineName = device.Name
+	}
+	device.Name = name
+	if name == "" {
+		device.Name = device.MachineName
+	}
+	if device.Name == before.Name {
+		return
+	}
+	s.emit(Event{Kind: EventRosterChanged})
+	s.simple(func(err error) {
+		if err != nil {
+			if device := s.Device(id); device != nil {
+				device.Name, device.MachineName = before.Name, before.MachineName
+				s.emit(Event{Kind: EventRosterChanged})
+			}
+		}
+		done(err)
+	}, "device.set_name", map[string]any{"id": id, "name": name})
+}
+
 // UpdateDevice has a self-updating CLI, this Device's or another's through the relay, install the
 // latest release, which it restarts into once no bot is at work there.
 func (s *Store) UpdateDevice(id string, done func(error)) {

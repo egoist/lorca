@@ -1022,7 +1022,8 @@ pub struct CheckReport {
 
 // MARK: - Blob payloads
 
-/// `kind = roster`: bots, chat metadata, and routines. Latest wins.
+/// `kind = roster`: bots, chat metadata, routines, and the names the account gives its Devices.
+/// Latest wins.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct RosterBlob {
     /// Workflow setups, merged one by one (`workflows::merge`); a build that does not know
@@ -1041,6 +1042,10 @@ pub struct RosterBlob {
     /// The bots the account shares as links, with their keys.
     #[serde(default)]
     pub shared_links: Vec<crate::templates::links::SharedLink>,
+    /// The names Devices show as, by machine pubkey, given on any Device for any Device. A Device
+    /// without one shows the name its own `machine` blob carries.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub device_names: std::collections::BTreeMap<String, String>,
     pub updated_at: f64,
 }
 

@@ -4,7 +4,7 @@
 
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { engine } from "../../../src/core/engine";
 import { deviceName, isBotDM, isRunner, providerLabel, type Device, type SavedSecret, type UpdateStatus } from "../../../src/core/model";
 import { deviceIsOnline, useStore } from "../../../src/core/store";
@@ -53,6 +53,8 @@ export default function DeviceScreen() {
   const relayUpdateRequired = useStore((s) => s.relayUpdateRequired);
   const relayUrl = useStore((s) => s.relayUrl);
   const [updating, setUpdating] = useState(false);
+  // What is typed into the name while it is being edited.
+  const [draft, setDraft] = useState<string>();
   // What an online Runner said of its service, asked each time the screen shows it.
   const [service, setService] = useState<{ id: string; installed: boolean; running: boolean }>();
   const isThis = device?.id === engine.deviceId;
@@ -102,6 +104,15 @@ export default function DeviceScreen() {
     ]);
   }
 
+  // The header's name is a field: renaming names the Device on every paired Device, and clearing
+  // it takes back the name the machine goes by.
+  function rename(target: Device) {
+    const name = (draft ?? target.name).trim();
+    setDraft(undefined);
+    if (name === target.name) return;
+    engine.setDeviceName(target.id, name).catch((error: unknown) => alert(t("Couldn't rename it"), error instanceof Error ? error.message : String(error)));
+  }
+
   // A newer release than the CLI runs, not yet on its way: the Lorca CLI row installs it.
   const update = device.update;
   const offersUpdate = !!update?.latest && !update.state;
@@ -119,7 +130,22 @@ export default function DeviceScreen() {
       <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ paddingBottom: 40 }}>
         <View style={styles.header}>
           <Symbol name={deviceSymbol(device.os, device.model)} size={48} color={p.label} />
-          <Text style={[styles.name, { color: p.label }]}>{deviceName(device)}</Text>
+          {device.unknown ? (
+            <Text style={[styles.name, { color: p.label }]}>{deviceName(device)}</Text>
+          ) : (
+            <TextInput
+              style={[styles.name, styles.nameField, { color: p.label }]}
+              value={draft ?? device.name}
+              placeholder={device.machine_name ?? device.name}
+              placeholderTextColor={p.tertiaryLabel}
+              onFocus={() => setDraft(device.name)}
+              onChangeText={setDraft}
+              onEndEditing={() => rename(device)}
+              returnKeyType="done"
+              autoCapitalize="words"
+              accessibilityLabel={t("Name")}
+            />
+          )}
           <Text style={[styles.model, { color: p.secondaryLabel }]}>{[device.model, device.os_version].filter(Boolean).join(" · ")}</Text>
           <View style={styles.status}>
             <View style={[styles.dot, { backgroundColor: online ? p.green : p.tertiaryLabel }]} />
@@ -271,6 +297,8 @@ function SecretsSection({ device }: { device: Device }) {
 const styles = StyleSheet.create({
   header: { alignItems: "center", paddingTop: 12, paddingHorizontal: 24, gap: 4 },
   name: { fontSize: 22, fontWeight: "600", marginTop: 8, textAlign: "center" },
+  // A field that reads as the name: no padding of its own, as wide as the header.
+  nameField: { alignSelf: "stretch", padding: 0 },
   model: { fontSize: 13, textAlign: "center" },
   status: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 4 },
   dot: { width: 8, height: 8, borderRadius: 4 },

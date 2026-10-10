@@ -713,6 +713,9 @@ type Device struct {
 	// Update is how a CLI that replaces itself keeps current; nil where an app updates the CLI it
 	// carries, and on phones.
 	Update *DeviceUpdate
+	// MachineName is the name the machine goes by, which a name the account gives the Device
+	// stands in for. Empty when it is Name.
+	MachineName string
 }
 
 // DeviceUpdate is a self-updating CLI's updates, as its `machine` blob tells every Device.

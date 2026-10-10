@@ -79,7 +79,7 @@ func (s settingsPane) device(c *ui.Context, m *mainWindow) {
 			return
 		}
 		service := m.settings.service.statusOf(device)
-		settingsDeviceHeader(c, device)
+		settingsDeviceHeader(c, device, s.w)
 		s.section(c, L("Machine"), nil, func(k *card) {
 			unknown := device.OS == model.OSUnknown
 			if unknown {
@@ -145,8 +145,9 @@ func settingsRelayText() string {
 }
 
 // settingsDeviceHeader is the Device's symbol beside its name, its model and system, and a dot and
-// words for whether it is online.
-func settingsDeviceHeader(c *ui.Context, device *model.Device) {
+// words for whether it is online. The name is a field: clicking it renames the Device on every
+// paired Device, and clearing it takes back the name the machine goes by.
+func settingsDeviceHeader(c *ui.Context, device *model.Device, w *appWindow) {
 	p := colors(c)
 	status, tint := "", p.Label2
 	switch device.Status {
@@ -177,8 +178,13 @@ func settingsDeviceHeader(c *ui.Context, device *model.Device) {
 		ui.Row(c).Size(44, 44).Margin(4, 0, 0, 0).Center().TextColor(p.Label2).Children(func() {
 			symbol(c, device.Symbol(), 40, 1.4)
 		})
-		ui.Column(c).Shrink(1).MinWidth(0).Gap(3).Children(func() {
-			ui.Text(c, device.Name).FontSize(22).FontWeight(600)
+		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(3).Children(func() {
+			// A machine that never said what it is has no name of its own to change.
+			if device.OS == model.OSUnknown {
+				ui.Text(c, device.Name).FontSize(22).FontWeight(600)
+			} else {
+				deviceNameField(c, device, w)
+			}
 			if device.OS != model.OSUnknown {
 				ui.Text(c, device.Model+" · "+device.OSVersion).FontSize(12.5).TextColor(p.Label2)
 			}
@@ -187,6 +193,44 @@ func settingsDeviceHeader(c *ui.Context, device *model.Device) {
 				ui.Text(c, status).FontSize(11.5).FontWeight(500).TextColor(tint)
 			})
 		})
+	})
+}
+
+// deviceNameField is the header's name as a field that reads as the name until it is clicked.
+// Return or clicking away renames the Device; Escape puts the name back.
+func deviceNameField(c *ui.Context, device *model.Device, w *appWindow) {
+	p := colors(c)
+	holder := ui.Row(c.Key(device.ID)).MinWidth(0)
+	st := ui.Local(holder, "name", func() *editableRowState { return &editableRowState{} })
+	holder.Children(func() {
+		s := *st
+		if !s.editing {
+			s.draft = device.Name
+		}
+		placeholder := device.MachineName
+		if placeholder == "" {
+			placeholder = device.Name
+		}
+		field := ui.TextInputBase(c, &s.draft).Grow(1).Shrink(1).MinWidth(0).FontSize(22).FontWeight(600).TextColor(p.Label).
+			FocusRing(false).Placeholder(placeholder).Label(L("Name")).Tooltip(L("Click to rename"))
+		focused := field.Focused()
+		commit := false
+		switch {
+		case focused && field.Shortcut(0, ui.KeyEscape):
+			s.draft = device.Name
+		case field.Submitted():
+			commit = true
+		case s.editing && !focused:
+			commit = true
+		}
+		s.editing = focused
+		if commit {
+			store.SetDeviceName(device.ID, s.draft, func(err error) {
+				if err != nil {
+					w.showAlert(alertOptions{Message: L("Couldn't rename it"), Informative: model.ErrorText(err)}, nil)
+				}
+			})
+		}
 	})
 }
 

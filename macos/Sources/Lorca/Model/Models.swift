@@ -420,6 +420,9 @@ struct Device: Identifiable, Hashable {
     /// Set for a CLI that updates itself (one installed with the site's script); a CLI an app
     /// carries updates with the app.
     var update: CLIUpdate? = nil
+    /// The name the machine goes by, which a name the account gives the Device stands in for.
+    /// Empty when it is `name`.
+    var machineName: String = ""
 
     /// A self-updating CLI's updates, as its `machine` blob says.
     struct CLIUpdate: Hashable {

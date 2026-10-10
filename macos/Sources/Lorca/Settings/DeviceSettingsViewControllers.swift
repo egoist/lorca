@@ -443,6 +443,7 @@ final class AboutDeviceSettingsViewController: DevicePaneViewController {
 
     override func viewDidLoad() {
         title = L("Devices")
+        header.onRename = { [weak self] device, name in self?.rename(device, to: name) }
         add(header)
         addSection(machineSection)
         add(serviceNote)
@@ -509,6 +510,24 @@ final class AboutDeviceSettingsViewController: DevicePaneViewController {
         machineSection.setRows(rows)
     }
 
+    private func rename(_ device: Device, to name: String) {
+        Task { @MainActor [weak self] in
+            do {
+                try await self?.store.setDeviceName(name, for: device.id)
+            } catch {
+                let failed = NSAlert()
+                failed.messageText = L("Couldn't rename it")
+                failed.informativeText = error.localizedDescription
+                failed.addButton(withTitle: L("OK"))
+                if let window = self?.view.window {
+                    failed.beginSheetModal(for: window) { _ in }
+                } else {
+                    failed.runModal()
+                }
+            }
+        }
+    }
+
     /// Asks an online Runner whether `lorca service` keeps its CLI running, once per Device shown.
     private func askService(_ device: Device) {
         guard serviceAsked != device.id else { return }
@@ -573,18 +592,33 @@ final class AboutDeviceSettingsViewController: DevicePaneViewController {
     }
 }
 
-final class DeviceHeaderView: NSView {
+/// The Device's symbol beside its name, its model and system, and whether it is online. The name
+/// is a field: clicking it renames the Device on every paired Device, and clearing it takes back
+/// the name the machine goes by.
+final class DeviceHeaderView: NSView, NSTextFieldDelegate {
     private let icon = NSImageView()
-    private let name = Build.label("", font: .systemFont(ofSize: 22, weight: .semibold))
+    private let name = NSTextField()
     private let model = Build.label("", font: .systemFont(ofSize: 12.5), color: .secondaryLabelColor)
     private let dot = StatusDotView(size: 8)
     private let status = Build.label("", font: .systemFont(ofSize: 11.5, weight: .medium))
+    private var device: Device?
+    var onRename: ((Device, String) -> Void)?
 
     init() {
         super.init(frame: .zero)
         translatesAutoresizingMaskIntoConstraints = false
         icon.translatesAutoresizingMaskIntoConstraints = false
         icon.contentTintColor = .secondaryLabelColor
+
+        name.font = .systemFont(ofSize: 22, weight: .semibold)
+        name.isBordered = false
+        name.drawsBackground = false
+        name.usesSingleLineMode = true
+        name.lineBreakMode = .byTruncatingTail
+        name.cell?.isScrollable = true
+        name.delegate = self
+        name.toolTip = L("Click to rename")
+        name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
         let statusLine = Build.stack([dot, status], orientation: .horizontal, spacing: 6)
         let text = Build.stack([name, model, statusLine], spacing: 3)
@@ -600,18 +634,52 @@ final class DeviceHeaderView: NSView {
             icon.heightAnchor.constraint(equalToConstant: 44),
             text.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 14),
             text.topAnchor.constraint(equalTo: topAnchor),
-            text.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
+            text.trailingAnchor.constraint(equalTo: trailingAnchor),
             text.bottomAnchor.constraint(equalTo: bottomAnchor),
+            name.trailingAnchor.constraint(equalTo: text.trailingAnchor),
         ])
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    func controlTextDidEndEditing(_ obj: Notification) {
+        guard let device else { return }
+        onRename?(device, name.stringValue)
+    }
+
+    /// Return ends the edit; Escape puts the name back first.
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        switch selector {
+        case #selector(NSResponder.cancelOperation(_:)):
+            name.stringValue = device?.name ?? ""
+            window?.makeFirstResponder(nil)
+            return true
+        case #selector(NSResponder.insertNewline(_:)):
+            window?.makeFirstResponder(nil)
+            return true
+        default:
+            return false
+        }
+    }
+
     func configure(device: Device) {
         icon.image = NSImage(systemSymbolName: device.symbolName, accessibilityDescription: nil)
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 34, weight: .regular)
-        name.stringValue = device.name
+        // A machine that never said what it is has no name of its own to change.
+        let renamable = device.os != .unknown
+        if renamable != name.isEditable {
+            name.isEditable = renamable
+            name.isSelectable = renamable
+            name.toolTip = renamable ? L("Click to rename") : nil
+        }
+        // What the user is typing stays until the edit ends.
+        if name.currentEditor() == nil || self.device?.id != device.id {
+            if name.currentEditor() != nil { window?.makeFirstResponder(nil) }
+            name.stringValue = device.name
+        }
+        name.placeholderString = device.machineName.isEmpty ? device.name : device.machineName
+        self.device = device
         model.stringValue = "\(device.model) · \(device.osVersion)"
         model.isHidden = device.os == .unknown
         dot.status = device.status

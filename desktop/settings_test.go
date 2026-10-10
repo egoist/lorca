@@ -402,3 +402,33 @@ func TestRenderSettingsChinese(t *testing.T) {
 		renderTo(t, tt, "settings-zh-"+string(pane))
 	}
 }
+
+// The Device pane's name is a field: Return renames the Device, and clearing it takes back the
+// name the machine goes by.
+func TestRenameDeviceInSettings(t *testing.T) {
+	m, tt := settingsWindowTester(t, 900)
+	m.showSettingsDevice("dev-studio")
+	m.showSettings(model.PaneDevice)
+	settle(tt)
+	machine := store.Device("dev-studio").Name
+	rename := func(name string) {
+		t.Helper()
+		if err := tt.Click(L("Name")); err != nil {
+			t.Fatal(err)
+		}
+		tt.Key(ui.Cmd, ui.KeyA)
+		tt.Type(name)
+		tt.Key(0, ui.KeyEnter)
+		tt.Frame()
+		settle(tt)
+	}
+	rename("Build box")
+	renderTo(t, tt, "settings-device-renamed")
+	if device := store.Device("dev-studio"); device.Name != "Build box" || device.MachineName != machine {
+		t.Fatalf("renamed device %+v", device)
+	}
+	rename("")
+	if device := store.Device("dev-studio"); device.Name != machine {
+		t.Fatalf("name not taken back: %+v", device)
+	}
+}

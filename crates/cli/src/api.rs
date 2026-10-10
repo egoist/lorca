@@ -152,10 +152,12 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             Ok(Value::Null)
         }
 
-        "device.rename" => {
-            let name = string(&params, "name")?;
-            app.rename_device(&name).map_err(|e| e.to_string())?;
-            Ok(json!({ "name": name }))
+        // The name a Device shows as on every paired Device, for any Device: blank takes back the
+        // name its machine goes by.
+        "device.set_name" => {
+            let id = string(&params, "id")?;
+            app.set_device_name(&id, &opt_string(&params, "name").unwrap_or_default()).map_err(|e| e.to_string())?;
+            Ok(Value::Null)
         }
         // Another Device by id, or this one: the latter is `identity.forget`.
         "device.unpair" => {

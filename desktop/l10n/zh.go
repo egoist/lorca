@@ -1452,6 +1452,7 @@ var zh = map[string]string{
 	"Each request to this URL runs the routine once, with what it sent. Senders include the key in an Authorization: Bearer header; share it only with the service that calls this routine.": "每次请求这个 URL，例行任务都会带着请求发来的内容运行一次。发送方在 Authorization: Bearer 请求头中附上密钥；只把它交给调用这个例行任务的服务。",
 	"Regenerate the webhook key?": "要重新生成 Webhook 密钥吗？",
 	"Services that send the current key stop reaching this routine until you give them the new one.": "使用当前密钥的服务将无法再触发这个例行任务，直到你把新密钥交给它们。",
-	"Regenerate Key": "重新生成密钥",
-	"Request failed": "请求失败",
+	"Regenerate Key":  "重新生成密钥",
+	"Request failed":  "请求失败",
+	"Click to rename": "点击重命名",
 }
