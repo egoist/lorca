@@ -916,7 +916,21 @@ impl ToolRunner for CheckRunner {
             let refusal = format!("{} can change things, and a check only looks: leave it to the run the check starts.", tool.name());
             return ToolOutcome { result: ToolResult { is_error: true, ..ToolResult::text(refusal) }, is_error: true, blocked: true };
         }
-        DirectRunner.run(tool, tool_call_id, args, cancel).await
+        let mut outcome = DirectRunner.run(tool, tool_call_id, args, cancel).await;
+        // As a turn's results do, what a check reads has this Runner's saved secrets replaced
+        // by their placeholders before the script, the run it starts, or the roster sees it.
+        if let Some(clean) = crate::secrets::scrub_result(&self.app, &outcome.result) {
+            if let Some(content) = clean.content {
+                outcome.result.content = content;
+            }
+            if let Some(details) = clean.details {
+                outcome.result.details = details;
+            }
+            if clean.structured.is_some() {
+                outcome.result.structured = clean.structured;
+            }
+        }
+        outcome
     }
 }
 
@@ -1640,6 +1654,16 @@ mod tests {
         let changed = check_now(app, &app.routine(&watch.id).unwrap(), &CancellationToken::new()).await;
         let found = changed.found.unwrap();
         assert!(found.contains("2 new commits pushed.") && found.contains("1 new comment."), "{found}");
+
+        // A title that echoes a saved secret reaches neither the run nor the roster.
+        let ask = SecretAsk { target: crate::secrets::COMMAND.into(), site: None, fields: vec![SecretField { name: "NPM_TOKEN".into(), label: "npm token".into() }] };
+        crate::secrets::keep(app, "b1", &ask, &std::collections::BTreeMap::from([("NPM_TOKEN".to_string(), "npm_s3cr3t_value".to_string())])).unwrap();
+        let mut leaky = pr("open", false, "b2", 3, 1);
+        leaky["title"] = serde_json::json!("Rotate npm_s3cr3t_value");
+        *answer.lock().unwrap() = leaky;
+        let renamed = check_now(app, &app.routine(&watch.id).unwrap(), &CancellationToken::new()).await.found.unwrap();
+        assert!(renamed.contains("Rotate {{secret:NPM_TOKEN}}") && !renamed.contains("s3cr3t"), "{renamed}");
+        assert_eq!(app.routine(&watch.id).unwrap().pull_request.unwrap().seen.unwrap().title, "Rotate {{secret:NPM_TOKEN}}");
 
         // It merges: the next due read starts the last run, and the watch is gone after it.
         *answer.lock().unwrap() = pr("closed", true, "b2", 3, 1);

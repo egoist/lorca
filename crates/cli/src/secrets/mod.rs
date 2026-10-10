@@ -188,7 +188,7 @@ pub fn forget_bots(app: &App, bot_ids: &[String]) {
 }
 
 /// Keeps the values a card was answered with, replacing the bot's secrets of the same names.
-fn keep(app: &App, bot_id: &str, ask: &SecretAsk, values: &BTreeMap<String, String>) -> Result<(), String> {
+pub(crate) fn keep(app: &App, bot_id: &str, ask: &SecretAsk, values: &BTreeMap<String, String>) -> Result<(), String> {
     let mut items = loaded(app)?;
     let now = now_secs();
     for field in &ask.fields {

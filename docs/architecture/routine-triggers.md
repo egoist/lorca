@@ -26,7 +26,7 @@ Each event runs once: when its time comes, the Runner adds its key (`id@start`) 
 
 ## Across Devices
 
-Only the bot's Runner reads GitHub or the calendar and sets a watch's `seen` and `ended_at` or a calendar's `upcoming`, `synced_at`, and `done`. Setting up a watch or a routine around events is refused elsewhere, since the Runner's plugins decide it. When another Device writes the roster from an older copy, the Runner keeps its newer reads and the runs it took (`routine_triggers::keep_reads`, beside `routines::keep_checks`) and uploads again.
+What a read returns has the Runner's saved [secrets](secrets.md#keeping-values-out) replaced by their placeholders before it is kept or reaches a run, as a turn's tool results do. Only the bot's Runner reads GitHub or the calendar and sets a watch's `seen` and `ended_at` or a calendar's `upcoming`, `synced_at`, and `done`. Setting up a watch or a routine around events is refused elsewhere, since the Runner's plugins decide it. When another Device writes the roster from an older copy, the Runner keeps its newer reads and the runs it took (`routine_triggers::keep_reads`, beside `routines::keep_checks`) and uploads again.
 
 A [bot template](templates.md), a marketplace bot, and a [workflow](workflows.md) carry repeating routines only (`schedule::parse_repeating`): a date, a pull request, and a calendar belong to one account.
 
