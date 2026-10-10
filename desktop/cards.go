@@ -537,7 +537,7 @@ func (m *mainWindow) draftCard(c *ui.Context, chat *model.Chat, message *model.M
 				ui.Column(c).Margin(6, 0, 0, 0).Children(func() {
 					for _, row := range rows {
 						line := p.Separator
-						ui.Row(c.Key("row-"+row.label)).Height(26).AlignItems(ui.Center).Gap(6).DrawOver(func(painter *ui.Painter, r ui.Rect) {
+						ui.Row(c.Key("row-" + row.label)).Height(26).AlignItems(ui.Center).Gap(6).DrawOver(func(painter *ui.Painter, r ui.Rect) {
 							painter.Fill(ui.Rect{X: r.X, Y: r.Y + r.H - 1, W: r.W, H: 1}, line, 0)
 						}).Children(func() {
 							ui.Text(c, row.label).Width(draftLabelWidth(card)).FontSize(12).TextColor(p.Label2).SingleLine()
