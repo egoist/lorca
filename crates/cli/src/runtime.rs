@@ -659,9 +659,19 @@ pub fn spawn_local_job(app: Arc<App>, job: Job, remote_blob_id: Option<String>) 
         if job.kind == "task" { crate::tasks::finished(&app, &job, if cancel.is_cancelled() { TurnOutcome::Skipped } else { outcome }).await; }
         // An event turn settles its delivery; it is not a run of the routine it targets.
         if job.kind == "event" {
+            // The event turn of a routine on events is its run; the delivery's event is read
+            // before it settles and drops its payload.
+            #[cfg(feature = "runner")]
+            let watched = job.routine_id.as_ref().and_then(|_| crate::event_triggers::delivery_event(&app, &job));
             #[cfg(feature = "runner")]
             if let Err(error) = crate::event_triggers::finished(&app, &job, outcome, cancel.is_cancelled() && !crate::handoffs::stopped_at_limits(&app, &job)) {
                 tracing::error!(%error, "recording the event turn outcome");
+            }
+            #[cfg(feature = "runner")]
+            if let (Some((subscription_id, payload)), Some(routine_id)) = (watched, job.routine_id.as_deref()) {
+                if app.routine(routine_id).and_then(|routine| routine.events).is_some_and(|events| events.subscription_id == subscription_id) {
+                    crate::routine_events::event_finished(&app, routine_id, &payload, outcome);
+                }
             }
         } else if let Some(id) = &job.routine_id {
             crate::routines::finished(&app, id, outcome);

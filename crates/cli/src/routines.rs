@@ -51,9 +51,10 @@ pub fn create_with_policy(app: &Arc<App>, bot_id: &str, name: &str, schedule_tex
 /// What places a routine's runs besides its schedule, as the bot or the local API gives it.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Triggers<'a> {
-    /// `owner/repo#42` or its link: the routine watches that pull request. `""` on edit ends
-    /// the watch and keeps the routine.
-    pub pull_request: Option<&'a str>,
+    /// The relay's receiver a routine on events listens through (`github`), and the subject
+    /// its events are about (`acme/project#42`), as the service's skill names them.
+    pub receiver: Option<&'a str>,
+    pub subject: Option<&'a str>,
     /// The Calendar account of a schedule around events: its id or name; the only one when left
     /// out.
     pub calendar: Option<&'a str>,
@@ -62,8 +63,8 @@ pub struct Triggers<'a> {
     pub event_match: Option<&'a str>,
 }
 
-/// `create_with_policy` with what else places the runs: a pull request to watch, or the Calendar
-/// account and the words of events a schedule around events follows.
+/// `create_with_policy` with what else places the runs: a receiver's events about a subject, or
+/// the Calendar account and the words of events a schedule around events follows.
 #[allow(clippy::too_many_arguments)]
 pub fn create_routine(
     app: &Arc<App>,
@@ -83,8 +84,9 @@ pub fn create_routine(
         return Err("Say what the routine should do on each run.".into());
     }
     let check = check.map(clean_check).transpose()?.flatten();
-    let watching = triggers.pull_request.is_some_and(|text| !text.trim().is_empty());
-    let schedule_text = if watching && schedule_text.trim().is_empty() { crate::routine_triggers::DEFAULT_WATCH_SCHEDULE } else { schedule_text };
+    // A routine on events takes no schedule: they start its runs.
+    let listening = [triggers.receiver, triggers.subject].iter().any(|text| text.is_some_and(|text| !text.trim().is_empty()));
+    let schedule_text = if listening && schedule_text.trim().is_empty() { "on events" } else { schedule_text };
     let schedule = schedule::parse(schedule_text)?;
     let timezone = match timezone {
         Some(zone) => schedule::timezone(zone)?.to_string(),
@@ -99,7 +101,7 @@ pub fn create_routine(
     if existing.iter().any(|r| r.name.eq_ignore_ascii_case(&name)) {
         return Err(format!("A routine named {name:?} already exists. Pick another name or edit that one."));
     }
-    let (pull_request, calendar) = triggers_for(app, &bot, &schedule, check.as_deref(), &timezone, missed_run_policy, triggers, None)?;
+    let (events, calendar) = triggers_for(app, &bot, &schedule, check.as_deref(), &timezone, missed_run_policy, triggers, None)?;
     let now = now_secs();
     let routine = Routine {
         id: String::new(),
@@ -118,17 +120,38 @@ pub fn create_routine(
         last_outcome: None,
         paused_reason: None,
         check,
-        pull_request,
+        events,
         calendar,
         created_at: now,
     };
-    app.insert_routine(routine).map_err(|e| e.to_string())
+    let routine = app.insert_routine(routine).map_err(|e| e.to_string())?;
+    // A routine on events listens through a subscription of its own on its Runner.
+    #[cfg(feature = "runner")]
+    if routine.events.is_some() {
+        let opened = crate::routine_events::open(app, &routine).and_then(|subscription_id| {
+            app.update_routine(&routine.id, |routine| {
+                if let Some(events) = routine.events.as_mut() {
+                    events.subscription_id = subscription_id;
+                }
+            })
+            .map_err(|error| error.to_string())
+        });
+        return match opened {
+            Ok(routine) => Ok(routine),
+            Err(error) => {
+                let _ = app.delete_routine(&routine.id);
+                Err(error)
+            }
+        };
+    }
+    Ok(routine)
 }
 
-/// What a routine of `bot` with `schedule` watches or follows, checked against the rest of it:
-/// a one-time routine runs once, late if need be, with no check; a watch reads its pull request
-/// on a repeating schedule; a schedule around events follows one Calendar account. `current` is
-/// the routine being edited, whose watch and calendar carry over what they read.
+/// What a routine of `bot` with `schedule` listens to or follows, checked against the rest of
+/// it: a one-time routine runs once, late if need be, with no check; a routine on events
+/// listens to one receiver's subject and keeps it; a schedule around events follows one
+/// Calendar account. `current` is the routine being edited, whose events and calendar carry
+/// over what they read.
 #[allow(clippy::too_many_arguments)]
 fn triggers_for(
     app: &Arc<App>,
@@ -139,14 +162,9 @@ fn triggers_for(
     policy: crate::routine_health::MissedRunPolicy,
     triggers: Triggers,
     current: Option<&Routine>,
-) -> Result<(Option<crate::routine_triggers::PullRequestWatch>, Option<crate::routine_triggers::CalendarTrigger>), String> {
-    use crate::routine_triggers::{CalendarTrigger, PullRequestWatch};
+) -> Result<(Option<crate::routine_events::RoutineEvents>, Option<crate::routine_triggers::CalendarTrigger>), String> {
+    use crate::routine_triggers::CalendarTrigger;
     let on_runner = app.this_device_id().as_deref() == Some(bot.runner_id.as_str());
-    let watch_text = match triggers.pull_request.map(str::trim) {
-        Some("") => None,
-        Some(text) => Some(text.to_string()),
-        None => current.and_then(|routine| routine.pull_request.as_ref()).map(|watch| format!("{}#{}", watch.repo, watch.number)),
-    };
     let events = matches!(schedule, schedule::Schedule::Events(_));
     if !events && (triggers.calendar.is_some_and(|name| !name.trim().is_empty()) || triggers.event_match.is_some_and(|words| !words.trim().is_empty())) {
         return Err("A calendar and event words go with a schedule around events, such as 15m before events.".into());
@@ -164,35 +182,55 @@ fn triggers_for(
             return Err(format!("That time has passed: it is {} in {timezone} now.", schedule::when_label(now_unix(), now_unix(), timezone)));
         }
     }
-    let pull_request = match watch_text {
-        None => None,
-        Some(text) => {
-            let (repo, number) = crate::routine_triggers::parse_pull_request(&text)?;
-            if !schedule.repeats() {
-                return Err("A watch reads its pull request on a repeating schedule, such as every 10m.".into());
+    let listening = match current.and_then(|routine| routine.events.clone()) {
+        Some(held) => {
+            let asked = triggers.receiver.map(str::trim).filter(|text| !text.is_empty()).zip(triggers.subject.map(str::trim).filter(|text| !text.is_empty()));
+            if asked.is_some_and(|(receiver, subject)| !receiver.eq_ignore_ascii_case(&held.receiver) || subject != held.subject) {
+                return Err("A routine on events keeps what it listens to. Delete it and set up another for something else.".into());
             }
-            if check.is_some() {
-                return Err("A watch has no check: it reads the pull request itself.".into());
+            if !matches!(schedule, schedule::Schedule::OnEvents) {
+                return Err("A routine on events runs when they come and takes no schedule.".into());
             }
-            let held = current.and_then(|routine| routine.pull_request.clone()).filter(|watch| (watch.repo.as_str(), watch.number) == (repo.as_str(), number));
-            match held {
-                Some(watch) => Some(watch),
-                None => {
-                    if !on_runner {
-                        return Err("Set up a pull request watch on the bot's Runner.".into());
-                    }
-                    #[cfg(feature = "runner")]
-                    let plugin_id = crate::routine_triggers::github_plugin(app, bot)?;
-                    #[cfg(not(feature = "runner"))]
-                    let plugin_id = String::new();
-                    Some(PullRequestWatch { repo, number, plugin_id, seen: None, ended_at: None })
-                }
-            }
+            Some(held)
         }
+        None => match (triggers.receiver.map(str::trim).filter(|text| !text.is_empty()), triggers.subject.map(str::trim).filter(|text| !text.is_empty())) {
+            (None, None) if matches!(schedule, schedule::Schedule::OnEvents) => return Err("Give the receiver the events come through.".into()),
+            (None, None) => None,
+            (Some(receiver), subject) => {
+                let subject = subject.unwrap_or_default();
+                if current.is_some() {
+                    return Err("Set up a new routine to run on events.".into());
+                }
+                if !matches!(schedule, schedule::Schedule::OnEvents) {
+                    return Err("A routine on events runs when they come and takes no schedule: leave schedule out.".into());
+                }
+                if check.is_some() {
+                    return Err("A routine on events has no check: its events start its runs.".into());
+                }
+                if !on_runner {
+                    return Err("Set up a routine on events on the bot's Runner.".into());
+                }
+                let (receiver, subject) = crate::routine_events::check(receiver, subject)?;
+                Some(crate::routine_events::RoutineEvents {
+                    receiver,
+                    subject,
+                    subscription_id: String::new(),
+                    status: crate::routine_events::Listening::Pending,
+                    source_name: String::new(),
+                    title: String::new(),
+                    url: String::new(),
+                    endpoint: String::new(),
+                    key: String::new(),
+                    last_event: None,
+                    ended_at: None,
+                })
+            }
+            (None, Some(_)) => return Err("Give the receiver the subject's events come through.".into()),
+        },
     };
     let calendar = if events {
-        if pull_request.is_some() {
-            return Err("A routine either watches a pull request or follows calendar events, not both.".into());
+        if listening.is_some() {
+            return Err("A routine either runs on a receiver's events or follows calendar events, not both.".into());
         }
         if check.is_some() {
             return Err("A routine around events has no check: the events start its runs.".into());
@@ -226,7 +264,7 @@ fn triggers_for(
     } else {
         None
     };
-    Ok((pull_request, calendar))
+    Ok((listening, calendar))
 }
 
 /// Changes a routine's name, schedule, prompt, or check. Only the fields given change; an empty
@@ -266,9 +304,9 @@ pub fn edit_routine(
     let check = check.map(clean_check).transpose()?;
     let timezone = timezone.map(schedule::timezone).transpose()?.map(|zone| zone.to_string());
     let missed_run_policy = missed_run_policy.map(crate::routine_health::MissedRunPolicy::parse).transpose()?;
-    let triggered = triggers.pull_request.is_some() || triggers.calendar.is_some() || triggers.event_match.is_some();
+    let triggered = triggers.receiver.is_some() || triggers.subject.is_some() || triggers.calendar.is_some() || triggers.event_match.is_some();
     if name.is_none() && schedule.is_none() && prompt.is_none() && check.is_none() && timezone.is_none() && missed_run_policy.is_none() && !triggered {
-        return Err("Pass a new name, schedule, prompt, check, timezone, missed-run policy, pull request, calendar, or event words.".into());
+        return Err("Pass a new name, schedule, prompt, check, timezone, missed-run policy, calendar, or event words.".into());
     }
     // The routine as it would stand, checked whole.
     let bot = app.bot(&current.bot_id).ok_or("Unknown bot")?;
@@ -282,9 +320,8 @@ pub fn edit_routine(
     };
     let next_zone = timezone.clone().unwrap_or_else(|| current.timezone.clone());
     let next_policy = missed_run_policy.unwrap_or(current.missed_run_policy);
-    let (pull_request, calendar) = triggers_for(app, &bot, &next_schedule, next_check.as_deref(), &next_zone, next_policy, triggers, Some(&current))?;
-    let retargeted = !current.pull_request.as_ref().map(|w| (&w.repo, w.number)).eq(&pull_request.as_ref().map(|w| (&w.repo, w.number)))
-        || current.calendar.as_ref().map(|c| (&c.plugin_id, &c.matching)) != calendar.as_ref().map(|c| (&c.plugin_id, &c.matching));
+    let (events, calendar) = triggers_for(app, &bot, &next_schedule, next_check.as_deref(), &next_zone, next_policy, triggers, Some(&current))?;
+    let retargeted = current.calendar.as_ref().map(|c| (&c.plugin_id, &c.matching)) != calendar.as_ref().map(|c| (&c.plugin_id, &c.matching));
     app.update_routine(id, |routine| {
         if let Some(name) = name {
             routine.name = name;
@@ -316,7 +353,7 @@ pub fn edit_routine(
             routine.health = None;
             routine.enabled_at = now_secs();
         }
-        routine.pull_request = pull_request;
+        routine.events = events;
         routine.calendar = calendar;
     })
     .map_err(|e| e.to_string())
@@ -396,7 +433,16 @@ pub fn set_enabled(app: &Arc<App>, id: &str, enabled: bool) -> Result<Routine, S
 }
 
 pub fn delete(app: &Arc<App>, id: &str) -> Result<(), String> {
-    app.delete_routine(id).map_err(|e| e.to_string())
+    let events = app.routine(id).and_then(|routine| routine.events);
+    app.delete_routine(id).map_err(|e| e.to_string())?;
+    // A routine on events takes its subscription and its row on the relay with it.
+    #[cfg(feature = "runner")]
+    if let Some(events) = events.filter(|events| !events.subscription_id.is_empty()) {
+        crate::routine_events::forget(app, &events.subscription_id);
+    }
+    #[cfg(not(feature = "runner"))]
+    let _ = events;
+    Ok(())
 }
 
 fn clean_name(name: &str) -> Result<String, String> {
@@ -492,11 +538,11 @@ pub fn finished(app: &Arc<App>, id: &str, outcome: TurnOutcome) {
     end_if_finished(app, id);
 }
 
-/// Removes a routine that is done: a one-time routine after its run, a watch after the run that
-/// reported its pull request merged or closed. The chat keeps the run.
-pub fn end_if_finished(app: &App, id: &str) {
+/// Removes a routine that is done: a one-time routine after its run, a routine on events after
+/// the run of the event that ended its subject. The chat keeps the run.
+pub fn end_if_finished(app: &Arc<App>, id: &str) {
     if app.routine(id).is_some_and(|routine| crate::routine_triggers::is_finished(&routine)) {
-        if let Err(error) = app.delete_routine(id) {
+        if let Err(error) = delete(app, id) {
             tracing::warn!(%error, routine = %id, "removing a finished routine");
         }
     }
@@ -550,6 +596,10 @@ pub fn tick(app: &Arc<App>) {
     for routine in mine.iter().filter(|r| crate::routine_triggers::is_finished(r) && !app.is_routine_running(&r.id) && !app.routine_checks.is_running(&r.id)) {
         end_if_finished(app, &routine.id);
     }
+    // Routines on events still waiting on the relay or on the user's setup try again, and the
+    // subscriptions of ones that are gone go.
+    crate::routine_events::retry_waiting(app, &mine);
+    crate::routine_events::sweep(app);
     let enabled: Vec<Routine> = mine.into_iter().filter(|r| r.is_enabled && !crate::routine_triggers::is_finished(r)).collect();
     // A routine stopped at its limits reads nothing either.
     for routine in enabled.iter().filter(|r| crate::routine_triggers::calendar_sync_due(r, now) && !app.routine_checks.is_running(&r.id) && app.budgets.admit(app, "routine", &r.id).is_ok()) {
@@ -819,7 +869,7 @@ pub async fn run_check(app: &Arc<App>, routine: &Routine, cancel: &CancellationT
 #[cfg(feature = "runner")]
 async fn run_budgeted_check(app: &Arc<App>, routine: &Routine, cancel: &CancellationToken) -> CheckRun {
     let failed = |error: String| CheckRun { found: None, error: Some(error.clone()), result: error };
-    let looks = routine.check.is_some() || routine.pull_request.is_some() || routine.calendar.is_some();
+    let looks = routine.check.is_some() || routine.calendar.is_some();
     if !looks {
         return CheckRun { found: None, error: None, result: String::new() };
     }
@@ -828,15 +878,11 @@ async fn run_budgeted_check(app: &Arc<App>, routine: &Routine, cancel: &Cancella
         Ok(dm) => dm,
         Err(error) => return failed(error.to_string()),
     };
-    // A watch or a calendar reads through its plugin alone, by the same rules as a check.
-    if routine.pull_request.is_some() || routine.calendar.is_some() {
+    // A calendar reads through its plugin alone, by the same rules as a check.
+    if routine.calendar.is_some() {
         let catalog = crate::plugins::mcp::bot_catalog(app, &bot, &dm.meta.id, Vec::new());
         let runner = CheckRunner { app: app.clone(), catalog: catalog.clone(), bot, chat_id: dm.meta.id.clone(), budget: crate::budgets::current() };
-        return if routine.pull_request.is_some() {
-            crate::routine_triggers::look_at_pull_request(app, routine, &catalog, &runner, cancel).await
-        } else {
-            crate::routine_triggers::read_calendar(app, routine, &catalog, &runner, cancel).await
-        };
+        return crate::routine_triggers::read_calendar(app, routine, &catalog, &runner, cancel).await;
     }
     let Some(code) = routine.check.as_deref() else { return CheckRun { found: None, error: None, result: String::new() } };
     let files: Vec<Arc<dyn Tool>> =
@@ -1167,7 +1213,7 @@ mod tests {
             last_outcome: None,
             paused_reason: None,
             check: check.map(str::to_string),
-            pull_request: None,
+            events: None,
             calendar: None,
             created_at: 0.0,
         }
@@ -1617,65 +1663,82 @@ mod tests {
         url
     }
 
-    /// A watch reads its pull request through GitHub on the Runner: the first read records it,
-    /// a change starts a run that says what changed, and the run after it merged is its last.
-    #[cfg(all(feature = "runner", feature = "server"))]
+    /// Signs an event for a subscription with its secret and hands it to the inbox, as the
+    /// relay's receiver or a gateway does.
+    #[cfg(feature = "runner")]
+    fn deliver(app: &Arc<App>, subscription_id: &str, delivery_id: &str, event_type: &str, payload: Value) -> Value {
+        let (secret, generation) = crate::event_triggers::secret_of(app, subscription_id).unwrap();
+        let mut event = crate::event_triggers::Envelope {
+            version: 1,
+            subscription_id: subscription_id.into(),
+            generation,
+            delivery_id: delivery_id.into(),
+            occurred_at: now_unix(),
+            event_type: event_type.into(),
+            payload: payload.to_string(),
+            signature: String::new(),
+        };
+        event.sign(&secret).unwrap();
+        crate::event_triggers::receive(app, event).unwrap()
+    }
+
+    /// A routine on events listens through a subscription of its own: each event about its
+    /// subject starts one run, a repeat of a delivery runs nothing, and the run of an event
+    /// that ends the subject is its last.
+    #[cfg(feature = "runner")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_watch_reports_changes_and_ends_when_the_pull_request_merges() {
+    async fn a_routine_on_events_runs_once_per_event_and_ends_with_its_subject() {
         let scratch = scratch_app();
         let app = &scratch.0;
-        let pr = |state: &str, merged: bool, sha: &str, commits: u64, comments: u64| {
-            serde_json::json!({ "number": 42, "title": "Add login", "state": state, "merged": merged, "draft": false, "html_url": "https://github.com/acme/project/pull/42",
-                "head": { "ref": "login", "sha": sha }, "commits": commits, "comments": comments, "updated_at": format!("{sha}{comments}") })
-        };
-        let answer = Arc::new(std::sync::Mutex::new(pr("open", false, "a1", 1, 0)));
-        let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let tools = serde_json::json!([{ "name": "pull_request_read", "description": "Get details for a single pull request", "inputSchema": { "type": "object" }, "annotations": { "readOnlyHint": true } }]);
-        let url = fake_mcp(tools, answer.clone(), calls.clone()).await;
-        assert!(create_routine(app, "b1", "Login PR", "", "Tell me what changed.", None, true, None, None, Triggers { pull_request: Some("acme/project#42"), ..Default::default() })
-            .unwrap_err()
-            .contains("GitHub is not installed"));
-        let manifest = crate::plugins::Manifest::parse(&serde_json::json!({ "id": "github", "name": "GitHub", "servers": { "github": { "type": "http", "url": url } } })).unwrap();
-        crate::plugins::install(app, manifest, "inline").unwrap();
-        assert!(create_routine(app, "b1", "Bad", "once 2030-01-01 09:00", "x", None, true, None, None, Triggers { pull_request: Some("acme/project#42"), ..Default::default() })
-            .unwrap_err()
-            .contains("repeating"));
-        let watch = create_routine(app, "b1", "Login PR", "", "Tell me what changed.", None, true, None, None, Triggers { pull_request: Some("https://github.com/acme/project/pull/42"), ..Default::default() }).unwrap();
-        assert_eq!((watch.schedule.as_str(), watch.pull_request.as_ref().unwrap().plugin_id.as_str()), ("every 10m", "github"));
+        let on = |receiver: Option<&'static str>, subject: Option<&'static str>| Triggers { receiver, subject, ..Default::default() };
+        assert!(create_routine(app, "b1", "Bad", "every 1h", "x", None, true, None, None, on(Some("github"), Some("acme/project#42"))).unwrap_err().contains("no schedule"));
+        assert!(create_routine(app, "b1", "Bad", "", "x", None, true, None, None, on(None, Some("acme/project#42"))).unwrap_err().contains("receiver"));
+        assert!(create_routine(app, "b1", "Bad", "", "x", Some("return 1"), true, None, None, on(Some("github"), Some("acme/project#42"))).unwrap_err().contains("no check"));
+        let watch = create_routine(app, "b1", "Login PR", "", "Tell me what happened.", None, true, None, None, on(Some("GitHub"), Some("acme/project#42"))).unwrap();
+        let events = watch.events.clone().unwrap();
+        assert_eq!((watch.schedule.as_str(), events.receiver.as_str(), events.status), ("on events", "github", crate::routine_events::Listening::Pending));
+        assert!(!events.subscription_id.is_empty() && watch.next_run_at().is_none());
         assert_eq!(app.routine_out(&watch)["schedule_text"], "Watches acme/project#42");
-        let first = check_now(app, &watch, &CancellationToken::new()).await;
-        assert_eq!((first.found.as_deref(), first.error.as_deref()), (None, None), "{}", first.result);
-        assert!(first.result.contains("“Add login” is open"), "{}", first.result);
-        assert_eq!(calls.lock().unwrap()[0]["arguments"], serde_json::json!({ "method": "get", "owner": "acme", "repo": "project", "pullNumber": 42 }));
-        let quiet = check_now(app, &app.routine(&watch.id).unwrap(), &CancellationToken::new()).await;
-        assert_eq!(quiet.found, None, "nothing changed");
-
-        *answer.lock().unwrap() = pr("open", false, "b2", 3, 1);
-        let changed = check_now(app, &app.routine(&watch.id).unwrap(), &CancellationToken::new()).await;
-        let found = changed.found.unwrap();
-        assert!(found.contains("2 new commits pushed.") && found.contains("1 new comment."), "{found}");
-
-        // A title that echoes a saved secret reaches neither the run nor the roster.
-        let ask = SecretAsk { target: crate::secrets::COMMAND.into(), site: None, fields: vec![SecretField { name: "NPM_TOKEN".into(), label: "npm token".into() }] };
-        crate::secrets::keep(app, "b1", &ask, &std::collections::BTreeMap::from([("NPM_TOKEN".to_string(), "npm_s3cr3t_value".to_string())])).unwrap();
-        let mut leaky = pr("open", false, "b2", 3, 1);
-        leaky["title"] = serde_json::json!("Rotate npm_s3cr3t_value");
-        *answer.lock().unwrap() = leaky;
-        let renamed = check_now(app, &app.routine(&watch.id).unwrap(), &CancellationToken::new()).await.found.unwrap();
-        assert!(renamed.contains("Rotate {{secret:NPM_TOKEN}}") && !renamed.contains("s3cr3t"), "{renamed}");
-        assert_eq!(app.routine(&watch.id).unwrap().pull_request.unwrap().seen.unwrap().title, "Rotate {{secret:NPM_TOKEN}}");
-
-        // It merges: the next due read starts the last run, and the watch is gone after it.
-        *answer.lock().unwrap() = pr("closed", true, "b2", 3, 1);
-        app.update_routine(&watch.id, |r| r.enabled_at = now_secs() - 7200.0).unwrap();
-        app.record_routine(&watch.id, |r| r.health = None).unwrap();
-        tick(app);
+        assert!(edit_routine(app, &watch.id, None, Some("every 1h"), None, None, None, None, Triggers::default()).unwrap_err().contains("no schedule"));
+        // Another subject's event is filtered; this one's runs once, however often it comes.
+        assert_eq!(deliver(app, &events.subscription_id, "d-0", "github", serde_json::json!({ "subject": "acme/project#7", "summary": "Merged", "ends": true }))["status"], "filtered");
+        let pushed = serde_json::json!({ "subject": "acme/project#42", "kind": "commits", "summary": "New commits pushed", "title": "Add passkey sign-in", "url": "https://github.com/acme/project/pull/42" });
+        assert_eq!(deliver(app, &events.subscription_id, "d-1", "github", pushed.clone())["status"], "queued");
+        assert_eq!(deliver(app, &events.subscription_id, "d-1", "github", pushed)["status"], "duplicate");
+        crate::event_triggers::tick(app).unwrap();
+        until(|| app.routine(&watch.id).unwrap().last_outcome.is_some()).await;
+        let ran = app.routine(&watch.id).unwrap();
+        let heard = ran.events.as_ref().unwrap();
+        assert_eq!((heard.last_event.as_ref().unwrap().summary.as_str(), heard.title.as_str()), ("New commits pushed", "Add passkey sign-in"));
+        assert!(ran.last_run_at.is_some());
+        assert_eq!(notices(app)[0], "Event · Login PR");
+        // With no provider here the run failed, which holds later events until the user discards
+        // or retries it.
+        let listed = crate::event_triggers::serve(app, "events.list", &serde_json::json!({})).unwrap();
+        let failed = listed["subscriptions"][0]["deliveries"].as_array().unwrap().iter().find(|d| d["state"] == "failed").unwrap()["id"].as_str().unwrap().to_string();
+        crate::event_triggers::serve(app, "events.discard", &serde_json::json!({ "id": failed })).unwrap();
+        // The subject ends: its run is the last, and the routine and its subscription go.
+        assert_eq!(deliver(app, &events.subscription_id, "d-2", "github", serde_json::json!({ "subject": "acme/project#42", "kind": "merged", "summary": "Merged", "ends": true }))["status"], "queued");
+        crate::event_triggers::tick(app).unwrap();
         until(|| app.routine(&watch.id).is_none()).await;
-        assert_eq!(notices(app)[0], "Routine · Login PR");
-        // A pull request that is already closed is nothing to watch.
-        let closed = create_routine(app, "b1", "Old PR", "", "x", None, true, None, None, Triggers { pull_request: Some("acme/project#42"), ..Default::default() }).unwrap();
-        check_now(app, &closed, &CancellationToken::new()).await;
-        assert!(app.routine(&closed.id).unwrap().pull_request.unwrap().seen.unwrap().is_closed());
+        until(|| crate::event_triggers::receiver_subscriptions(app).unwrap().is_empty()).await;
+        assert_eq!(notices(app).iter().filter(|text| text.starts_with("Event ·")).count(), 2, "one run per event");
+
+        // A webhook's routine has no subject: every request its receiver delivers runs it.
+        let hook = create_routine(app, "b1", "Deploys", "", "Tell me if a deploy failed.", None, true, None, None, on(Some("webhook"), None)).unwrap();
+        let hook_events = hook.events.clone().unwrap();
+        assert_eq!(app.routine_out(&hook)["schedule_text"], "When its webhook is called");
+        assert_eq!(deliver(app, &hook_events.subscription_id, "r-1", "webhook", serde_json::json!({ "kind": "request", "summary": "Webhook request", "data": { "deploy": "failed" } }))["status"], "queued");
+        // Deleting the routine removes its subscription.
+        delete(app, &hook.id).unwrap();
+        until(|| crate::event_triggers::receiver_subscriptions(app).unwrap().is_empty()).await;
+        // Another Device's older roster keeps the Runner's view of what the routine listens with.
+        let mut held = watch.clone();
+        held.events.as_mut().unwrap().key = "k".into();
+        held.events.as_mut().unwrap().status = crate::routine_events::Listening::Subscribed;
+        let mut incoming = vec![watch.clone()];
+        assert!(crate::routine_triggers::keep_reads(&held, &mut incoming[0]));
+        assert_eq!(incoming[0].events.as_ref().unwrap().key, "k");
     }
 
     /// A routine around events reads its Calendar account, keeps the matching events of the next
@@ -1697,7 +1760,7 @@ mod tests {
         let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
         let tools = serde_json::json!([{ "name": "list_events", "description": "List events", "inputSchema": { "type": "object" }, "annotations": { "readOnlyHint": true } }]);
         let url = fake_mcp(tools, answer.clone(), calls.clone()).await;
-        let triggers = Triggers { calendar: None, event_match: Some("customer call"), pull_request: None };
+        let triggers = Triggers { event_match: Some("customer call"), ..Default::default() };
         assert!(create_routine(app, "b1", "Prep", "15m before events", "Prepare me.", None, true, None, None, triggers).unwrap_err().contains("not connected"));
         let manifest = crate::plugins::Manifest::parse(&serde_json::json!({ "id": "google-calendar", "name": "Google Calendar", "named_accounts": true, "servers": { "calendar": { "type": "http", "url": url } } })).unwrap();
         crate::plugins::accounts::install(app, manifest, "inline", Some("Work")).unwrap();

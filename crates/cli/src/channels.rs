@@ -275,6 +275,7 @@ pub fn config_for(bot_id: &str, service: &str, name: &str, task: &str, spec: Cha
         is_enabled: true,
         expires_at: None,
         channel: Some(spec),
+        receiver: None,
     }
 }
 
