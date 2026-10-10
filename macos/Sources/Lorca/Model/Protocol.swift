@@ -142,14 +142,23 @@ enum Wire {
         var state: String?
         var health: Health?
         var onceAt: Double?
-        var pullRequest: PullRequest?
+        var events: Events?
         var calendar: Calendar?
 
-        struct PullRequest: Decodable {
-            var repo: String
-            var number: Int
+        struct Events: Decodable {
+            struct Last: Decodable {
+                var summary: String
+                var at: Double
+            }
+            var receiver: String
+            var subject: String?
+            var status: String?
+            var sourceName: String?
             var title: String?
             var url: String?
+            var endpoint: String?
+            var key: String?
+            var lastEvent: Last?
         }
 
         struct Calendar: Decodable {
@@ -162,13 +171,18 @@ enum Wire {
         }
 
         func toModel() -> Lorca.Routine {
-            let watch = pullRequest.map { RoutineWatch(repo: $0.repo, number: $0.number, title: $0.title ?? "", url: $0.url.flatMap(URL.init(string:))) }
+            let listening = self.events.map {
+                RoutineEvents(
+                    receiver: $0.receiver, subject: $0.subject ?? "", status: $0.status ?? "pending", sourceName: $0.sourceName ?? "", title: $0.title ?? "",
+                    url: $0.url.flatMap(URL.init(string:)), endpoint: $0.endpoint ?? "", key: $0.key ?? "",
+                    lastEvent: $0.lastEvent.map { RoutineEvents.LastEvent(summary: $0.summary, at: Date(timeIntervalSince1970: $0.at)) })
+            }
             let events = calendar.map {
                 RoutineCalendar(account: $0.account ?? "", matching: $0.matching, minutes: $0.minutes ?? 0, after: $0.after ?? false, nextEventTitle: $0.nextEvent?.title)
             }
             let zone = TimeZone(identifier: timezone ?? "") ?? .current
             let words: String =
-                if let watch { L("Watches %@", watch.label) }
+                if let listening { listening.words }
                 else if let events { Format.aroundEvents(minutes: events.minutes, after: events.after, matching: events.matching) }
                 else if let onceAt { Format.once(Date(timeIntervalSince1970: onceAt), in: zone) }
                 else { Format.schedule(scheduleText ?? schedule) }
@@ -185,7 +199,7 @@ enum Wire {
                     status: health?.status, connectionFailures: health?.connectionFailures ?? 0,
                     authenticationFailures: health?.authenticationFailures ?? 0, modelStatus: health?.model?.status,
                     modelAuthenticationFailures: health?.model?.authenticationFailures ?? 0),
-                onceAt: onceAt.map { Date(timeIntervalSince1970: $0) }, pullRequest: watch, calendar: events)
+                onceAt: onceAt.map { Date(timeIntervalSince1970: $0) }, events: listening, calendar: events)
         }
     }
 

@@ -13,16 +13,22 @@ final class RoutineTriggerTests: XCTestCase {
     }
 
     func testEachKindSaysWhatPlacesItsRuns() throws {
-        let watch = try routine(#""schedule":"every 10m","schedule_text":"Watches acme/project#42","next_run_at":2000000000,"pull_request":{"repo":"acme/project","number":42,"title":"Add login","url":"https://github.com/acme/project/pull/42"}"#)
+        let watch = try routine(#""schedule":"on events","schedule_text":"Watches acme/project#42","events":{"receiver":"github","subject":"acme/project#42","status":"subscribed","source_name":"GitHub","title":"Add login","url":"https://github.com/acme/project/pull/42","last_event":{"summary":"Changes requested by kim","at":100}}"#)
         XCTAssertEqual(watch.scheduleText, L("Watches %@", "acme/project#42"))
-        XCTAssertEqual(watch.pullRequest?.url?.absoluteString, "https://github.com/acme/project/pull/42")
-        XCTAssertTrue(watch.looksFirst)
+        XCTAssertEqual(watch.events?.url?.absoluteString, "https://github.com/acme/project/pull/42")
+        XCTAssertEqual(watch.events?.lastEvent?.summary, "Changes requested by kim")
+        XCTAssertFalse(watch.looksFirst)
         XCTAssertEqual(watch.symbol, "arrow.triangle.pull")
-        XCTAssertEqual(watch.detail, L("%@ · Next check %@", watch.scheduleText, Format.upcoming(Date(timeIntervalSince1970: 2_000_000_000))))
-        var failing = watch
-        failing.state = "failed"
-        failing.health.status = "failed"
-        XCTAssertEqual(failing.problem, .readFailed(calendar: false))
+        XCTAssertNil(watch.problem)
+        var waiting = watch
+        waiting.events?.status = "needs_setup"
+        XCTAssertEqual(waiting.problem, .needsSetup(gitHub: true, subject: "acme/project#42"))
+        XCTAssertEqual(waiting.problem?.text, L("App not installed"))
+        XCTAssertTrue(waiting.problem!.needsUser)
+        let hook = try routine(#""schedule":"on events","schedule_text":"When its webhook is called","events":{"receiver":"webhook","status":"subscribed","endpoint":"https://hooks.lorca.app/r/abc","key":"k3y"}"#)
+        XCTAssertEqual(hook.scheduleText, L("When its webhook is called"))
+        XCTAssertEqual(hook.events?.authorizationHeader, "Authorization: Bearer k3y")
+        XCTAssertEqual(hook.symbol, "link")
 
         let events = try routine(#""schedule":"15m before events","schedule_text":"15 minutes before events matching “Customer”","timezone":"Pacific/Kiritimati","calendar":{"account":"Google Calendar · Work","matching":"Customer","minutes":15,"after":false,"next_event":{"title":"Customer call: Acme","start":1,"end":2}}"#)
         XCTAssertEqual(events.scheduleText, L("%@ before events matching “%@”", L("%d minutes", 15), "Customer"))
@@ -44,14 +50,20 @@ final class RoutineTriggerTests: XCTestCase {
         guard AppStore.shared.isMock else { throw XCTSkip("The sheets run against the demo roster: set LORCA_MOCK=1") }
         _ = NSApplication.shared
         AppStore.shared.start()
-        for (id, botID) in [("rt-login-pr", "bot-patch"), ("rt-tag-release", "bot-patch"), ("rt-call-prep", "bot-scout")] {
+        for (id, botID) in [("rt-login-pr", "bot-patch"), ("rt-deploys", "bot-patch"), ("rt-docs-pr", "bot-scout"), ("rt-tag-release", "bot-patch"), ("rt-call-prep", "bot-scout")] {
             let bot = try XCTUnwrap(AppStore.shared.bot(botID))
             let controller = RoutineViewController(routineID: id, bot: bot)
             let window = host(controller)
             let labels = descendants(controller.view).compactMap { $0 as? NSTextField }.filter { !$0.isHiddenOrHasHiddenAncestor }.map(\.stringValue)
             switch id {
             case "rt-login-pr":
-                XCTAssertTrue(labels.contains(L("Pull request")) && labels.contains("Add passkey sign-in") && labels.contains(L("Next check")), "\(labels)")
+                XCTAssertTrue(labels.contains(L("Pull request")) && labels.contains("Add passkey sign-in") && labels.contains(L("Connected")), "\(labels)")
+                XCTAssertFalse(labels.contains(L("Next check")) || labels.contains(L("Missed runs")), "events start it: no next run, no missed runs")
+            case "rt-deploys":
+                XCTAssertTrue(labels.contains(L("Webhook URL")) && labels.contains(L("Webhook key")) && labels.contains(L("Authorization header")), "\(labels)")
+                XCTAssertFalse(labels.contains { $0.contains("q8Zc1kX0") }, "the key is hidden until shown")
+            case "rt-docs-pr":
+                XCTAssertTrue(labels.contains(L("App not installed")) && labels.contains(L("Install App…")), "\(labels)")
             case "rt-tag-release":
                 XCTAssertFalse(labels.contains(L("Missed runs")), "a one-time routine runs once its Runner is back")
             default:

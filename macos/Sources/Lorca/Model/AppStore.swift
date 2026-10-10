@@ -1595,6 +1595,28 @@ final class AppStore {
         perform("routines.run", ["id": id])
     }
 
+    /// The link a user follows to set a routine's receiver up, such as the Lorca GitHub App's
+    /// install, from the relay through the CLI.
+    func receiverSetupURL(_ receiver: String) async throws -> URL {
+        if isMock { return URL(string: "https://github.com/apps/lorca/installations/new")! }
+        let data = try await client.request("receivers.setup", ["receiver": receiver])
+        guard let text = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["url"] as? String, let url = URL(string: text) else {
+            throw CLIClient.RequestError(message: L("Request failed"))
+        }
+        return url
+    }
+
+    /// A new key for a routine's webhook, made on its bot's Runner; the old one stops working.
+    func regenerateRoutineKey(_ id: Routine.ID) async throws {
+        if isMock {
+            guard let index = routines.firstIndex(where: { $0.id == id }) else { return }
+            routines[index].events?.key = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+            emit(.rosterChanged)
+            return
+        }
+        _ = try await client.request("routines.regenerate_key", ["id": id])
+    }
+
     func deleteRoutine(_ id: Routine.ID) {
         routines.removeAll { $0.id == id }
         emit(.rosterChanged)

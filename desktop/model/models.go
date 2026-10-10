@@ -1320,22 +1320,57 @@ type Routine struct {
 	CreatedAt time.Time
 	// OnceAt is when a one-time routine runs; its Runner removes it after that run.
 	OnceAt time.Time
-	// PullRequest is the pull request a watch reads at each due time, until it merges or closes.
-	PullRequest *RoutineWatch
+	// Events is what a routine on events listens to: a pull request through GitHub, or its own
+	// webhook.
+	Events *RoutineEvents
 	// Calendar is the calendar events a routine around events runs before or after.
 	Calendar *RoutineCalendar
 }
 
-// RoutineWatch is the pull request a watch follows.
-type RoutineWatch struct {
-	Repo   string
-	Number int
-	Title  string
-	URL    string
+// RoutineEvents is what a routine on events listens to, as the CLI gives it: a receiver on the
+// relay ("github", "webhook"), a subject ("acme/project#42"), how it listens, and the latest
+// event.
+type RoutineEvents struct {
+	Receiver string
+	Subject  string
+	// Status is "pending", "subscribed", "needs_setup", or "gateway".
+	Status     string
+	SourceName string
+	Title      string
+	URL        string
+	// Endpoint and Key are a webhook's URL and the key its senders include.
+	Endpoint  string
+	Key       string
+	LastEvent *LastEvent
 }
 
-// Label is "acme/project#42".
-func (w RoutineWatch) Label() string { return fmt.Sprintf("%s#%d", w.Repo, w.Number) }
+// LastEvent is the latest event, in the receiver's words.
+type LastEvent struct {
+	Summary string
+	At      time.Time
+}
+
+// IsWebhook is a routine's own webhook.
+func (e RoutineEvents) IsWebhook() bool { return e.Receiver == "webhook" || e.Endpoint != "" }
+
+// IsGitHub is a pull request watched through GitHub.
+func (e RoutineEvents) IsGitHub() bool { return e.Receiver == "github" }
+
+// Words is what starts the routine: "Watches acme/project#42", "When its webhook is called".
+func (e RoutineEvents) Words() string {
+	switch {
+	case e.Subject != "":
+		return L("Watches %@", e.Subject)
+	case e.IsWebhook():
+		return L("When its webhook is called")
+	case e.SourceName != "":
+		return L("On %@ events", e.SourceName)
+	}
+	return L("On %@ events", e.Receiver)
+}
+
+// AuthorizationHeader is the header line a sender pastes.
+func (e RoutineEvents) AuthorizationHeader() string { return "Authorization: Bearer " + e.Key }
 
 // RoutineCalendar is the calendar events a routine runs around: so many minutes before they
 // start, or after they end, of the events that match its words, on one Calendar account.
@@ -1347,9 +1382,8 @@ type RoutineCalendar struct {
 	NextEventTitle string
 }
 
-// LooksFirst is whether its Runner looks before it runs: a check, or a watch's read of its pull
-// request.
-func (r Routine) LooksFirst() bool { return r.HasCheck || r.PullRequest != nil }
+// LooksFirst is whether its Runner looks before it runs: a routine with a check.
+func (r Routine) LooksFirst() bool { return r.HasCheck }
 
 // Symbol is the symbol of its row: what places its runs, while it is on.
 func (r Routine) Symbol() string {
@@ -1358,7 +1392,9 @@ func (r Routine) Symbol() string {
 		return "arrow.triangle.2.circlepath"
 	case !r.IsEnabled:
 		return "pause.circle"
-	case r.PullRequest != nil:
+	case r.Events != nil && r.Events.IsWebhook():
+		return "link"
+	case r.Events != nil:
 		return "arrow.triangle.pull"
 	case r.Calendar != nil:
 		return "calendar"

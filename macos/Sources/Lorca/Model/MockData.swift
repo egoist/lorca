@@ -735,16 +735,33 @@ enum MockData {
             Routine(
                 id: "rt-login-pr", botID: "bot-patch", name: "Login PR",
                 prompt: "Tell me what changed on the passkey sign-in pull request and whether it needs me.",
-                schedule: "every 10m", scheduleText: L("Watches %@", "acme/project#42"), isEnabled: true, pausedReason: nil,
-                lastRunAt: minutesAgo(50), lastOutcome: "sent", nextRunAt: Date().addingTimeInterval(6 * 60), isRunning: false,
-                createdAt: minutesAgo(60 * 24), health: RoutineHealth(lastCheckAt: minutesAgo(4), lastSuccessAt: minutesAgo(4), status: "quiet"),
-                pullRequest: RoutineWatch(repo: "acme/project", number: 42, title: "Add passkey sign-in", url: URL(string: "https://github.com/acme/project/pull/42"))),
+                schedule: "on events", scheduleText: L("Watches %@", "acme/project#42"), isEnabled: true, pausedReason: nil,
+                lastRunAt: minutesAgo(50), lastOutcome: "sent", nextRunAt: nil, isRunning: false, createdAt: minutesAgo(60 * 24),
+                events: RoutineEvents(
+                    receiver: "github", subject: "acme/project#42", status: "subscribed", sourceName: "GitHub", title: "Add passkey sign-in",
+                    url: URL(string: "https://github.com/acme/project/pull/42"), endpoint: "", key: "",
+                    lastEvent: .init(summary: "Changes requested by kim", at: minutesAgo(50)))),
+            Routine(
+                id: "rt-deploys", botID: "bot-patch", name: "Failed deploys",
+                prompt: "Read the deploy the request names and tell me why it failed, with the log lines that show it.",
+                schedule: "on events", scheduleText: L("When its webhook is called"), isEnabled: true, pausedReason: nil,
+                lastRunAt: minutesAgo(60 * 20), lastOutcome: "sent", nextRunAt: nil, isRunning: false, createdAt: minutesAgo(60 * 24 * 4),
+                events: RoutineEvents(
+                    receiver: "webhook", subject: "", status: "subscribed", sourceName: "Webhook", title: "", url: nil,
+                    endpoint: "https://hooks.lorca.app/r/5VPZsRAyy2VIu_yNsFDw2g", key: "q8Zc1kX0vB3nTf7wJp2yLr6uHs9dEa4Mg5Ki1Ox0Rn8",
+                    lastEvent: .init(summary: "Webhook request", at: minutesAgo(60 * 20)))),
             Routine(
                 id: "rt-tag-release", botID: "bot-patch", name: "Tag the release",
                 prompt: "Remind me to tag v1.4.0 once the go/no-go call says go.",
                 schedule: "once", scheduleText: Format.once(tomorrowAtNine(), in: .current), isEnabled: true, pausedReason: nil,
                 lastRunAt: nil, lastOutcome: nil, nextRunAt: tomorrowAtNine(), isRunning: false,
                 createdAt: minutesAgo(120), onceAt: tomorrowAtNine()),
+            Routine(
+                id: "rt-docs-pr", botID: "bot-scout", name: "Docs PR",
+                prompt: "Tell me when the docs pull request gets a review, and what the reviewer asked for.",
+                schedule: "on events", scheduleText: L("Watches %@", "acme/docs#7"), isEnabled: true, pausedReason: nil,
+                lastRunAt: nil, lastOutcome: nil, nextRunAt: nil, isRunning: false, createdAt: minutesAgo(30),
+                events: RoutineEvents(receiver: "github", subject: "acme/docs#7", status: "needs_setup", sourceName: "GitHub", title: "", url: nil, endpoint: "", key: "", lastEvent: nil)),
             Routine(
                 id: "rt-call-prep", botID: "bot-scout", name: "Call prep",
                 prompt: "Write a one-page prep for the customer call: who they are, their open issues, and what to ask.",
