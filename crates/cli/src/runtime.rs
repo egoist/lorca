@@ -698,6 +698,9 @@ async fn run_job_started(app: &Arc<App>, job: Job, cancel: CancellationToken) ->
     if let Err(error) = crate::handoffs::finish_job(app, &job, outcome, report_cancel.is_cancelled()) {
         tracing::error!(%error, job_id = %job.id, "reporting handoff outcome");
     }
+    if report_cancel.is_cancelled() {
+        crate::handoffs::stop_handed_off(app, &job);
+    }
     finish_job(app, &job.id);
     outcome
 }

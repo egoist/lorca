@@ -357,6 +357,7 @@ impl Agent {
             retry: self.retry.clone(),
             request: self.request.clone(),
             interrupt: None,
+            stop_grace: crate::agent_loop::STOP_GRACE,
         };
 
         let (tx, mut rx) = mpsc::channel::<AgentEvent>(256);
