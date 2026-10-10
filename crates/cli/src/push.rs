@@ -86,7 +86,9 @@ pub fn permission(app: &Arc<App>, message: &Message) {
     let Author::Bot { bot_id } = &message.author else { return };
     let Some(summary) = message.confirmation() else { return };
     let (Some(chat), Some(bot)) = (app.chat(&message.chat_id), app.bot(bot_id)) else { return };
-    send(app, &chat, &bot, &format!("Confirmation needed: {summary}"), Some(message.id.clone()));
+    let asks_for_secret = matches!(&message.body, crate::model::Body::Permission { tool, .. } if tool == "secret");
+    let text = if asks_for_secret { format!("Asks for {summary}") } else { format!("Confirmation needed: {summary}") };
+    send(app, &chat, &bot, &text, Some(message.id.clone()));
 }
 
 /// A structured coordinator brief or urgent specialist escalation, each with its own
@@ -350,7 +352,7 @@ mod tests {
             let mut message = Message::new(id, Author::Bot { bot_id: bot.id.clone() }, Body::Permission {
                 plugin_id: "computer".into(), plugin_name: "Mac".into(), tool: "bash".into(),
                 summary: "Deploy the app".into(), arguments: serde_json::Value::Null,
-                decision: "pending".into(), reason: Some("Needs confirmation".into()), rule: None, command: None, link: None, code: None,
+                decision: "pending".into(), reason: Some("Needs confirmation".into()), rule: None, command: None, link: None, code: None, secret: None,
             });
             if id == "failed" || id == "read-error" {
                 message.body = Body::text("Partial output");

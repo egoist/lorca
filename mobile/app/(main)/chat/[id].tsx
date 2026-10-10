@@ -47,6 +47,7 @@ import { Symbol } from "../../../src/ui/Symbol";
 import { usePalette, withAlpha } from "../../../src/ui/theme";
 import { quoteText } from "../../../src/ui/format";
 import { AnswerSheet } from "../../../src/ui/AnswerSheet";
+import { SecretSheet } from "../../../src/ui/SecretSheet";
 import { alert } from "../../../src/ui/alert";
 import {
   buildRows,
@@ -57,6 +58,7 @@ import {
   quoteAuthorName,
   NoticeRow,
   PermissionRow,
+  DraftRow,
   CommandRow,
   StatusRow,
   WorkingRow,
@@ -686,6 +688,10 @@ export default function ChatScreen() {
   const [answeringId, setAnsweringId] = useState<string | null>(null);
   const answering = answeringId ? chat?.messages.find((m) => m.id === answeringId) : undefined;
   const answeringRun = answering?.body.kind === "tool" ? answering.body.run : undefined;
+  /// The secret request whose sheet is up, while it still asks.
+  const [fillingId, setFillingId] = useState<string | null>(null);
+  const filling = fillingId ? chat?.messages.find((m) => m.id === fillingId) : undefined;
+  const fillingAsk = filling?.body.kind === "permission" && filling.body.decision === "pending" ? filling.body.secret : undefined;
 
   /// The message the draft answers, from a swipe on its bubble; another chat starts without one.
   const [replying, setReplying] = useState<{ messageID: string; name: string; text: string } | null>(null);
@@ -762,6 +768,7 @@ export default function ChatScreen() {
   }, []);
 
   const answerCommand = useCallback((message: Message) => setAnsweringId(message.id), []);
+  const fillSecret = useCallback((message: Message) => setFillingId(message.id), []);
   const stopCommand = useCallback((message: Message) => engine.stopCommand(message.chat_id, message.id), []);
 
   const renderItem = useCallback(
@@ -790,8 +797,11 @@ export default function ChatScreen() {
               row={item}
               isGroup={speakers}
               onDecide={answerCard}
+              onFill={fillSecret}
             />
           );
+        case "draft":
+          return <DraftRow row={item} isGroup={isGroup} />;
         case "command":
           return (
             <CommandRow
@@ -808,7 +818,7 @@ export default function ChatScreen() {
           return <StatusRow text={item.text} />;
       }
     },
-    [answerCard, answerCommand, bots, id, isGroup, speakers, openMarker, startReply, revealQuoted, flashId, stopCommand],
+    [answerCard, answerCommand, fillSecret, bots, id, isGroup, speakers, openMarker, startReply, revealQuoted, flashId, stopCommand],
   );
 
   if (!chat) {
@@ -958,6 +968,13 @@ export default function ChatScreen() {
           run={answeringRun}
           onDismiss={() => setAnsweringId(null)}
           onSend={(text) => engine.answerCommand(answering.chat_id, answering.id, text)}
+        />
+      ) : null}
+      {filling && fillingAsk ? (
+        <SecretSheet
+          fields={fillingAsk.fields}
+          onDismiss={() => setFillingId(null)}
+          onSave={(values) => engine.answerSecret(filling.chat_id, filling.id, values)}
         />
       ) : null}
     </View>

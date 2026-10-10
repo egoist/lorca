@@ -731,7 +731,34 @@ enum MockData {
                     store('seen', [...seen, ...fresh.map((pr) => pr.number)]);
                     return fresh.map((pr) => `#${pr.number} ${pr.title}`).join('\\n');
                     """),
+            // A watch on one pull request, a one-time reminder, and a routine around calendar events.
+            Routine(
+                id: "rt-login-pr", botID: "bot-patch", name: "Login PR",
+                prompt: "Tell me what changed on the passkey sign-in pull request and whether it needs me.",
+                schedule: "every 10m", scheduleText: L("Watches %@", "acme/project#42"), isEnabled: true, pausedReason: nil,
+                lastRunAt: minutesAgo(50), lastOutcome: "sent", nextRunAt: Date().addingTimeInterval(6 * 60), isRunning: false,
+                createdAt: minutesAgo(60 * 24), health: RoutineHealth(lastCheckAt: minutesAgo(4), lastSuccessAt: minutesAgo(4), status: "quiet"),
+                pullRequest: RoutineWatch(repo: "acme/project", number: 42, title: "Add passkey sign-in", url: URL(string: "https://github.com/acme/project/pull/42"))),
+            Routine(
+                id: "rt-tag-release", botID: "bot-patch", name: "Tag the release",
+                prompt: "Remind me to tag v1.4.0 once the go/no-go call says go.",
+                schedule: "once", scheduleText: Format.once(tomorrowAtNine(), in: .current), isEnabled: true, pausedReason: nil,
+                lastRunAt: nil, lastOutcome: nil, nextRunAt: tomorrowAtNine(), isRunning: false,
+                createdAt: minutesAgo(120), onceAt: tomorrowAtNine()),
+            Routine(
+                id: "rt-call-prep", botID: "bot-scout", name: "Call prep",
+                prompt: "Write a one-page prep for the customer call: who they are, their open issues, and what to ask.",
+                schedule: "15m before events", scheduleText: Format.aroundEvents(minutes: 15, after: false, matching: "Customer call"), isEnabled: true,
+                pausedReason: nil, lastRunAt: minutesAgo(60 * 22), lastOutcome: "sent", nextRunAt: Date().addingTimeInterval(60 * 60), isRunning: false,
+                createdAt: minutesAgo(60 * 24 * 3),
+                calendar: RoutineCalendar(account: "Google Calendar · Work", matching: "Customer call", minutes: 15, after: false, nextEventTitle: "Customer call: Acme")),
         ]
+    }
+
+    /// Tomorrow at 9:00 AM on this Mac's clock.
+    private static func tomorrowAtNine() -> Date {
+        let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: Date())!
+        return Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: tomorrow)!
     }
 
     /// Project Manager's feedback on its briefs, with one change suggested and one applied.
@@ -1217,6 +1244,13 @@ enum MockData {
         return [alice, thanks, ben, more, maya, filed]
     }
 
+    /// The secrets the demo Runners keep, with the Runner each is on.
+    static var secrets: [(runnerID: Device.ID, secret: SavedSecret)] = [
+        ("dev-studio", SavedSecret(id: "secret-github", botID: "bot-patch", name: "github_password", label: "GitHub password", use: .browser, site: "github.com", updatedAt: minutesAgo(60 * 26))),
+        ("dev-studio", SavedSecret(id: "secret-s2", botID: "bot-scout", name: "S2_API_KEY", label: "Semantic Scholar API key", use: .command, site: nil, updatedAt: minutesAgo(60 * 24 * 6))),
+        ("dev-workbench", SavedSecret(id: "secret-medium", botID: "bot-quill", name: "medium_password", label: "Medium password", use: .browser, site: "medium.com", updatedAt: minutesAgo(60 * 50))),
+    ]
+
     private static func researcherThread() -> [Message] {
         [
             Message(
@@ -1266,6 +1300,24 @@ enum MockData {
                 body: .text("I can't open issues on GitHub: my Access only lets me read it and draft reviews. I left a request above if you want to allow it."),
                 createdAt: minutesAgo(11)
             ),
+            Message(author: .you, body: .text("Email Ana the launch note, and copy Bo."), createdAt: minutesAgo(6)),
+            Message(
+                id: "msg-mock-email-draft",
+                author: .bot("bot-quill"),
+                body: .draft(DraftCard(
+                    reviewID: "review-mock-email", version: 1, state: "pending", pluginID: "gmail-work", account: "Gmail · Work",
+                    fields: .init(
+                        kind: "email", to: ["ana@example.com"], cc: ["bo@example.com"], subject: "Lorca launches Friday",
+                        body: "Hi Ana,\n\nLorca goes out on Friday. The launch note is attached: it covers pairing, the phone app, and what runs on your own computers.\n\nThanks,\nQuill",
+                        attachments: [.init(name: "launch-note.pdf", size: 186_000)]),
+                    note: nil, direct: false)),
+                createdAt: minutesAgo(5)
+            ),
+            Message(
+                author: .bot("bot-quill"),
+                body: .text("The email to Ana is ready above. Send it when it reads right."),
+                createdAt: minutesAgo(5)
+            ),
         ]
     }
 
@@ -1285,6 +1337,16 @@ enum MockData {
                 author: .bot("bot-nova"),
                 body: .text("That covers the first session. The pairing guide follows it with a Mac-and-phone walkthrough."),
                 createdAt: minutesAgo(106)
+            ),
+            Message(author: .you, body: .text("@Project Manager tell #launch the guide is live."), createdAt: minutesAgo(20)),
+            Message(
+                id: "msg-mock-slack-draft",
+                author: .bot("bot-nova"),
+                body: .draft(DraftCard(
+                    reviewID: "review-mock-slack", version: 1, state: "pending", pluginID: "slack-team", account: "Slack · Team",
+                    fields: .init(kind: "slack", to: ["#launch"], body: "The setup guide is live, with the Mac-and-phone pairing walkthrough. Shout if anything reads wrong."),
+                    note: nil, direct: true)),
+                createdAt: minutesAgo(19)
             ),
         ]
     }

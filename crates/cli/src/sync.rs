@@ -948,6 +948,8 @@ fn apply_roster(app: &Arc<App>, mut roster: RosterBlob) {
     // The skills of bots and groups this roster deleted go too; their blobs go with the
     // deleted chats' groups on the relay.
     crate::playbooks::forget_scopes(app, &removed_bots, &removed);
+    #[cfg(feature = "runner")]
+    crate::secrets::forget_bots(app, &removed_bots);
     for chat_id in removed {
         app.cancel_chat(&chat_id);
         app.emit(Event::ChatRemoved { chat_id });

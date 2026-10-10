@@ -146,18 +146,34 @@ final class RoutineViewController: SheetViewController {
         }
         let scheduleRow = KeyValueRow(key: L("Schedule"), value: routine.scheduleSummary)
         scheduleRow.toolTip = routine.schedule.hasPrefix("every ") ? routine.schedule : "\(routine.schedule) · \(routine.timezone)"
-        let skips = routine.missedRunPolicy == "skip"
-        let missedRow = KeyValueRow(key: L("Missed runs"), value: skips ? L("Skip") : L("Run once"))
-        missedRow.toolTip = skips
-            ? L("When %@ was off at a scheduled time, the routine waits for the next one.", runnerName)
-            : L("When %@ was off at a scheduled time, the routine runs once when it’s back.", runnerName)
-        // "Tomorrow 9:00 AM" on a line of its own, as the last check and run read.
-        let next = routine.nextRunAt.map { Format.upcoming($0) }.map { $0.prefix(1).uppercased() + $0.dropFirst() }
-        rows += [
-            scheduleRow,
-            KeyValueRow(key: routine.check == nil ? L("Next run") : L("Next check"), value: next ?? "—"),
-            missedRow,
-        ]
+        rows.append(scheduleRow)
+        // The pull request opens on GitHub; the calendar names its account.
+        if let watch = routine.pullRequest {
+            let row = KeyValueRow(key: L("Pull request"), value: watch.title.isEmpty ? watch.label : watch.title)
+            if let url = watch.url {
+                row.toolTip = url.absoluteString
+                row.addGestureRecognizer(ClickHandler { NSWorkspace.shared.open(url) })
+            }
+            rows.append(row)
+        }
+        if let calendar = routine.calendar, !calendar.account.isEmpty {
+            rows.append(KeyValueRow(key: L("Calendar"), value: calendar.account))
+        }
+        // "Tomorrow 9:00 AM" on a line of its own, as the last check and run read; a routine
+        // around events names the event it runs for.
+        var next = routine.nextRunAt.map { Format.upcoming($0) }.map { $0.prefix(1).uppercased() + $0.dropFirst() }
+        if let title = routine.calendar?.nextEventTitle, let when = next { next = "\(when) · \(title)" }
+        let none = routine.calendar != nil && routine.isEnabled ? L("None in the next day") : "—"
+        rows.append(KeyValueRow(key: routine.looksFirst ? L("Next check") : L("Next run"), value: next ?? none))
+        // A one-time routine runs once its Runner is back, whatever the policy.
+        if routine.onceAt == nil {
+            let skips = routine.missedRunPolicy == "skip"
+            let missedRow = KeyValueRow(key: L("Missed runs"), value: skips ? L("Skip") : L("Run once"))
+            missedRow.toolTip = skips
+                ? L("When %@ was off at a scheduled time, the routine waits for the next one.", runnerName)
+                : L("When %@ was off at a scheduled time, the routine runs once when it’s back.", runnerName)
+            rows.append(missedRow)
+        }
         if let lastCheck = routine.lastCheckSummary {
             rows.append(KeyValueRow(key: L("Last check"), value: lastCheck))
             // Only a failing check has a success to tell apart from it.

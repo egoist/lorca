@@ -278,6 +278,9 @@ impl crate::plugins::builtin::Service for Server {
         if text.chars().count() > MAX_TEXT {
             return text_result("Slack takes at most 40,000 characters in a message. Post it in parts.", true);
         }
+        if super::holds_secret(app, text) {
+            return text_result(super::SECRET_REFUSED, true);
+        }
         let thread_ts = args["thread_ts"].as_str().map(str::trim).filter(|ts| !ts.is_empty()).map(str::to_string);
         let mut body = json!({ "channel": channel, "text": text });
         if let Some(ts) = &thread_ts {

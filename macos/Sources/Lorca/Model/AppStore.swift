@@ -38,6 +38,7 @@ enum SettingsPane: String, CaseIterable {
     case autoReview = "auto-review"
     case sharedLinks = "shared-links"
     case plugins
+    case secrets
     case bots
     case device
     case advanced
@@ -48,7 +49,7 @@ enum SettingsPane: String, CaseIterable {
     var isDeviceScoped: Bool {
         switch self {
         case .general, .providers, .autoReview, .sharedLinks, .advanced: false
-        case .bots, .plugins, .device: true
+        case .bots, .plugins, .secrets, .device: true
         }
     }
 }
@@ -475,6 +476,14 @@ final class AppStore {
         noteCommand(message, in: chatID)
         noteOutput(message, in: chatID)
         if let messageIndex = chats[chatIndex].index(of: message.id) {
+            var message = message
+            // A draft card the Runner wrote again, unchanged, keeps what the user is typing in it.
+            if case let .draft(old) = chats[chatIndex].messages[messageIndex].body, case var .draft(new) = message.body,
+                new.version == old.version, new.isPending, old.isPending
+            {
+                new.edited = old.edited
+                message.body = .draft(new)
+            }
             chats[chatIndex].messages[messageIndex] = message
             emit(.messageChanged(chatID, message.id))
             if message.state == .complete { refreshChatList() }
@@ -621,6 +630,8 @@ final class AppStore {
         case let .permission(request):
             let who = bot(last.author.botID ?? "")?.name ?? L("A bot")
             body = "\(who) \(request.verbPhrase)"
+        case let .draft(card):
+            body = card.title(botName: bot(last.author.botID ?? "")?.name ?? L("A bot"))
         }
 
         let flattened = body
@@ -817,6 +828,77 @@ final class AppStore {
     func botAccessCatalog(_ id: Bot.ID) async throws -> BotAccessCatalog {
         if isMock { return MockData.accessCatalog() }
         return try await client.request("bots.permissions", ["id": id], as: BotAccessCatalog.self)
+    }
+
+    /// Sends a draft card's message: the user's edit first, as the item's next version, then
+    /// that version approved, which the bot's Runner sends. `always` then turns drafts off for
+    /// the bot, so its next messages go out directly. Throws why it was not sent, with the card
+    /// back as it was.
+    func sendDraft(_ card: DraftCard, chatID: Chat.ID, messageID: Message.ID, botID: Bot.ID?, always: Bool) async throws {
+        let edited = card.shown
+        setDraft(chatID: chatID, messageID: messageID) { $0.state = "approved"; $0.fields = edited; $0.edited = nil }
+        do {
+            if isMock {
+                setDraft(chatID: chatID, messageID: messageID) { $0.state = "succeeded" }
+            } else {
+                var version = card.version
+                if edited != card.fields {
+                    let data = try await client.request("reviews.edit", ["id": card.reviewID, "expected_version": version, "message": edited.parameters])
+                    let item = try Wire.decoder.decode(ReviewItem.self, from: data)
+                    upsertReview(item)
+                    version = item.version
+                }
+                let data = try await client.request("reviews.approve", ["id": card.reviewID, "expected_version": version])
+                upsertReview(try Wire.decoder.decode(ReviewItem.self, from: data))
+            }
+        } catch {
+            setDraft(chatID: chatID, messageID: messageID) { $0 = card }
+            throw error
+        }
+        if always, let botID { setDraftsDirect(botID) }
+    }
+
+    /// Discards a draft card's message: nothing is sent.
+    func discardDraft(_ card: DraftCard, chatID: Chat.ID, messageID: Message.ID) async throws {
+        setDraft(chatID: chatID, messageID: messageID) { $0.state = "rejected" }
+        guard !isMock else { return }
+        do {
+            let data = try await client.request("reviews.reject", ["id": card.reviewID, "expected_version": card.version])
+            upsertReview(try Wire.decoder.decode(ReviewItem.self, from: data))
+        } catch {
+            setDraft(chatID: chatID, messageID: messageID) { $0 = card }
+            throw error
+        }
+    }
+
+    /// The bot sends its messages directly from now on, as its Access says once drafts are off.
+    private func setDraftsDirect(_ id: Bot.ID) {
+        guard let index = bots.firstIndex(where: { $0.id == id }) else { return }
+        var policy = bots[index].permissions ?? BotPermissions()
+        policy.drafts = false
+        bots[index].permissions = policy
+        emit(.rosterChanged)
+        perform("bots.update", ["id": id, "drafts": false])
+    }
+
+    /// Keeps what the user changed on a draft card until they send it. Only a change to its
+    /// attachments redraws the card; typing never does.
+    func editDraft(chatID: Chat.ID, messageID: Message.ID, fields: DraftCard.Fields) {
+        guard let chatIndex = chats.firstIndex(where: { $0.id == chatID }), let index = chats[chatIndex].index(of: messageID),
+            case var .draft(card) = chats[chatIndex].messages[index].body, card.isPending
+        else { return }
+        let files = card.shown.attachments
+        card.edited = fields == card.fields ? nil : fields
+        chats[chatIndex].messages[index].body = .draft(card)
+        if files != fields.attachments { emit(.messageChanged(chatID, messageID)) }
+    }
+
+    private func setDraft(chatID: Chat.ID, messageID: Message.ID, _ change: (inout DraftCard) -> Void) {
+        update(messageID, in: chatID) { message in
+            guard case var .draft(card) = message.body else { return }
+            change(&card)
+            message.body = .draft(card)
+        }
     }
 
     /// Only the user changes a bot's Access; the CLI also dismisses the access requests it left.

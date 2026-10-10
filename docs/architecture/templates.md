@@ -9,7 +9,7 @@ The root is `format: "lorca.bot-template"`, `version: 1`, an optional `profile`,
 - **Profile**: name, description (the bot's instructions), SF Symbol, and accent. No avatar, provider, model, Runner, or working directory.
 - **Skills**: name, description, instructions, examples, and inline `references/` and `scripts/` texts, as the playbook API's content.
 - **Memories**: lines of the bot's `workspaces/<bot id>/MEMORY.md` and whole `memory/*.md` topic files. Daily logs, attachments, and other workspace files are never offered. Reads are bounded, refuse symbolic links, and ignore a working directory's memory.
-- **Routines**: name, schedule, prompt, the check script, and `timezone` and `missed_run_policy` where the routine API has them. No run history, health, or next run.
+- **Routines**: name, schedule, prompt, the check script, and `timezone` and `missed_run_policy` where the routine API has them. No run history, health, or next run. Only routines that repeat: a one-time routine, a [watch, or a routine around calendar events](routine-triggers.md) belongs to the account it was set up in.
 - **Requirements**: a `service_id` per plugin. Never the plugin's variables, tokens, or account.
 
 A file is at most 1 MiB. Parsing refuses unknown fields at any level, another version, invalid schedules, duplicate names, oversized text, NUL characters, and resource paths outside `references/` and `scripts/`. Skills keep to the playbook limits, memories to the 256 KiB memory file, routines to a bot's routine and check limits. This format is separate from the [marketplace index](marketplace.md#the-index).

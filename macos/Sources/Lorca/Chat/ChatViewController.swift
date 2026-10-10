@@ -746,9 +746,15 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
             case .notice:
                 identifier = NoticeCellView.identifier
                 cell = dequeue(identifier) { NoticeCellView() }
+            case let .permission(request) where request.isSecret:
+                identifier = SecretCellView.identifier
+                cell = dequeue(identifier) { SecretCellView() }
             case .permission:
                 identifier = PermissionCellView.identifier
                 cell = dequeue(identifier) { PermissionCellView() }
+            case .draft:
+                identifier = DraftCellView.identifier
+                cell = dequeue(identifier) { DraftCellView() }
             }
             configure(cell: cell, row: chatRow)
             return cell
@@ -860,8 +866,12 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
                 return HandoffCellView.spokenText(mode: marker.mode, reason: marker.reason)
             case let .notice(text):
                 return text
+            case let .permission(request) where request.isSecret:
+                return SecretCellView.spokenText(request: request, botName: botName(of: message))
             case let .permission(request):
                 return PermissionCellView.spokenText(request: request, botName: botName(of: message))
+            case let .draft(card):
+                return DraftCellView.spokenText(card: card, botName: botName(of: message))
             }
         }
     }
@@ -964,6 +974,20 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
                     metrics: layout.noticeMetrics(
                         for: message, tableWidth: max(tableView.bounds.width, 320)))
 
+            case let .permission(request) where request.isSecret:
+                let secretCell = cell as? SecretCellView
+                // The values stay on the bot's Runner.
+                let runnerName = message.author.botID.flatMap { store.bot($0) }.flatMap { store.device($0.runnerID) }?.name ?? L("its Runner")
+                secretCell?.configure(
+                    request: request, messageID: message.id, botName: botName(of: message), runnerName: runnerName,
+                    avatar: cardAvatar(for: message), groupStart: groupStart)
+                secretCell?.onSave = { [weak self] values in
+                    try await self?.store.answerSecret(chatID: chat.id, messageID: message.id, values: values)
+                }
+                secretCell?.onDecline = { [weak self] in
+                    self?.store.answerPermission(chatID: chat.id, messageID: message.id, decision: "deny")
+                }
+
             case let .permission(request):
                 let permissionCell = cell as? PermissionCellView
                 permissionCell?.configure(
@@ -981,6 +1005,28 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
                     guard let self else { return }
                     presentAsSheet(CommandSheetViewController(
                         title: "\(botName(of: message)) \(request.verbPhrase)", command: request.fullCommand))
+                }
+
+            case let .draft(card):
+                guard let draftCell = cell as? DraftCellView else { return }
+                draftCell.configure(
+                    card: card, messageID: message.id, botName: botName(of: message), avatar: cardAvatar(for: message),
+                    groupStart: groupStart)
+                draftCell.onEdit = { [weak self] fields in
+                    self?.store.editDraft(chatID: chat.id, messageID: message.id, fields: fields)
+                }
+                // The card as the store has it now, with the user's latest changes.
+                let current = { [weak self] () -> DraftCard? in
+                    guard let shown = self?.message(for: message.id), case let .draft(card) = shown.body else { return nil }
+                    return card
+                }
+                draftCell.onSend = { [weak self] always in
+                    guard let self, let card = current() else { return }
+                    try await store.sendDraft(card, chatID: chat.id, messageID: message.id, botID: message.author.botID, always: always)
+                }
+                draftCell.onDiscard = { [weak self] in
+                    guard let self, let card = current() else { return }
+                    try await store.discardDraft(card, chatID: chat.id, messageID: message.id)
                 }
             }
 

@@ -505,6 +505,7 @@ mod runner {
         if incoming.text.trim().is_empty() {
             return Ok(0);
         }
+        let incoming = &Incoming { text: outside_text(app, &incoming.text), ..incoming.clone() };
         let mut taken = 0;
         for (channel_id, config, listening_since) in event_triggers::channel_configs(app, &incoming.account_id)? {
             let Some(spec) = &config.channel else { continue };
@@ -545,6 +546,23 @@ mod runner {
         }
         Ok(taken)
     }
+
+    /// What someone outside wrote, as Lorca keeps it: a value saved on this Runner becomes its
+    /// placeholder, as in a tool's result, and every placeholder is broken (`{secret:`), so no
+    /// message from outside can name a secret for Browser to type.
+    pub fn outside_text(app: &App, text: &str) -> String {
+        let text = crate::secrets::Redactions::load(app).text(text).unwrap_or_else(|| text.to_string());
+        text.replace("{{secret:", "{secret:")
+    }
+
+    /// Whether a reply would carry a value saved on this Runner or a secret's placeholder; the
+    /// account's server sends neither.
+    pub fn holds_secret(app: &App, text: &str) -> bool {
+        text.contains("{{secret:") || crate::secrets::Redactions::load(app).text(text).is_some()
+    }
+
+    pub const SECRET_REFUSED: &str = "The message holds a saved secret or a secret's placeholder, so it was not sent. \
+        Write it without the secret: secrets never go to Telegram or Slack.";
 
     /// Keeps what the bot sent on a service in the conversation it belongs to: the one whose turn
     /// sent it, else the account's conversation for that chat and thread. It is quiet: the user

@@ -5,11 +5,8 @@
 
 import { Host, OutlinedTextField, AlertDialog, Text as ComposeText, TextButton } from "@expo/ui/jetpack-compose";
 import { fillMaxWidth } from "@expo/ui/jetpack-compose/modifiers";
-import { MenuView } from "@expo/ui/community/menu";
-import { Button as SwiftButton, Host as SwiftHost, Menu as SwiftMenu, RNHostView, Section as SwiftSection } from "@expo/ui/swift-ui";
-import { accessibilityHint, accessibilityLabel, disabled } from "@expo/ui/swift-ui/modifiers";
 import { Stack, useLocalSearchParams } from "expo-router";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Platform, PlatformColor, ScrollView, StyleSheet, Text, View, type ColorValue } from "react-native";
 import { engine } from "../core/engine";
 import type { BrowserProfile } from "../core/model";
@@ -18,6 +15,7 @@ import { t, useLanguage } from "../i18n";
 import { alert } from "./alert";
 import { profileActions, profileExplanation, profileStateWord, type ProfileAction } from "./browserProfiles";
 import { Row, Section } from "./forms";
+import { RowMenu } from "./RowMenu";
 import { accentColor, Font, usePalette } from "./theme";
 
 /// Through the relay the Runner is asked again this often while the screen is up, since another
@@ -132,7 +130,7 @@ export default function BrowserScreen() {
             const busy = pending[profile.id];
             const actions = profileActions(profile, runnerName, !!chatId, !!busy);
             return (
-              <ProfileMenu
+              <RowMenu
                 key={profile.id}
                 actions={actions}
                 onChoose={(action) => choose(profile, action)}
@@ -148,7 +146,7 @@ export default function BrowserScreen() {
                     </Text>
                   }
                 />
-              </ProfileMenu>
+              </RowMenu>
             );
           })}
           {profiles && <Row title={t("Add Profile")} icon="plus" onPress={startAdding} />}
@@ -193,61 +191,6 @@ export default function BrowserScreen() {
 /// A profile's row whose tap opens its menu: SwiftUI's on iOS, labelled for VoiceOver with the
 /// row's words, which its hosted row does not lend it; Material's dropdown on Android. Delete is a
 /// group of its own.
-function ProfileMenu({ actions, onChoose, label, hint, children }: { actions: ProfileAction[]; onChoose: (action: ProfileAction["id"]) => void; label: string; hint: string; children: ReactNode }) {
-  // The menu's host takes its size from what it is given; Android delivers no touch outside it.
-  const [width, setWidth] = useState(0);
-  const groups = [actions.filter((action) => action.id !== "delete"), actions.filter((action) => action.id === "delete")].filter((group) => group.length > 0);
-  if (Platform.OS === "ios") {
-    return (
-      <View onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
-        <SwiftHost matchContents style={{ width }} ignoreSafeArea="all">
-          <SwiftMenu
-            label={
-              <RNHostView matchContents>
-                <View style={{ width }}>{children}</View>
-              </RNHostView>
-            }
-            modifiers={[accessibilityLabel(label), accessibilityHint(hint)]}
-          >
-            {groups.map((group) => (
-              <SwiftSection key={group[0].id}>
-                {group.map((action) => (
-                  <SwiftButton
-                    key={action.id}
-                    label={action.title}
-                    systemImage={action.symbol}
-                    role={action.destructive ? "destructive" : undefined}
-                    modifiers={action.disabled ? [disabled(true)] : undefined}
-                    onPress={() => onChoose(action.id)}
-                  />
-                ))}
-              </SwiftSection>
-            ))}
-          </SwiftMenu>
-        </SwiftHost>
-      </View>
-    );
-  }
-  return (
-    <View onLayout={(e) => setWidth(e.nativeEvent.layout.width)}>
-      <MenuView
-        style={{ width }}
-        actions={groups.map((group) => ({
-          id: group[0].id,
-          title: "",
-          displayInline: true,
-          subactions: group.map((action) => ({ id: action.id, title: action.title, attributes: { disabled: action.disabled, destructive: action.destructive } })),
-        }))}
-        onPressAction={({ nativeEvent }) => onChoose(nativeEvent.event as ProfileAction["id"])}
-      >
-        <View style={{ width }} accessibilityLabel={label} accessibilityHint={hint}>
-          {children}
-        </View>
-      </MenuView>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   content: { paddingBottom: 40 },
   state: { fontSize: Font.body, maxWidth: 180 },

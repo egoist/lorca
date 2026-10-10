@@ -149,6 +149,7 @@ export function Row({
   chevron,
   subtitle,
   subtitleLines = 1,
+  titleLines = 1,
   leading,
   action,
   disabled,
@@ -158,6 +159,8 @@ export function Row({
   detail?: string;
   subtitle?: string;
   subtitleLines?: number;
+  /// How many lines a long title may wrap to before it is cut short.
+  titleLines?: number;
   icon?: string;
   leading?: ReactNode;
   accessory?: ReactNode;
@@ -184,7 +187,7 @@ export function Row({
     >
       {leading ?? (icon ? <Symbol name={icon} size={20} color={color} /> : null)}
       <View style={menu ? styles.rowTextWhole : styles.rowText}>
-        <Text style={[styles.rowTitle, { color }]} numberOfLines={1}>
+        <Text style={[styles.rowTitle, { color }]} numberOfLines={titleLines}>
           {title}
         </Text>
         {subtitle ? (

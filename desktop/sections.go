@@ -112,6 +112,8 @@ func keyValueRow(c *ui.Context, k *card, label, value string, mono bool, tint *u
 }
 
 type botRowOptions struct {
+	// Title names the row when it is about something of the bot's, beside its avatar.
+	Title            string
 	Detail           string
 	AccessorySymbol  string
 	AccessoryTooltip string
@@ -130,7 +132,11 @@ type botRowResult struct {
 func botRow(c *ui.Context, k *card, bot *model.Bot, o botRowOptions) (ui.Element, botRowResult) {
 	p := colors(c)
 	var result botRowResult
-	r := k.row(rowBox(c.Key(bot.ID)).MinHeight(46).Padding(0, 10, 0, 12).Gap(9).Label(bot.Name))
+	title, key := bot.Name, bot.ID
+	if o.Title != "" {
+		title, key = o.Title, bot.ID+"|"+o.Title
+	}
+	r := k.row(rowBox(c.Key(key)).MinHeight(46).Padding(0, 10, 0, 12).Gap(9).Label(title))
 	if o.Clickable {
 		r.Cursor(ui.CursorPointer)
 		if r.Hovered() {
@@ -145,7 +151,7 @@ func botRow(c *ui.Context, k *card, bot *model.Bot, o botRowOptions) (ui.Element
 			result.Avatar = a.Clicked()
 		}
 		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(1).Children(func() {
-			ui.Text(c, bot.Name).FontSize(13).FontWeight(500).SingleLine()
+			ui.Text(c, title).FontSize(13).FontWeight(500).SingleLine()
 			ui.Text(c, o.Detail).FontSize(textCaption).TextColor(p.Label2).SingleLine()
 		})
 		if o.AccessorySymbol != "" {

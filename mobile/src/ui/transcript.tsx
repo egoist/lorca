@@ -24,8 +24,10 @@ import { daySeparator, firstLine, workingActivity } from "./format";
 import { Markdown } from "./Markdown";
 import { Symbol } from "./Symbol";
 import { usePaneWidth } from "./layout";
-import { Font, usePalette } from "./theme";
+import { accentColor, Font, usePalette } from "./theme";
 import { alert } from "./alert";
+import { draftStateWord, draftTitle, fileSize, sendable, type DraftBody } from "./drafts";
+import { secretCaption, secretTitle } from "./secrets";
 
 export const SEPARATOR_GAP_SECS = 15 * 60;
 const AVATAR = 28;
@@ -44,6 +46,7 @@ export type Row =
   | { key: string; type: "notice"; text: string; groupStart: boolean }
   | { key: string; type: "permission"; message: Message; body: Extract<Body, { kind: "permission" }>; bot: Bot | undefined; groupStart: boolean }
   | { key: string; type: "command"; message: Message; run: CommandRun; bot: Bot | undefined; groupStart: boolean }
+  | { key: string; type: "draft"; message: Message; body: DraftBody; bot: Bot | undefined; groupStart: boolean }
   | { key: string; type: "working"; bots: Bot[] }
   | { key: string; type: "status"; text: string };
 
@@ -108,6 +111,10 @@ export function buildRows(chat: Chat, bots: Map<string, Bot>, workingBotIds: str
         break;
       case "permission":
         rows.push({ key: message.id, type: "permission", message, body: message.body, bot: message.author.kind === "bot" ? bots.get(message.author.bot_id) : undefined, groupStart });
+        previousAuthorKey = null;
+        break;
+      case "draft":
+        rows.push({ key: message.id, type: "draft", message, body: message.body, bot: message.author.kind === "bot" ? bots.get(message.author.bot_id) : undefined, groupStart });
         previousAuthorKey = null;
         break;
     }
@@ -395,7 +402,63 @@ export const NoticeRow = memo(function NoticeRow({ row }: { row: Extract<Row, { 
 /// call; an Always allow keeps its rule. A bot's Access refusing a call asks for more access: Edit
 /// Access… opens the bot's Access, and Dismiss puts the request away; neither runs the call. In a
 /// group the card sits in the bubbles' column, the bot's avatar beside its bottom edge.
-export const PermissionRow = memo(function PermissionRow({ row, isGroup, onDecide }: { row: Extract<Row, { type: "permission" }>; isGroup: boolean; onDecide: (message: Message, decision: "allow" | "always" | "deny") => void }) {
+export const PermissionRow = memo(function PermissionRow({ row, isGroup, onDecide, onFill }: { row: Extract<Row, { type: "permission" }>; isGroup: boolean; onDecide: (message: Message, decision: "allow" | "always" | "deny") => void; onFill: (message: Message) => void }) {
+  if (row.body.tool === "secret" && row.body.secret) return <SecretRow row={row} isGroup={isGroup} onDecide={onDecide} onFill={onFill} />;
+  return <AskRow row={row} isGroup={isGroup} onDecide={onDecide} />;
+});
+
+/// A bot asking for a secret, as the Mac's card: who asks and where it goes, why, Fill In, which
+/// opens `SecretSheet` with a field for each value, and Not now, then that the value stays on the
+/// Runner and the bot never sees it. Once answered, the answer and what was asked for: "Saved · npm
+/// token". In a group the card sits in the bubbles' column, the bot's avatar beside its bottom edge.
+function SecretRow({ row, isGroup, onDecide, onFill }: { row: Extract<Row, { type: "permission" }>; isGroup: boolean; onDecide: (message: Message, decision: "allow" | "always" | "deny") => void; onFill: (message: Message) => void }) {
+  useLanguage();
+  const p = usePalette();
+  const runner = useStore((s) => s.devices.find((d) => d.id === row.bot?.runner_id)?.name) ?? t("its Runner");
+  const showsAvatar = isGroup && row.message.author.kind === "bot";
+  const body = row.body;
+  const pending = body.decision === "pending";
+  const who = row.bot?.name ?? t("The bot");
+  const title = secretTitle(body, who);
+  const caption = secretCaption(body);
+  return (
+    <View style={[styles.messageRow, { paddingTop: row.groupStart ? 14 : 6 }]}>
+      {showsAvatar && (
+        <View style={{ width: AVATAR + GUTTER, alignSelf: "flex-end" }}>
+          <BotAvatar bot={row.bot} size={AVATAR} />
+        </View>
+      )}
+      <View style={[styles.permission, { backgroundColor: p.cell, borderColor: p.separator }]}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <Symbol name="key" size={16} color={pending ? p.tint : p.secondaryLabel} />
+          <Text style={[styles.permissionTitle, { color: p.label }]} numberOfLines={2}>
+            {title}
+          </Text>
+        </View>
+        {caption ? (
+          <Text style={[pending ? styles.reasonText : styles.caption, { color: p.secondaryLabel }]} numberOfLines={4}>
+            {caption}
+          </Text>
+        ) : null}
+        {pending ? (
+          <>
+            <View style={{ flexDirection: "row", gap: 8, marginTop: 4 }}>
+              <Pressable onPress={() => onFill(row.message)} style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill }]} accessibilityRole="button">
+                <Text style={{ color: p.tint, fontSize: 13, fontWeight: "600" }}>{t("Fill In")}</Text>
+              </Pressable>
+              <Pressable onPress={() => onDecide(row.message, "deny")} style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill }]} accessibilityRole="button">
+                <Text style={{ color: p.label, fontSize: 13, fontWeight: "600" }}>{t("Not now")}</Text>
+              </Pressable>
+            </View>
+            <Text style={[styles.ruleNote, { color: p.secondaryLabel }]}>{t("Saved on {runner}. {who} never sees it.", { runner, who })}</Text>
+          </>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+const AskRow = memo(function AskRow({ row, isGroup, onDecide }: { row: Extract<Row, { type: "permission" }>; isGroup: boolean; onDecide: (message: Message, decision: "allow" | "always" | "deny") => void }) {
   useLanguage();
   const p = usePalette();
   const [copied, setCopied] = useState(false);
@@ -524,6 +587,115 @@ export const PermissionRow = memo(function PermissionRow({ row, isGroup, onDecid
         ) : null}
         {ruleNote ? <Text style={[styles.ruleNote, { color: p.secondaryLabel }]}>{ruleNote}</Text> : null}
       </View>
+    </View>
+  );
+});
+
+/// An email or Slack message a bot wrote, as a card: who drafted it and the account it goes out
+/// from, To and Cc, the subject, the start of the text, and the attachments; while it waits, Send,
+/// Always Send on a Slack card (which also has the bot send its next messages directly), and
+/// Discard. A tap on the card opens the draft to edit, as Mail's compose sheet. Once sent or
+/// discarded, how it ended on the title's line. In a group the card sits in the bubbles' column,
+/// the bot's avatar beside its bottom edge.
+export const DraftRow = memo(function DraftRow({ row, isGroup }: { row: Extract<Row, { type: "draft" }>; isGroup: boolean }) {
+  useLanguage();
+  const p = usePalette();
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const showsAvatar = isGroup && row.message.author.kind === "bot";
+  const card = row.body;
+  const draft = card.draft;
+  const pending = card.state === "pending";
+  const state = draftStateWord(card.state);
+  const title = draftTitle(draft, row.bot?.name ?? t("The bot"));
+  const open = () => router.push({ pathname: "/draft/[id]", params: { id: row.message.id, chat: row.message.chat_id } });
+  const act = async (failure: string, request: () => Promise<unknown>) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await request();
+    } catch (error) {
+      alert(failure, error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const send = (always: boolean) => act(t("Couldn't send this draft"), () => engine.sendDraft(row.message.chat_id, row.message.id, draft, always));
+  const header = (label: string, values?: string[]) =>
+    values && values.length > 0 ? (
+      <Text style={[styles.draftHeader, { color: p.secondaryLabel }]} numberOfLines={1}>
+        {label} <Text style={{ color: p.label }}>{values.join(", ")}</Text>
+      </Text>
+    ) : null;
+  const buttons: [string, () => void, boolean][] = [
+    [t("Send"), () => void send(false), true],
+    ...(card.direct ? [[t("Always Send"), () => void send(true), true] as [string, () => void, boolean]] : []),
+    [t("Discard"), () => void act(t("Couldn't discard this draft"), () => engine.discardDraft(row.message.chat_id, row.message.id)), false],
+  ];
+  return (
+    <View style={[styles.messageRow, { paddingTop: row.groupStart ? 14 : 6 }]}>
+      {showsAvatar && (
+        <View style={{ width: AVATAR + GUTTER, alignSelf: "flex-end" }}>
+          <BotAvatar bot={row.bot} size={AVATAR} />
+        </View>
+      )}
+      <Pressable
+        onPress={open}
+        accessibilityRole="button"
+        accessibilityHint={pending ? t("Opens the draft to edit") : undefined}
+        style={({ pressed }) => [styles.permission, { backgroundColor: pressed ? p.fill : p.cell, borderColor: p.separator }]}
+      >
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <Symbol name={draft.kind === "email" ? "envelope" : "bubble.left"} size={16} color={p.tint} />
+          <Text style={[styles.permissionTitle, { color: p.label, flex: 1 }]} numberOfLines={2}>
+            {title}
+          </Text>
+          {state ? (
+            <Text style={[styles.caption, { color: card.state === "failed" ? p.red : card.state === "uncertain" ? accentColor("orange", p.dark) : p.secondaryLabel }]}>{state}</Text>
+          ) : null}
+        </View>
+        <Text style={[styles.caption, { color: p.secondaryLabel, marginTop: -4 }]} numberOfLines={1}>
+          {card.account}
+        </Text>
+        <View style={{ gap: 2 }}>
+          {header(t("To"), draft.to)}
+          {header(t("Cc"), draft.cc)}
+          {header(t("Bcc"), draft.bcc)}
+        </View>
+        {draft.subject ? (
+          <Text style={[styles.draftSubject, { color: p.label }]} numberOfLines={2}>
+            {draft.subject}
+          </Text>
+        ) : null}
+        <Text style={[styles.reasonText, { color: p.label }]} numberOfLines={8}>
+          {draft.body}
+        </Text>
+        {(draft.attachments ?? []).map((file, index) => (
+          <View key={`${file.name}-${index}`} style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+            <Symbol name="paperclip" size={13} color={p.secondaryLabel} />
+            <Text style={[styles.reasonText, { color: p.label, flexShrink: 1 }]} numberOfLines={1}>
+              {file.name}
+            </Text>
+            {file.size > 0 ? <Text style={[styles.caption, { color: p.secondaryLabel }]}>{fileSize(file.size)}</Text> : null}
+          </View>
+        ))}
+        {card.note ? <Text style={[styles.ruleNote, { color: card.state === "failed" ? p.red : accentColor("orange", p.dark) }]}>{card.note}</Text> : null}
+        {pending ? (
+          <View style={{ flexDirection: "row", gap: 8, marginTop: 4 }}>
+            {buttons.map(([label, onPress, tinted]) => (
+              <Pressable
+                key={label}
+                onPress={onPress}
+                disabled={busy || (tinted && !sendable(draft))}
+                style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill, opacity: busy ? 0.5 : 1 }]}
+              >
+                <Text style={{ color: tinted ? p.tint : p.label, fontSize: 13, fontWeight: "600" }}>{label}</Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
+        {pending && card.direct ? <Text style={[styles.ruleNote, { color: p.secondaryLabel }]}>{t("Always Send also sends this bot's next Slack messages directly.")}</Text> : null}
+      </Pressable>
     </View>
   );
 });
@@ -749,6 +921,8 @@ const styles = StyleSheet.create({
   permission: { flex: 1, borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 12, paddingVertical: 10, gap: 6, maxWidth: 420 },
   permissionTitle: { fontSize: 14, fontWeight: "600", flexShrink: 1 },
   permissionButton: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8 },
+  draftHeader: { fontSize: 13, lineHeight: 18 },
+  draftSubject: { fontSize: 14, fontWeight: "600", lineHeight: 19 },
   headerButton: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 7 },
   command: { borderRadius: 8, paddingHorizontal: 10, paddingVertical: 7, marginTop: 2 },
   commandText: { fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 12.5, lineHeight: 17 },

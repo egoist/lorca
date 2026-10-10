@@ -3,6 +3,7 @@ package model
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -102,3 +103,25 @@ func TestRunInBackgroundWhileTheCallWaits(t *testing.T) {
 }
 
 func sprintf(format string, args ...any) string { return fmt.Sprintf(format, args...) }
+
+// A draft card's edit goes to the CLI with no null where it takes a list: a Slack message has no
+// Cc, and the CLI refuses null for one.
+func TestDraftEditsHaveNoNullLists(t *testing.T) {
+	data, err := json.Marshal(DraftFields{Kind: "slack", To: []string{"C024BE91L"}, Body: "Shipped"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "null") {
+		t.Errorf("an empty list went out as null: %s", data)
+	}
+	var message WireMessage
+	if err := json.Unmarshal([]byte(`{"id":"review-status-r1","chat_id":"c","author":{"kind":"bot","bot_id":"b"},"state":{"kind":"complete"},"created_at":1,
+		"body":{"kind":"draft","review_id":"r1","version":2,"state":"failed","plugin_id":"slack-team","account":"Slack · Team","note":"channel_not_found","direct":true,
+		"draft":{"kind":"slack","to":["C024BE91L"],"body":"Shipped"}}}`), &message); err != nil {
+		t.Fatal(err)
+	}
+	card := ToMessage(message).Body.Draft
+	if card == nil || card.Version != 2 || card.StateText() != L("Not sent") || !card.Direct || card.Fields.To[0] != "C024BE91L" {
+		t.Errorf("the draft card decoded as %+v", card)
+	}
+}

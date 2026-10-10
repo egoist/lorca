@@ -26,6 +26,10 @@ Return to Bot sends the revision the app last saw: a profile that changed since 
 
 A call the chat's Stop ends keeps the gate until its server answers, up to ten seconds, and is not called off: rmcp forgets a request it cancels while the server goes on with it. A call that answers in none of that time, or runs out of time, closes its browser, which ends any input it had left.
 
+## Signing in with a saved secret
+
+A bot that needs a password for a site asks for it on a card ([Secret requests](secrets.md)) and types it as `{{secret:NAME}}` with `browser_type` or `browser_fill_form`. The Runner fills it in right before the call reaches the browser, and only while the current tab is on the secret's site, over https; the page's echo comes back with the placeholder.
+
 ## Screenshots
 
 A screenshot of a profile, the bot's `browser_take_screenshot` while its profile is open or Take Screenshot in the apps, is published as the bot's [output](outputs.md) in the chat through `outputs::publish`: one series per profile and chat, `Browser · <name>.png`, each screenshot its next version, with `after_screenshot` evidence that is `unverified` ("What the Work browser showed."). The PNG is queued as an encrypted `file` blob before the encrypted chat message, as any output's file is, and paired Devices open it from the transcript or the chat's outputs. Publishing the browser's own capture file needs no file Access. A screenshot shows the page; it says nothing on its own about whether a task worked.

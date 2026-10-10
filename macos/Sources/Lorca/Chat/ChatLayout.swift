@@ -329,7 +329,9 @@ final class ChatLayout {
         let width = min(PermissionCellView.width, tableWidth - indent - ChatMetrics.horizontalInset)
         var entry = entry(for: message)
         if let card = entry.card, card.width == width { return card.height }
-        let height = PermissionCellView.height(for: request, rowWidth: tableWidth, indent: indent)
+        let height = request.isSecret
+            ? SecretCellView.height(for: request, rowWidth: tableWidth, indent: indent)
+            : PermissionCellView.height(for: request, rowWidth: tableWidth, indent: indent)
         entry.card = (width, height)
         cache[message.id] = entry
         return height
@@ -412,6 +414,10 @@ final class ChatLayout {
 
             case let .permission(request):
                 return top + cardHeight(for: message, request: request, tableWidth: tableWidth, indent: indent)
+
+            // Its height changes as the user leaves out a file, so it is not cached.
+            case let .draft(card):
+                return top + DraftCellView.height(for: card, rowWidth: tableWidth, indent: indent)
             }
         }
     }

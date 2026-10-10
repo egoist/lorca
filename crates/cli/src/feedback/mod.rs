@@ -703,9 +703,12 @@ pub async fn serve(
 /// interrupted entries are no one's opinion.
 pub async fn review_decided(app: &Arc<App>, item: &crate::review_queue::ReviewItem) {
     use crate::review_queue::{ReviewChange, ReviewPayload};
-    let text = |payload: &ReviewPayload| match payload {
-        ReviewPayload::Draft { text } => text.clone(),
-        other => store::text(&json!(other)),
+    // A message reads as its header lines and text, so the change shows as the user made it.
+    let message = crate::drafts::tool_of(app, &item.payload).map(|(tool, _)| tool);
+    let text = |payload: &ReviewPayload| match (payload, &message) {
+        (ReviewPayload::Draft { text }, _) => text.clone(),
+        (ReviewPayload::Plugin { arguments, .. }, Some(tool)) => crate::drafts::text(&crate::drafts::read(tool, arguments)),
+        (other, _) => store::text(&json!(other)),
     };
     for entry in &item.history {
         let kind = match entry.change {
@@ -736,6 +739,12 @@ pub async fn review_decided(app: &Arc<App>, item: &crate::review_queue::ReviewIt
             tracing::debug!(%error, review = %item.id, "recording a review decision as feedback");
         }
     }
+}
+
+/// A bot's recorded notes, for tests elsewhere in the crate.
+#[cfg(test)]
+pub(crate) fn recorded(app: &App, bot_id: &str) -> Vec<Feedback> {
+    store::load(app, bot_id).map(|store| store.feedback).unwrap_or_default()
 }
 
 /// The saved skills a bot's feedback can revise: its own, then its groups', with their names.

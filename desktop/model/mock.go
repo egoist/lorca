@@ -473,7 +473,20 @@ func writerThread() []*Message {
 		// The Writer's Access lets it read GitHub and draft reviews, not open issues.
 		mockMessage(BotAuthor("bot-quill"), Body{Kind: BodyPermission, Request: &PermissionRequest{PluginID: "github", PluginName: "GitHub", Tool: "access", Summary: "GitHub · create_issue", Decision: DecisionPending}}, minutesAgo(11)),
 		mockMessage(BotAuthor("bot-quill"), textBody("I can't open issues on GitHub: my Access only lets me read it and draft reviews. I left a request above if you want to allow it."), minutesAgo(11)),
+		mockMessage(You, textBody("Email Ana the launch note, and copy Bo."), minutesAgo(6)),
+		mockDraft(BotAuthor("bot-quill"), &DraftCard{ReviewID: "review-mock-email", Version: 1, State: "pending", PluginID: "gmail-work", Account: "Gmail · Work",
+			Fields: DraftFields{Kind: "email", To: []string{"ana@example.com"}, Cc: []string{"bo@example.com"}, Subject: "Lorca launches Friday",
+				Body:        "Hi Ana,\n\nLorca goes out on Friday. The launch note is attached: it covers pairing, the phone app, and what runs on your own computers.\n\nThanks,\nQuill",
+				Attachments: []DraftFile{{Name: "launch-note.pdf", Size: 186_000}}}}, minutesAgo(5)),
+		mockMessage(BotAuthor("bot-quill"), textBody("The email to Ana is ready above. Send it when it reads right."), minutesAgo(5)),
 	}
+}
+
+// mockDraft is a draft card, by the id the Runner gives it.
+func mockDraft(author Author, card *DraftCard, at time.Time) *Message {
+	message := mockMessage(author, Body{Kind: BodyDraft, Draft: card}, at)
+	message.ID = "review-status-" + card.ReviewID
+	return message
 }
 
 func launchThread() []*Message {
@@ -481,6 +494,9 @@ func launchThread() []*Message {
 		mockMessage(You, textBody("@Writer write a short welcome for the setup guide. @Project Manager check that it covers the first steps."), minutesAgo(110)),
 		mockMessage(BotAuthor("bot-quill"), textBody("Meet your first bot. Give it a name and a job, connect your model provider, and send a message. Add more bots when you need a team, or pair your phone to take the conversation with you."), minutesAgo(108)),
 		mockMessage(BotAuthor("bot-nova"), textBody("That covers the first session. The pairing guide follows it with a computer-and-phone walkthrough."), minutesAgo(106)),
+		mockMessage(You, textBody("@Project Manager tell #launch the guide is live."), minutesAgo(20)),
+		mockDraft(BotAuthor("bot-nova"), &DraftCard{ReviewID: "review-mock-slack", Version: 1, State: "pending", PluginID: "slack-team", Account: "Slack · Team", Direct: true,
+			Fields: DraftFields{Kind: "slack", To: []string{"#launch"}, Body: "The setup guide is live, with the computer-and-phone pairing walkthrough. Shout if anything reads wrong."}}, minutesAgo(19)),
 	}
 }
 

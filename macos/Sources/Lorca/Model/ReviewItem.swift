@@ -119,6 +119,8 @@ struct ReviewItem: Decodable, Identifiable {
     var state: String
     var outcome: Outcome?
     var createdAt: Double
+    /// An email or Slack message: its draft card in the chat is where it is decided.
+    var isMessage: Bool?
 
     var isPending: Bool { state == "pending" }
     /// Waiting for the user, or approved and about to run.

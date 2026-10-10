@@ -57,6 +57,11 @@ export function shellOn(policy: BotPermissions | undefined): boolean {
   return policy?.shell ?? true;
 }
 
+/// Whether the bot's emails and Slack messages wait in the chat as drafts.
+export function draftsOn(policy: BotPermissions | undefined): boolean {
+  return policy?.drafts ?? true;
+}
+
 /// The tools chosen for a plugin; none is all of them, one it adds later included.
 export function chosenTools(policy: BotPermissions | undefined, pluginId: string): string[] | undefined {
   return policy?.connections?.[pluginId]?.tools;

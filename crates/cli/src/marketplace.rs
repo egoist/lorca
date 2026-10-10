@@ -95,7 +95,7 @@ pub struct BotTemplate {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RoutineTemplate {
     pub name: String,
-    /// Anything `crate::schedule::parse` reads: `every 2h`, `0 9 * * 1-5`.
+    /// A repeating schedule `crate::schedule::parse_repeating` reads: `every 2h`, `0 9 * * 1-5`.
     pub schedule: String,
     pub prompt: String,
 }
@@ -122,7 +122,7 @@ impl BotTemplate {
             if routine.name.trim().is_empty() || routine.prompt.trim().is_empty() {
                 return Err(format!("A routine of {} needs a name and a prompt.", template.name));
             }
-            crate::schedule::parse(&routine.schedule).map_err(|e| format!("{} · {}: {e}", template.name, routine.name))?;
+            crate::schedule::parse_repeating(&routine.schedule).map_err(|e| format!("{} · {}: {e}", template.name, routine.name))?;
         }
         Ok(template)
     }

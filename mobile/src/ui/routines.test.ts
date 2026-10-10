@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Routine } from "../core/model";
-import { lastCheck, lastRun, missedRuns, problemExplanation, problemNeedsUser, problemWord, routineDetail, routineProblem, timezoneLabel } from "./routines";
+import { aroundEvents, lastCheck, lastRun, missedRuns, nextRunText, onceText, problemExplanation, problemNeedsUser, problemWord, routineDetail, routineProblem, routineSchedule, routineSymbol, timezoneLabel } from "./routines";
 
 // A routine as the core sends it: its timezone, missed-run policy, state, and check health.
 const base: Routine = {
@@ -54,5 +54,29 @@ describe("routines", () => {
     expect(lastRun(routine({ last_run_at: Date.now() / 1000, last_outcome: "pass" })).outcome).toBe("Nothing to report");
     expect(missedRuns(routine({}), "Workbench").value).toBe("Run once");
     expect(missedRuns(routine({ missed_run_policy: "skip" }), "Workbench").note).toBe("When Workbench was off at a scheduled time, the routine waits for the next one.");
+  });
+
+  test("one-time routines, watches, and routines around events say what places their runs", () => {
+    // 2030-10-12 09:00 in Singapore, which keeps no daylight saving.
+    const once = routine({ schedule: "once 2030-10-12 09:00", schedule_text: "Once on 2030-10-12 at 9:00 AM", timezone: "Asia/Singapore", once_at: Date.UTC(2030, 9, 12, 1) / 1000 });
+    expect(onceText(once.once_at!, "Asia/Singapore")).toBe("Once on Oct 12, 2030 at 9:00 AM");
+    expect(routineSchedule(once)).toBe("Once on Oct 12, 2030 at 9:00 AM");
+    expect(routineSymbol(once)).toBe("alarm");
+    const watch = routine({ schedule: "every 10m", schedule_text: "Watches acme/project#42", timezone: "Pacific/Kiritimati", pull_request: { repo: "acme/project", number: 42, title: "Add login", url: "https://github.com/acme/project/pull/42" }, next_run_at: Date.now() / 1000 + 600 });
+    expect(routineSchedule(watch)).toBe("Watches acme/project#42");
+    expect(routineDetail(watch)).toMatch(/^Watches acme\/project#42 · Next check today /);
+    expect(timezoneLabel(watch)).toBeUndefined();
+    expect(routineSymbol(watch)).toBe("arrow.triangle.pull");
+    expect(routineProblem(routine({ ...watch, state: "failed", health: { status: "failed" } }))).toEqual({ kind: "readFailed", calendar: false });
+    expect(aroundEvents(15, false, null)).toBe("15 minutes before each event");
+    expect(aroundEvents(60, false, "Customer")).toBe("1 hour before events matching “Customer”");
+    expect(aroundEvents(0, true, null)).toBe("When each event ends");
+    expect(aroundEvents(10, true, "Customer")).toBe("10 minutes after events matching “Customer” end");
+    const events = routine({ schedule: "15m before events", schedule_text: "15 minutes before events matching “Customer”", calendar: { account: "Google Calendar · Work", matching: "Customer", minutes: 15, after: false } });
+    expect(routineSchedule(events)).toBe("15 minutes before events matching “Customer”");
+    expect(nextRunText(events)).toBe("None in the next day");
+    expect(routineSymbol(events)).toBe("calendar");
+    const failing = routineProblem(routine({ ...events, state: "blocked", health: { status: "blocked" } }))!;
+    expect(problemExplanation(failing, "Scout", "Workbench")).toContain("signed in on Workbench");
   });
 });

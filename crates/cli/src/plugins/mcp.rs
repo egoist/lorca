@@ -793,6 +793,29 @@ async fn restore_manager(app: &Arc<App>, url: &str, stored: &Value, metadata_url
     state.into_authorization_manager().ok_or_else(|| "Restoring the sign-in".to_string())
 }
 
+/// A native sign-in's access token for the service's own API, refreshed and saved first when it
+/// is about to expire, as a connection refreshes it: what a Gmail draft card's Send sends with.
+pub async fn service_token(app: &Arc<App>, plugin_id: &str, server: &str) -> Result<String, String> {
+    let generation = app.mcp.generation(plugin_id);
+    let (stored, token_endpoint) = {
+        let store = app.plugins.lock().unwrap();
+        let plugin = store.get(plugin_id).ok_or("The account was removed.")?;
+        let Some(ServerSpec::Http { auth: Some(AuthSpec::Oauth { token_endpoint: Some(endpoint), .. }), .. }) = plugin.manifest.servers.get(server) else {
+            return Err("The account has no sign-in to send with.".into());
+        };
+        (store.sign_in_secret(plugin_id, "oauth", server).ok_or("Sign in to the account again.")?, endpoint.clone())
+    };
+    if stored["native_flow"].as_bool() != Some(true) {
+        return Err("Sign in to the account again.".into());
+    }
+    let refreshed = super::oauth::refresh(&app.http, &token_endpoint, &stored).await?;
+    if let Some(refreshed) = &refreshed {
+        super::set_oauth_at_generation(app, plugin_id, server, refreshed.clone(), generation)?;
+    }
+    let saved = refreshed.as_ref().unwrap_or(&stored);
+    saved["tokens"]["access_token"].as_str().map(String::from).ok_or_else(|| "The saved sign-in has no access token".into())
+}
+
 #[derive(Debug)]
 struct DeviceBearer {
     access_token: String,
@@ -1007,6 +1030,7 @@ pub fn post_sign_in_card(app: &Arc<App>, chat_id: &str, bot_id: &str, plugin_id:
             command: None,
             link: None,
             code: None,
+            secret: None,
         },
     );
     app.upsert_message(message.clone(), true);
@@ -2158,6 +2182,15 @@ pub async fn review_call(
         return Some(crate::permissions::refuse(app, chat_id, bot, denied));
     }
     if capability == crate::permissions::Capability::Read { return None; }
+    // An email or Slack message the bot writes in a chat waits as a draft for the user to send,
+    // who reviews it on its card, so Auto-review does not judge it.
+    if !unattended && crate::permissions::drafts_messages(bot) {
+        let message = app.plugins.lock().unwrap().get(&tool.plugin_id).and_then(|plugin| plugin.manifest.tools.message(&name).cloned());
+        if let Some(message) = message {
+            let names = (tool.plugin_id.as_str(), tool.server_name.as_str(), tool.plugin_name.as_str());
+            return Some(crate::drafts::stage(app, bot, chat_id, trigger, &ctx.tool_call.id, names, &name, &message, ctx.args, ctx.cancel).await);
+        }
+    }
     // The script the call comes from says what the whole batch is for.
     let script = ctx.parent.filter(|parent| parent.name == codemode::CODEMODE_TOOL_NAME).and_then(|parent| parent.arguments["code"].as_str());
     let outcome = super::review::decide(app, bot, chat_id, trigger, &tool.plugin_id, &tool.plugin_name, &name, &review_description, ctx.args, script, ctx.cancel).await;
@@ -2165,7 +2198,7 @@ pub async fn review_call(
     if unattended {
         let staged = crate::review_execution::stage_call(app, bot, chat_id, trigger, &ctx.tool_call.id,
             crate::review_queue::ReviewPayload::Plugin { plugin_id: tool.plugin_id.clone(), server_name: tool.server_name.clone(), tool: name.clone(), arguments: ctx.args.clone() },
-            crate::review_queue::ReviewTarget { account: tool.plugin_name.clone(), resource: call_summary(&name, ctx.args) }, reason.as_deref()).await;
+            crate::review_queue::ReviewTarget { account: tool.plugin_name.clone(), resource: call_summary(&name, ctx.args) }, reason.as_deref(), ctx.cancel).await;
         let status = match staged {
             Ok(item) => format!("Staged review {} (version {}). The user can edit and approve it later; the exact call resumes on this Runner. Do not retry it now.", item.id, item.version),
             Err(error) => format!("Could not stage the action for review: {error}. Report the proposed action."),
@@ -2397,6 +2430,14 @@ impl Tool for PluginTool {
         // A sign-in, connection or review may have awaited while the user revoked access.
         self.check_policy(&cancel).await?;
         let _permit = self.admit(&cancel).await?;
+        // A saved secret the call names goes in only now, past every review, and only into what
+        // Browser types on the secret's own site.
+        let page = async {
+            let tabs = server.browser_call("browser_tabs", json!({ "action": "list" })).await?;
+            let text = tabs.content.iter().filter_map(|block| match block { ContentBlock::Text(text) => Some(text.text.as_str()), _ => None }).collect::<Vec<_>>().join("\n");
+            crate::secrets::current_page(&text).ok_or_else(|| "Lorca could not tell which page the browser shows, so it typed nothing.".to_string())
+        };
+        let args = crate::secrets::fill_call(&self.app, self.policy_context.as_ref().map(|(bot, _)| bot), &self.plugin_id, &tool, args, page).await.map_err(ToolError)?;
         params.name = tool.clone().into();
         params.arguments = args.as_object().cloned();
         // A server of Lorca's own learns whose turn called, to keep what it sent in that chat.
@@ -2877,6 +2918,7 @@ pub async fn ask_with_rule(
             command: None,
             link: None,
             code: None,
+            secret: None,
         },
     );
     let decision = await_answer(app, chat_id, &message.id, always_rule, cancel, || {
@@ -3545,7 +3587,7 @@ for line in sys.stdin:
 
         let mut local: Vec<Arc<dyn Tool>> = lorca_agent::tools::coding_tools(scratch.1.clone()).into_iter().filter(|tool| tool.name() == "read").collect();
         // The scripts' own bash: one command at a time, resolving to its output and exit code.
-        let bash = crate::shell::script_bash(app, &scratch.1);
+        let bash = crate::shell::script_bash(app, "bot-test", &scratch.1);
         assert_eq!(bash.execution_mode(), Some(lorca_agent::agent_loop::ToolExecutionMode::Sequential));
         assert!(bash.output_schema().is_some() && !bash.description().contains("session id"), "{}", bash.description());
         local.push(bash);

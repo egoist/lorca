@@ -281,6 +281,9 @@ impl crate::plugins::builtin::Service for Server {
                 if text.chars().count() > MAX_TEXT {
                     return text_result("Telegram takes at most 4096 characters in a message. Send it in parts.", true);
                 }
+                if super::holds_secret(app, text) {
+                    return text_result(super::SECRET_REFUSED, true);
+                }
                 let reply_to = id_text(&args["reply_to_message_id"]).filter(|id| !id.is_empty());
                 let thread = id_text(&args["message_thread_id"]).filter(|id| !id.is_empty());
                 let number = |id: &str| id.parse::<i64>().map(Value::from).unwrap_or_else(|_| json!(id));
