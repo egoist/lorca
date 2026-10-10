@@ -79,7 +79,7 @@ describe("routines", () => {
     expect(routineProblem({ ...waiting, is_enabled: false })).toBeUndefined();
     // Coming back to the app, only the routine waiting on setup subscribes again.
     expect(routinesAwaitingSetup([watch, { ...waiting, id: "rt-waiting" }])).toEqual(["rt-waiting"]);
-    const hook = routine({ schedule: "on events", schedule_text: "When its webhook is called", events: { receiver: "webhook", status: "subscribed", endpoint: "https://hooks.lorca.app/r/abc", key: "k3y" } });
+    const hook = routine({ schedule: "on events", schedule_text: "When its webhook is called", events: { receiver: "webhook", status: "subscribed", endpoint: "https://relay.lorca.app/webhooks/abc", key: "k3y" } });
     expect(routineSchedule(hook)).toBe("When its webhook is called");
     expect(routineSymbol(hook)).toBe("link");
     expect(aroundEvents(15, false, null)).toBe("15 minutes before each event");

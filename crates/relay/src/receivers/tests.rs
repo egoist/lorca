@@ -157,7 +157,7 @@ async fn a_webhook_runs_its_routine_once_per_request_that_carries_its_key() {
     let routine = lorca::routines::create_routine(&app, &bot_id, "Deploys", "", "Tell me if a deploy failed.", None, true, None, None, triggers).unwrap();
     assert_eq!(lorca::routine_events::subscribe(&app, &routine.id).await, lorca::routine_events::Subscribed::Subscribed);
     let events = app.routine(&routine.id).unwrap().events.unwrap();
-    assert!(events.endpoint.starts_with(&format!("{}/r/", relay.url)), "{events:?}");
+    assert!(events.endpoint.starts_with(&format!("{}/webhooks/", relay.url)), "{events:?}");
     assert_eq!(events.key.len(), 43, "a key the Runner made");
     let row = relay.state.db.receiver_sub("webhook", events.endpoint.rsplit('/').next().unwrap()).await.unwrap().unwrap();
     assert_eq!(row.key_hash.as_deref(), Some(webhook::key_hash(&events.key).as_str()), "the relay keeps only the key's hash");
@@ -209,7 +209,7 @@ async fn deliver_github(relay: &Relay, event: &str, delivery: &str, payload: &Va
     mac.update(&body);
     let signature = format!("sha256={}", mac.finalize().into_bytes().iter().map(|byte| format!("{byte:02x}")).collect::<String>());
     reqwest::Client::new()
-        .post(format!("{}/github/webhook", relay.url))
+        .post(format!("{}/webhooks/github", relay.url))
         .header("X-GitHub-Event", event)
         .header("X-GitHub-Delivery", delivery)
         .header("X-Hub-Signature-256", signature)
@@ -238,7 +238,7 @@ async fn a_github_watch_binds_through_the_install_and_runs_on_each_event_until_m
     assert_eq!(app.routine(&routine.id).unwrap().events.unwrap().status, lorca::routine_events::Listening::NeedsSetup);
     let state = url.rsplit("state=").next().unwrap().to_string();
     let no_redirects = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
-    let callback = |installation: &str, state: &str| no_redirects.get(format!("{}/github/callback?code=c&installation_id={installation}&setup_action=install&state={state}", relay.url)).send();
+    let callback = |installation: &str, state: &str| no_redirects.get(format!("{}/webhooks/github/callback?code=c&installation_id={installation}&setup_action=install&state={state}", relay.url)).send();
     // An installation the user's sign-in does not reach binds nothing.
     let other = lorca::api::dispatch(&app, "receivers.setup", json!({ "receiver": "github" })).await.unwrap()["url"].as_str().unwrap().rsplit("state=").next().unwrap().to_string();
     let refused = callback("99", &other).await.unwrap();
@@ -249,7 +249,7 @@ async fn a_github_watch_binds_through_the_install_and_runs_on_each_event_until_m
     assert_eq!(callback("77", &state).await.unwrap().headers()["location"], "https://lorca.app/github/connected?status=expired", "a state works once");
     // An authorization alone, from the authorize link, binds what the user reaches too.
     let again = lorca::api::dispatch(&app, "receivers.setup", json!({ "receiver": "github", "subject": "acme/project#42" })).await.unwrap()["url"].as_str().unwrap().rsplit("state=").next().unwrap().to_string();
-    let authorized = no_redirects.get(format!("{}/github/callback?code=c&state={again}", relay.url)).send().await.unwrap();
+    let authorized = no_redirects.get(format!("{}/webhooks/github/callback?code=c&state={again}", relay.url)).send().await.unwrap();
     assert_eq!(authorized.headers()["location"], "https://lorca.app/github/connected?status=connected&account=acme");
     // The installation also covers acme/secret, which this user can't access: no watch there,
     // only the link to authorize again.

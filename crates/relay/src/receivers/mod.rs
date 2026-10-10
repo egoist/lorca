@@ -47,7 +47,7 @@ impl Receivers {
 
 pub fn router(state: AppState) -> Router<AppState> {
     let public = Router::new()
-        .route("/github/callback", get(github::callback))
+        .route("/webhooks/github/callback", get(github::callback))
         .route_layer(axum::middleware::from_fn_with_state(state.clone(), crate::limit::per_ip));
     Router::new()
         .route("/v1/receivers/{receiver}/setup", post(setup))
@@ -56,8 +56,9 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/v1/receivers/{receiver}/subscriptions/{id}/key", post(set_key))
         // GitHub's deliveries come from its own addresses, many to one: no per-IP limit, and
         // its signature is checked before anything else.
-        .route("/github/webhook", post(github::webhook).layer(DefaultBodyLimit::max(github::MAX_DELIVERY_BYTES)))
-        .route("/r/{id}", post(webhook::receive).layer(DefaultBodyLimit::max(webhook::MAX_BODY_BYTES)))
+        .route("/webhooks/github", post(github::webhook).layer(DefaultBodyLimit::max(github::MAX_DELIVERY_BYTES)))
+        // A routine's webhook: its id is random base64url, never `github`, which matches first.
+        .route("/webhooks/{id}", post(webhook::receive).layer(DefaultBodyLimit::max(webhook::MAX_BODY_BYTES)))
         .merge(public)
 }
 

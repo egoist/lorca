@@ -63,14 +63,14 @@ The routine's sheet shows the pull request, which opens on GitHub, how it hears 
 
 | Row | What it is |
 | --- | --- |
-| **Webhook URL** | Where requests go, such as `https://hooks.lorca.app/r/5VPZsRAyy2VIu_yNsFDw2g`. |
+| **Webhook URL** | Where requests go, such as `https://relay.lorca.app/webhooks/5VPZsRAyy2VIu_yNsFDw2g`. |
 | **Webhook key** | The key every request includes. Hidden until you click it. |
 | **Authorization header** | The header that carries the key, ready to paste: `Authorization: Bearer <key>`. |
 
 Each row has **Copy**. Paste the URL and the header into the service, or call it yourself:
 
 ```bash
-curl -X POST "https://hooks.lorca.app/r/5VPZsRAyy2VIu_yNsFDw2g" \
+curl -X POST "https://relay.lorca.app/webhooks/5VPZsRAyy2VIu_yNsFDw2g" \
   -H "Authorization: Bearer $LORCA_WEBHOOK_KEY" \
   -H "Content-Type: application/json" \
   -d '{"deploy": "web", "status": "failed"}'

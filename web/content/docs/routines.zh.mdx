@@ -63,14 +63,14 @@ pull request 合并或关闭后，智能体最后运行一次，这个关注就�
 
 | 行 | 是什么 |
 | --- | --- |
-| **Webhook URL** | 请求发往的地址，比如 `https://hooks.lorca.app/r/5VPZsRAyy2VIu_yNsFDw2g`。 |
+| **Webhook URL** | 请求发往的地址，比如 `https://relay.lorca.app/webhooks/5VPZsRAyy2VIu_yNsFDw2g`。 |
 | **Webhook 密钥** | 每个请求都要带上的密钥。点击后才显示。 |
 | **Authorization 请求头** | 携带密钥的请求头，可直接粘贴：`Authorization: Bearer <密钥>`。 |
 
 每一行都有 **复制**。把 URL 和请求头粘贴到对方服务里，或者自己调用：
 
 ```bash
-curl -X POST "https://hooks.lorca.app/r/5VPZsRAyy2VIu_yNsFDw2g" \
+curl -X POST "https://relay.lorca.app/webhooks/5VPZsRAyy2VIu_yNsFDw2g" \
   -H "Authorization: Bearer $LORCA_WEBHOOK_KEY" \
   -H "Content-Type: application/json" \
   -d '{"deploy": "web", "status": "failed"}'

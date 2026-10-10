@@ -38,7 +38,7 @@ lorca-relay --bind 0.0.0.0:8787 --db lorca-relay.db
 
 ### pull request 关注与 Webhook
 
-Lorca 的中继托管了[关注 pull request](/zh/docs/routines#关注-pull-request)和[例行任务的 Webhook](/zh/docs/routines#webhook)的接收端。你自己的中继也可以：`LORCA_RELAY_HOOKS_URL` 设为一个能访问到它的公网地址，就会开启 Webhook；再用 [`crates/relay/github-app.json`](https://github.com/egoist/lorca/blob/main/crates/relay/github-app.json) 注册一个你自己的 GitHub 应用，把其中的地址指向你的中继，并设置 `LORCA_RELAY_GITHUB_APP_ID`、`LORCA_RELAY_GITHUB_APP_SLUG`、`LORCA_RELAY_GITHUB_CLIENT_ID`、`LORCA_RELAY_GITHUB_CLIENT_SECRET`、`LORCA_RELAY_GITHUB_WEBHOOK_SECRET` 和 `LORCA_RELAY_GITHUB_PRIVATE_KEY`，就会开启关注。
+Lorca 的中继托管了[关注 pull request](/zh/docs/routines#关注-pull-request)和[例行任务的 Webhook](/zh/docs/routines#webhook)的接收端。你自己的中继也可以：`LORCA_RELAY_PUBLIC_URL` 设为中继自己的公网地址，就会开启 Webhook（`<地址>/webhooks/<id>`）；再用 [`crates/relay/github-app.json`](https://github.com/egoist/lorca/blob/main/crates/relay/github-app.json) 注册一个你自己的 GitHub 应用，把其中的地址改成你中继的地址（`/webhooks/github` 和 `/webhooks/github/callback`），并设置 `LORCA_RELAY_GITHUB_APP_ID`、`LORCA_RELAY_GITHUB_APP_SLUG`、`LORCA_RELAY_GITHUB_CLIENT_ID`、`LORCA_RELAY_GITHUB_CLIENT_SECRET`、`LORCA_RELAY_GITHUB_WEBHOOK_SECRET` 和 `LORCA_RELAY_GITHUB_PRIVATE_KEY`，就会开启关注。
 
 没有这些设置时，这类例行任务会显示 **你的网关**，事件要通过你在自己电脑上运行的[网关](/zh/docs/events)送达。智能体会告诉你例行任务的订阅 id；用 `lorca events route <id> route.json` 导出它的路由，然后：
 

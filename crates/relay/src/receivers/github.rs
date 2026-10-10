@@ -1,11 +1,11 @@
 //! The Lorca GitHub App. A user installs it on the repositories bots may watch, or authorizes it
-//! where it is installed already; either ends at `/github/callback`, which binds to the account
+//! where it is installed already; either ends at `/webhooks/github/callback`, which binds to the account
 //! whose `state` the link carried every installation the user's authorization reaches
 //! (`GET /user/installations`), each with the repositories the user can access in it
 //! (`GET /user/installations/{id}/repositories`). A routine subscribes a pull request
 //! (`owner/repo#42`) only in a repository its account's binding lists, so nobody watches a
 //! repository they can't see, even in an installation they share.
-//! GitHub then sends the App's webhooks to `/github/webhook`: their signature is checked with
+//! GitHub then sends the App's webhooks to `/webhooks/github`: their signature is checked with
 //! the App's webhook secret, and each event about a subscribed pull request is turned into an
 //! event in its own words and sealed to the routine's Runner. The App reads pull requests,
 //! checks, statuses, issues, and actions; it writes nothing.

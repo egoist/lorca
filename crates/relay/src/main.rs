@@ -131,10 +131,11 @@ struct Args {
     #[usage(long, env = "LORCA_RELAY_FCM_SERVICE_ACCOUNT", hide_env_values = true)]
     fcm_service_account: Option<String>,
 
-    /// Where routines' webhook URLs start, such as https://hooks.lorca.app: a public address that
-    /// reaches this relay. Routines get webhooks only when it is set.
-    #[usage(long, env = "LORCA_RELAY_HOOKS_URL")]
-    hooks_url: Option<String>,
+    /// This relay's public address, such as https://relay.lorca.app, where services reach its
+    /// receivers: routines' webhook URLs start with it, and routines get webhooks only when it is
+    /// set.
+    #[usage(long, env = "LORCA_RELAY_PUBLIC_URL")]
+    public_url: Option<String>,
 
     /// The Lorca GitHub App, which watches pull requests for routines: its id and its URL name.
     /// The App is on only when all of its settings are given.
@@ -161,7 +162,7 @@ struct Args {
 /// The receivers whose settings are given.
 fn receivers(args: &Args) -> anyhow::Result<receivers::Receivers> {
     let mut found = receivers::Receivers::default();
-    if let Some(base) = args.hooks_url.as_deref().map(str::trim).filter(|base| !base.is_empty()) {
+    if let Some(base) = args.public_url.as_deref().map(str::trim).filter(|base| !base.is_empty()) {
         found.webhook = Some(receivers::webhook::Hooks::new(base));
     }
     let github = [&args.github_app_id, &args.github_app_slug, &args.github_client_id, &args.github_client_secret, &args.github_webhook_secret, &args.github_private_key];

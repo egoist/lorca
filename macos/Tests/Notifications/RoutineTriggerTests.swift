@@ -25,7 +25,7 @@ final class RoutineTriggerTests: XCTestCase {
         XCTAssertEqual(waiting.problem, .needsSetup(gitHub: true, subject: "acme/project#42"))
         XCTAssertEqual(waiting.problem?.text, L("App not installed"))
         XCTAssertTrue(waiting.problem!.needsUser)
-        let hook = try routine(#""schedule":"on events","schedule_text":"When its webhook is called","events":{"receiver":"webhook","status":"subscribed","endpoint":"https://hooks.lorca.app/r/abc","key":"k3y"}"#)
+        let hook = try routine(#""schedule":"on events","schedule_text":"When its webhook is called","events":{"receiver":"webhook","status":"subscribed","endpoint":"https://relay.lorca.app/webhooks/abc","key":"k3y"}"#)
         XCTAssertEqual(hook.scheduleText, L("When its webhook is called"))
         XCTAssertEqual(hook.events?.authorizationHeader, "Authorization: Bearer k3y")
         XCTAssertEqual(hook.symbol, "link")

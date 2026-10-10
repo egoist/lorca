@@ -748,7 +748,7 @@ enum MockData {
                 lastRunAt: minutesAgo(60 * 20), lastOutcome: "sent", nextRunAt: nil, isRunning: false, createdAt: minutesAgo(60 * 24 * 4),
                 events: RoutineEvents(
                     receiver: "webhook", subject: "", status: "subscribed", sourceName: "Webhook", title: "", url: nil,
-                    endpoint: "https://hooks.lorca.app/r/5VPZsRAyy2VIu_yNsFDw2g", key: "q8Zc1kX0vB3nTf7wJp2yLr6uHs9dEa4Mg5Ki1Ox0Rn8",
+                    endpoint: "https://relay.lorca.app/webhooks/5VPZsRAyy2VIu_yNsFDw2g", key: "q8Zc1kX0vB3nTf7wJp2yLr6uHs9dEa4Mg5Ki1Ox0Rn8",
                     lastEvent: .init(summary: "Webhook request", at: minutesAgo(60 * 20)))),
             Routine(
                 id: "rt-tag-release", botID: "bot-patch", name: "Tag the release",

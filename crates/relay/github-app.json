@@ -4,11 +4,11 @@
   "url": "https://lorca.app",
   "public": true,
   "hook_attributes": {
-    "url": "https://hooks.lorca.app/github/webhook",
+    "url": "https://relay.lorca.app/webhooks/github",
     "active": true
   },
-  "callback_urls": ["https://hooks.lorca.app/github/callback"],
-  "setup_url": "https://hooks.lorca.app/github/callback",
+  "callback_urls": ["https://relay.lorca.app/webhooks/github/callback"],
+  "setup_url": "https://relay.lorca.app/webhooks/github/callback",
   "request_oauth_on_install": true,
   "setup_on_update": true,
   "default_permissions": {

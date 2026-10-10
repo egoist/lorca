@@ -38,7 +38,7 @@ Put it behind HTTPS with a reverse proxy such as Caddy or nginx (WebSocket upgra
 
 ### Pull request watches and webhooks
 
-Lorca's relay hosts the receivers for [pull request watches](/docs/routines#pull-request-watches) and [routines' webhooks](/docs/routines#webhooks). Yours can too: `LORCA_RELAY_HOOKS_URL`, a public address that reaches it, turns on webhooks, and a GitHub App of your own, registered from [`crates/relay/github-app.json`](https://github.com/egoist/lorca/blob/main/crates/relay/github-app.json) with its URLs pointed at your relay, turns on watches through `LORCA_RELAY_GITHUB_APP_ID`, `LORCA_RELAY_GITHUB_APP_SLUG`, `LORCA_RELAY_GITHUB_CLIENT_ID`, `LORCA_RELAY_GITHUB_CLIENT_SECRET`, `LORCA_RELAY_GITHUB_WEBHOOK_SECRET`, and `LORCA_RELAY_GITHUB_PRIVATE_KEY`.
+Lorca's relay hosts the receivers for [pull request watches](/docs/routines#pull-request-watches) and [routines' webhooks](/docs/routines#webhooks). Yours can too: `LORCA_RELAY_PUBLIC_URL`, its own public address, turns on webhooks (`<address>/webhooks/<id>`), and a GitHub App of your own, registered from [`crates/relay/github-app.json`](https://github.com/egoist/lorca/blob/main/crates/relay/github-app.json) with its URLs on your relay's address (`/webhooks/github` and `/webhooks/github/callback`), turns on watches through `LORCA_RELAY_GITHUB_APP_ID`, `LORCA_RELAY_GITHUB_APP_SLUG`, `LORCA_RELAY_GITHUB_CLIENT_ID`, `LORCA_RELAY_GITHUB_CLIENT_SECRET`, `LORCA_RELAY_GITHUB_WEBHOOK_SECRET`, and `LORCA_RELAY_GITHUB_PRIVATE_KEY`.
 
 Without them, such a routine says **Your gateway**, and its events come through the [gateway](/docs/events) you run on one of your computers. The bot names the routine's subscription; export its route with `lorca events route <id> route.json`, then:
 

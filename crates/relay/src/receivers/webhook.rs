@@ -1,4 +1,4 @@
-//! A routine's own webhook: a URL on the relay's hooks address (`https://hooks.lorca.app/r/<id>`)
+//! A routine's own webhook: a URL on the relay's public address (`https://relay.lorca.app/webhooks/<id>`)
 //! and a key the Runner made, of which the relay keeps only the SHA-256. A request that carries
 //! the key as `Authorization: Bearer <key>` runs the routine once, with its body as data from
 //! outside: JSON as it came, any other text as a string, up to 64 KiB. An `Idempotency-Key`
@@ -27,7 +27,7 @@ pub const MAX_BODY_BYTES: usize = 64 * 1024;
 const IDEMPOTENCY_SECS: i64 = 24 * 3600;
 
 pub struct Hooks {
-    /// Where the webhooks' URLs start: `https://hooks.lorca.app`.
+    /// The relay's public address, where the webhooks' URLs start: `https://relay.lorca.app`.
     pub base: String,
     limiter: crate::limit::RateLimiter,
     /// Idempotency keys seen lately, by webhook and key, with when.
@@ -46,7 +46,7 @@ impl Hooks {
         }
         let sub = body.row("webhook", auth, body.subject.clone(), None, None);
         super::save(state, &sub).await?;
-        Ok(json!({ "status": "subscribed", "id": sub.id, "endpoint": format!("{}/r/{}", self.base, sub.id), "name": "Webhook" }))
+        Ok(json!({ "status": "subscribed", "id": sub.id, "endpoint": format!("{}/webhooks/{}", self.base, sub.id), "name": "Webhook" }))
     }
 
     /// True the first time a webhook sees an idempotency key within a day.

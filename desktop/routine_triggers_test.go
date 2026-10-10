@@ -31,7 +31,7 @@ func routineTriggers(t *testing.T) {
 		{"id": "rt-deploys", "bot_id": "bot-nova", "name": "Failed deploys", "prompt": "Read the deploy the request names and tell me why it failed.",
 			"schedule": "on events", "schedule_text": "When its webhook is called", "is_enabled": true, "state": "on",
 			"events": map[string]any{"receiver": "webhook", "status": "subscribed", "source_name": "Webhook",
-				"endpoint": "https://hooks.lorca.app/r/5VPZsRAyy2VIu_yNsFDw2g", "key": "q8Zc1kX0vB3nTf7wJp2yLr6uHs9dEa4Mg5Ki1Ox0Rn8",
+				"endpoint": "https://relay.lorca.app/webhooks/5VPZsRAyy2VIu_yNsFDw2g", "key": "q8Zc1kX0vB3nTf7wJp2yLr6uHs9dEa4Mg5Ki1Ox0Rn8",
 				"last_event": map[string]any{"summary": "Webhook request", "at": now - 20*3600}},
 			"last_run_at": now - 20*3600, "last_outcome": "sent", "created_at": now - 4*86400},
 		{"id": "rt-docs-pr", "bot_id": "bot-nova", "name": "Docs PR", "prompt": "Tell me when the docs pull request gets a review.",
