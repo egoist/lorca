@@ -1,7 +1,7 @@
 //! Mail on a Runner. Every Runner of the account gets its own sealed copy of each message; each
 //! picks the bot from the roster the same way (the `+tag` it was sent to, else the lead bot), so
 //! only the Runner hosting that bot keeps it and the others let theirs go. A kept message is
-//! parsed once, its attachments saved in the bot's workspace, and stored encrypted with the
+//! parsed once, its attachments saved under the CLI's `mail` folder, and stored encrypted with the
 //! account key in `lorca.sqlite3`. A bot waiting for mail takes it at once; otherwise the bot
 //! reads it in a turn of its own in its DM, unattended, as an event's turn is.
 
@@ -263,7 +263,9 @@ fn parse(app: &App, bot: &crate::model::Bot, header: &Header, message: &mail_par
     }
     // The receiving server adds its verdict on top; a sender's own copies come below it.
     let authentication = message.header_values("Authentication-Results").next().and_then(|value| value.as_text()).map(summarize_authentication).filter(|summary| !summary.is_empty());
-    let folder = app.config.home.join("workspaces").join(&bot.id).join("mail").join(safe_name(&header.id));
+    // Apart from the bot's workspace: running what a stranger sent is never a command that
+    // stays in Lorca's own folders, so Auto-review sees it.
+    let folder = app.config.home.join("mail").join(&bot.id).join(safe_name(&header.id));
     let mut attachments = Vec::new();
     let mut calendar = None;
     for part in &message.parts {

@@ -260,9 +260,10 @@ static URL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"[A-Za-z][A-Za-z0-9+
 /// Whether the command stays in Lorca's own folders, which belong to the bots: it runs from inside
 /// one, every path it names lies inside one, it moves with no bare, backward, or variable `cd`,
 /// it expands no variables, and it neither elevates privileges nor sends data to another machine.
-/// Anything it does there, with the account's own files included, needs no review.
+/// Anything it does there, with the account's own files included, needs no review. A folder's
+/// `mail`, which holds the attachments strangers sent the bots, is not the bots' own.
 fn stays_in_lorca(command: &str, workdir: &Path, folders: &[PathBuf], home: Option<&Path>) -> bool {
-    let inside = |path: &Path| folders.iter().any(|folder| path.starts_with(folder));
+    let inside = |path: &Path| folders.iter().any(|folder| path.starts_with(folder) && !path.starts_with(folder.join("mail")));
     let (stages, dynamic) = parsed_shell(command);
     if !inside(workdir) || dynamic || command.trim().is_empty() {
         return false;
@@ -924,6 +925,8 @@ mod tests {
             "echo hi > /etc/motd",
             "/usr/bin/python3 main.py",
             "rm -rf \"$(pwd)/../..\"",
+            "bash /home/me/.lorca-dev/mail/bot-1/m1/setup.sh",
+            "cd ../../mail/bot-1/m1 && ./setup.sh",
         ] {
             assert!(!stays(command), "{command}");
         }
