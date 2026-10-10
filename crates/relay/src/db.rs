@@ -197,6 +197,37 @@ pub struct PushToken {
     pub environment: String,
 }
 
+/// An identity's email address on the relay's mail domain. `suspended_until` is in the future
+/// while mail from it keeps bouncing: mail to it bounces and it sends nothing until then.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MailAddress {
+    pub name: String,
+    pub suspended_until: Option<i64>,
+}
+
+impl MailAddress {
+    pub fn is_suspended(&self) -> bool {
+        self.suspended_until.is_some_and(|until| until > now())
+    }
+}
+
+/// Where mail to an address goes: the identity, and the machines that take its mail, each with
+/// the box key a copy is sealed to.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MailRoute {
+    pub identity_pubkey: String,
+    pub address: MailAddress,
+    /// `(machine_pubkey, box_pubkey)`.
+    pub machines: Vec<(String, String)>,
+}
+
+/// What an identity sent today, and when it registered (new accounts send less).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MailUsage {
+    pub sent: i64,
+    pub identity_created_at: i64,
+}
+
 // MARK: - What one process keeps in memory
 
 /// The keys of unpaired machines, so a bearer token issued before the unpairing dies with
@@ -238,6 +269,8 @@ pub enum Event {
     Machines { identity: String },
     /// A machine was unpaired: its tokens die and its sockets close.
     Revoked { identity: String, machine: String },
+    /// The identity's email address changed.
+    Mail { identity: String },
 }
 
 impl Local {
@@ -245,6 +278,7 @@ impl Local {
         match event {
             Event::Blobs { identity, recipient } => self.hub.blobs(identity, recipient.as_deref()),
             Event::Machines { identity } => self.hub.machines(identity),
+            Event::Mail { identity } => self.hub.mail(identity),
             Event::Revoked { identity, machine } => {
                 self.revoked.insert(machine);
                 self.hub.kick(identity, machine);
@@ -331,6 +365,26 @@ pub trait Store: Send + Sync {
     async fn share(&self, id: &str) -> ApiResult<Option<Vec<u8>>>;
     /// False when the identity holds nothing under `id`.
     async fn delete_share(&self, identity_pubkey: &str, id: &str) -> ApiResult<bool>;
+
+    // Email. An address name is handed out once: given up, it stays with the identity that
+    // held it, which alone may take it again, so mail meant for one account never reaches another.
+
+    /// The identity's address, if it holds one.
+    async fn mail_address(&self, identity_pubkey: &str) -> ApiResult<Option<MailAddress>>;
+    /// Gives the identity `name`, giving up the one it held. The same name again changes
+    /// nothing. `409` when another identity holds or held it.
+    async fn claim_mail_address(&self, identity_pubkey: &str, name: &str) -> ApiResult<MailAddress>;
+    /// False when the identity held no address.
+    async fn release_mail_address(&self, identity_pubkey: &str) -> ApiResult<bool>;
+    /// The machine takes the identity's mail: a Runner.
+    async fn set_mail_runner(&self, identity_pubkey: &str, machine_pubkey: &str) -> ApiResult<()>;
+    async fn is_mail_runner(&self, machine_pubkey: &str) -> ApiResult<bool>;
+    /// The address `name` and its machines; `None` for a name nobody holds now.
+    async fn mail_route(&self, name: &str) -> ApiResult<Option<MailRoute>>;
+    async fn mail_usage(&self, identity_pubkey: &str, day: i64) -> ApiResult<MailUsage>;
+    /// Counts a sent message and its bounces against the day. Once the day's bounces reach
+    /// `bounce_limit` the address is suspended until `suspend_until`; returns whether it was.
+    async fn record_mail_send(&self, identity_pubkey: &str, day: i64, bounces: i64, bounce_limit: i64, suspend_until: i64) -> ApiResult<bool>;
 
     // Push tokens
 

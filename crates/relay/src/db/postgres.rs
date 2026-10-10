@@ -16,7 +16,7 @@ use futures::StreamExt;
 use tokio_postgres::types::ToSql;
 use tokio_postgres::{AsyncMessage, Row, Transaction};
 
-use super::{now, page_of_slots, sealed_kinds_sql, slots_with_rows, GroupSlot, BlobRow, DeletedIdentity, Event, Inserted, Local, Machine, NewBlob, Payload, PushToken, Stats, Store};
+use super::{now, page_of_slots, sealed_kinds_sql, slots_with_rows, GroupSlot, BlobRow, DeletedIdentity, Event, Inserted, Local, MailAddress, MailRoute, MailUsage, Machine, NewBlob, Payload, PushToken, Stats, Store};
 use crate::routes::{ApiError, ApiResult};
 
 const CHANNEL: &str = "lorca_relay";
@@ -127,6 +127,28 @@ const MIGRATIONS: &[&str] = &[
         updated_at      BIGINT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS shares_identity ON shares(identity_pubkey);",
+    // 3: email addresses, the machines that take an identity's mail, and what it sent each day.
+    "CREATE TABLE IF NOT EXISTS mail_addresses (
+        name            TEXT PRIMARY KEY,
+        identity_pubkey TEXT NOT NULL,
+        released        BIGINT NOT NULL DEFAULT 0,
+        suspended_until BIGINT,
+        created_at      BIGINT NOT NULL,
+        changed_at      BIGINT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS mail_addresses_holder ON mail_addresses(identity_pubkey) WHERE released = 0;
+    CREATE TABLE IF NOT EXISTS mail_runners (
+        machine_pubkey  TEXT PRIMARY KEY,
+        identity_pubkey TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS mail_runners_identity ON mail_runners(identity_pubkey);
+    CREATE TABLE IF NOT EXISTS mail_usage (
+        identity_pubkey TEXT NOT NULL,
+        day             BIGINT NOT NULL,
+        sent            BIGINT NOT NULL,
+        bounces         BIGINT NOT NULL,
+        PRIMARY KEY (identity_pubkey, day)
+    );",
 ];
 
 /// Applies the steps this database has not had. DDL locks whole tables, and the process this
@@ -464,6 +486,7 @@ impl Store for Postgres {
         .await?;
         tx.execute("DELETE FROM challenges WHERE machine_pubkey = $1", &[&machine_pubkey]).await?;
         tx.execute("DELETE FROM push_tokens WHERE machine_pubkey = $1", &[&machine_pubkey]).await?;
+        tx.execute("DELETE FROM mail_runners WHERE machine_pubkey = $1", &[&machine_pubkey]).await?;
         let freed: i64 = tx
             .query_one(
                 "WITH gone AS (DELETE FROM blobs WHERE identity_pubkey = $1 AND recipient_machine_pubkey = $2 RETURNING size)
@@ -495,7 +518,9 @@ impl Store for Postgres {
             .await?;
         }
         tx.execute("DELETE FROM challenges WHERE machine_pubkey IN (SELECT machine_pubkey FROM machines WHERE identity_pubkey = $1)", &[&identity_pubkey]).await?;
-        for table in ["push_tokens", "pairings", "blobs", "deleted_groups", "sequences", "usage", "shares", "machines"] {
+        // Its address names stay taken, so mail meant for this account reaches no other.
+        tx.execute("UPDATE mail_addresses SET released = 1, changed_at = $2 WHERE identity_pubkey = $1 AND released = 0", &[&identity_pubkey, &now()]).await?;
+        for table in ["push_tokens", "pairings", "blobs", "deleted_groups", "sequences", "usage", "shares", "mail_runners", "mail_usage", "machines"] {
             tx.execute(&format!("DELETE FROM {table} WHERE identity_pubkey = $1"), &[&identity_pubkey]).await?;
         }
         tx.execute("DELETE FROM identities WHERE pubkey = $1", &[&identity_pubkey]).await?;
@@ -634,6 +659,7 @@ impl Store for Postgres {
             .await?
             .get::<_, i64>(0);
         client.execute("DELETE FROM deleted_groups WHERE deleted_at < $1", &[&groups_before]).await?;
+        client.execute("DELETE FROM mail_usage WHERE day < $1", &[&(sealed_before / 86_400 - 30)]).await?;
         Ok(gone as u64)
     }
 
@@ -821,6 +847,110 @@ impl Store for Postgres {
         give_back(&tx, identity_pubkey, rows.iter().map(|row| row.get::<_, i64>(2)).sum()).await?;
         tx.commit().await?;
         Ok(rows.iter().filter(|row| row.get::<_, String>(1) == "file").map(|row| row.get(0)).collect())
+    }
+
+    async fn mail_address(&self, identity_pubkey: &str) -> ApiResult<Option<MailAddress>> {
+        let row = self.client().await?.query_opt("SELECT name, suspended_until FROM mail_addresses WHERE identity_pubkey = $1 AND released = 0", &[&identity_pubkey]).await?;
+        Ok(row.map(|row| MailAddress { name: row.get(0), suspended_until: row.get(1) }))
+    }
+
+    async fn claim_mail_address(&self, identity_pubkey: &str, name: &str) -> ApiResult<MailAddress> {
+        let mut client = self.client().await?;
+        let tx = client.transaction().await?;
+        lock_identity(&tx, identity_pubkey).await?;
+        // Two identities may want one new name at once: the name's own lock orders them.
+        tx.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 1))", &[&name]).await?;
+        let held = tx.query_opt("SELECT identity_pubkey, released, suspended_until FROM mail_addresses WHERE name = $1", &[&name]).await?;
+        if let Some(row) = &held {
+            if row.get::<_, String>(0) != identity_pubkey {
+                return Err(ApiError::conflict("That name is taken"));
+            }
+            if row.get::<_, i64>(1) == 0 {
+                return Ok(MailAddress { name: name.into(), suspended_until: row.get(2) });
+            }
+        }
+        // A suspension stays with the account whichever name it takes next.
+        let suspended_until: Option<i64> = tx.query_one("SELECT MAX(suspended_until) FROM mail_addresses WHERE identity_pubkey = $1", &[&identity_pubkey]).await?.get(0);
+        let suspended_until = suspended_until.filter(|until| *until > now());
+        tx.execute("UPDATE mail_addresses SET released = 1, changed_at = $2 WHERE identity_pubkey = $1 AND released = 0", &[&identity_pubkey, &now()]).await?;
+        tx.execute(
+            "INSERT INTO mail_addresses (name, identity_pubkey, released, suspended_until, created_at, changed_at) VALUES ($1, $2, 0, $3, $4, $4)
+             ON CONFLICT (name) DO UPDATE SET released = 0, suspended_until = EXCLUDED.suspended_until, changed_at = EXCLUDED.changed_at",
+            &[&name, &identity_pubkey, &suspended_until, &now()],
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(MailAddress { name: name.into(), suspended_until })
+    }
+
+    async fn release_mail_address(&self, identity_pubkey: &str) -> ApiResult<bool> {
+        let changed = self.client().await?.execute("UPDATE mail_addresses SET released = 1, changed_at = $2 WHERE identity_pubkey = $1 AND released = 0", &[&identity_pubkey, &now()]).await?;
+        Ok(changed > 0)
+    }
+
+    async fn set_mail_runner(&self, identity_pubkey: &str, machine_pubkey: &str) -> ApiResult<()> {
+        self.client()
+            .await?
+            .execute(
+                "INSERT INTO mail_runners (machine_pubkey, identity_pubkey) VALUES ($1, $2) ON CONFLICT (machine_pubkey) DO UPDATE SET identity_pubkey = EXCLUDED.identity_pubkey",
+                &[&machine_pubkey, &identity_pubkey],
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn is_mail_runner(&self, machine_pubkey: &str) -> ApiResult<bool> {
+        Ok(self.client().await?.query_opt("SELECT 1 FROM mail_runners WHERE machine_pubkey = $1", &[&machine_pubkey]).await?.is_some())
+    }
+
+    async fn mail_route(&self, name: &str) -> ApiResult<Option<MailRoute>> {
+        let client = self.client().await?;
+        let Some(row) = client.query_opt("SELECT identity_pubkey, suspended_until FROM mail_addresses WHERE name = $1 AND released = 0", &[&name]).await? else { return Ok(None) };
+        let identity_pubkey: String = row.get(0);
+        let machines = client
+            .query(
+                "SELECT r.machine_pubkey, m.box_pubkey FROM mail_runners r JOIN machines m ON m.machine_pubkey = r.machine_pubkey
+                 WHERE r.identity_pubkey = $1 AND m.identity_pubkey = $1 ORDER BY r.machine_pubkey",
+                &[&identity_pubkey],
+            )
+            .await?
+            .iter()
+            .map(|row| (row.get(0), row.get(1)))
+            .collect();
+        Ok(Some(MailRoute { identity_pubkey, address: MailAddress { name: name.into(), suspended_until: row.get(1) }, machines }))
+    }
+
+    async fn mail_usage(&self, identity_pubkey: &str, day: i64) -> ApiResult<MailUsage> {
+        let client = self.client().await?;
+        let sent = client.query_opt("SELECT sent FROM mail_usage WHERE identity_pubkey = $1 AND day = $2", &[&identity_pubkey, &day]).await?.map(|row| row.get(0));
+        let created_at = client.query_opt("SELECT created_at FROM identities WHERE pubkey = $1", &[&identity_pubkey]).await?.map(|row| row.get(0));
+        Ok(MailUsage { sent: sent.unwrap_or(0), identity_created_at: created_at.unwrap_or(0) })
+    }
+
+    async fn record_mail_send(&self, identity_pubkey: &str, day: i64, bounces: i64, bounce_limit: i64, suspend_until: i64) -> ApiResult<bool> {
+        let mut client = self.client().await?;
+        let tx = client.transaction().await?;
+        lock_identity(&tx, identity_pubkey).await?;
+        let total: i64 = tx
+            .query_one(
+                "INSERT INTO mail_usage (identity_pubkey, day, sent, bounces) VALUES ($1, $2, 1, $3)
+                 ON CONFLICT (identity_pubkey, day) DO UPDATE SET sent = mail_usage.sent + 1, bounces = mail_usage.bounces + EXCLUDED.bounces
+                 RETURNING bounces",
+                &[&identity_pubkey, &day, &bounces],
+            )
+            .await?
+            .get(0);
+        let suspended = bounces > 0
+            && total >= bounce_limit
+            && tx
+                .execute(
+                    "UPDATE mail_addresses SET suspended_until = $2 WHERE identity_pubkey = $1 AND released = 0 AND COALESCE(suspended_until, 0) < $3",
+                    &[&identity_pubkey, &suspend_until, &now()],
+                )
+                .await?
+                > 0;
+        tx.commit().await?;
+        Ok(suspended)
     }
 
     async fn set_push_token(&self, identity_pubkey: &str, token: &PushToken) -> ApiResult<()> {

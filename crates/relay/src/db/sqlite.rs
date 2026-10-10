@@ -11,7 +11,7 @@ use rusqlite::types::Value;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, TransactionBehavior};
 use tokio::sync::Semaphore;
 
-use super::{blocking, now, page_of_slots, sealed_kinds_sql, slots_with_rows, GroupSlot, BlobRow, DeletedIdentity, Event, Inserted, Local, Machine, NewBlob, Payload, PushToken, Slot, Stats, Store};
+use super::{blocking, now, page_of_slots, sealed_kinds_sql, slots_with_rows, GroupSlot, BlobRow, DeletedIdentity, Event, Inserted, Local, MailAddress, MailRoute, MailUsage, Machine, NewBlob, Payload, PushToken, Slot, Stats, Store};
 use crate::routes::{ApiError, ApiResult};
 
 const SCHEMA: &str = "
@@ -110,6 +110,28 @@ const MIGRATIONS: &[&str] = &[
         updated_at      INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS shares_identity ON shares(identity_pubkey);",
+    // 3: email addresses, the machines that take an identity's mail, and what it sent each day.
+    "CREATE TABLE IF NOT EXISTS mail_addresses (
+        name            TEXT PRIMARY KEY,
+        identity_pubkey TEXT NOT NULL,
+        released        INTEGER NOT NULL DEFAULT 0,
+        suspended_until INTEGER,
+        created_at      INTEGER NOT NULL,
+        changed_at      INTEGER NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS mail_addresses_holder ON mail_addresses(identity_pubkey) WHERE released = 0;
+    CREATE TABLE IF NOT EXISTS mail_runners (
+        machine_pubkey  TEXT PRIMARY KEY,
+        identity_pubkey TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS mail_runners_identity ON mail_runners(identity_pubkey);
+    CREATE TABLE IF NOT EXISTS mail_usage (
+        identity_pubkey TEXT NOT NULL,
+        day             INTEGER NOT NULL,
+        sent            INTEGER NOT NULL,
+        bounces         INTEGER NOT NULL,
+        PRIMARY KEY (identity_pubkey, day)
+    );",
 ];
 
 pub struct Sqlite {
@@ -319,6 +341,7 @@ pub fn revoke_machine(connection: &mut Connection, identity_pubkey: &str, machin
         .execute(params![machine_pubkey, identity_pubkey, now()])?;
     tx.prepare_cached("DELETE FROM challenges WHERE machine_pubkey = ?1")?.execute(params![machine_pubkey])?;
     tx.prepare_cached("DELETE FROM push_tokens WHERE machine_pubkey = ?1")?.execute(params![machine_pubkey])?;
+    tx.prepare_cached("DELETE FROM mail_runners WHERE machine_pubkey = ?1")?.execute(params![machine_pubkey])?;
     let freed: i64 = tx
         .prepare_cached("SELECT COALESCE(SUM(size), 0) FROM blobs WHERE identity_pubkey = ?1 AND recipient_machine_pubkey = ?2")?
         .query_row(params![identity_pubkey, machine_pubkey], |row| row.get(0))?;
@@ -351,7 +374,10 @@ pub fn delete_identity(connection: &mut Connection, identity_pubkey: &str, revok
     }
     tx.prepare_cached("DELETE FROM challenges WHERE machine_pubkey IN (SELECT machine_pubkey FROM machines WHERE identity_pubkey = ?1)")?
         .execute(params![identity_pubkey])?;
-    for table in ["push_tokens", "pairings", "blobs", "deleted_groups", "sequences", "usage", "shares", "machines"] {
+    // Its address names stay taken, so mail meant for this account reaches no other.
+    tx.prepare_cached("UPDATE mail_addresses SET released = 1, changed_at = ?2 WHERE identity_pubkey = ?1 AND released = 0")?
+        .execute(params![identity_pubkey, now()])?;
+    for table in ["push_tokens", "pairings", "blobs", "deleted_groups", "sequences", "usage", "shares", "mail_runners", "mail_usage", "machines"] {
         tx.prepare_cached(&format!("DELETE FROM {table} WHERE identity_pubkey = ?1"))?.execute(params![identity_pubkey])?;
     }
     tx.prepare_cached("DELETE FROM identities WHERE pubkey = ?1")?.execute(params![identity_pubkey])?;
@@ -743,8 +769,80 @@ pub fn sweep(connection: &mut Connection, sealed_before: i64, groups_before: i64
     )?;
     let gone = tx.execute(&format!("DELETE FROM blobs WHERE {stale}"), params![sealed_before])?;
     tx.execute("DELETE FROM deleted_groups WHERE deleted_at < ?1", params![groups_before])?;
+    tx.execute("DELETE FROM mail_usage WHERE day < ?1", params![sealed_before / 86_400 - 30])?;
     tx.commit()?;
     Ok(gone as u64)
+}
+
+
+// MARK: - Email
+
+fn mail_address(connection: &Connection, identity_pubkey: &str) -> rusqlite::Result<Option<MailAddress>> {
+    connection
+        .prepare_cached("SELECT name, suspended_until FROM mail_addresses WHERE identity_pubkey = ?1 AND released = 0")?
+        .query_row(params![identity_pubkey], |row| Ok(MailAddress { name: row.get(0)?, suspended_until: row.get(1)? }))
+        .optional()
+}
+
+pub fn claim_mail_address(connection: &mut Connection, identity_pubkey: &str, name: &str) -> ApiResult<MailAddress> {
+    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let held: Option<(String, i64, Option<i64>)> = tx
+        .prepare_cached("SELECT identity_pubkey, released, suspended_until FROM mail_addresses WHERE name = ?1")?
+        .query_row(params![name], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .optional()?;
+    match held {
+        Some((holder, _, _)) if holder != identity_pubkey => return Err(ApiError::conflict("That name is taken")),
+        Some((_, 0, suspended_until)) => return Ok(MailAddress { name: name.into(), suspended_until }),
+        _ => {}
+    }
+    // A suspension stays with the account whichever name it takes next.
+    let suspended_until: Option<i64> = tx
+        .prepare_cached("SELECT MAX(suspended_until) FROM mail_addresses WHERE identity_pubkey = ?1")?
+        .query_row(params![identity_pubkey], |row| row.get(0))?;
+    let suspended_until = suspended_until.filter(|until| *until > now());
+    tx.prepare_cached("UPDATE mail_addresses SET released = 1, changed_at = ?2 WHERE identity_pubkey = ?1 AND released = 0")?
+        .execute(params![identity_pubkey, now()])?;
+    tx.prepare_cached(
+        "INSERT INTO mail_addresses (name, identity_pubkey, released, suspended_until, created_at, changed_at) VALUES (?1, ?2, 0, ?3, ?4, ?4)
+         ON CONFLICT(name) DO UPDATE SET released = 0, suspended_until = excluded.suspended_until, changed_at = excluded.changed_at",
+    )?
+    .execute(params![name, identity_pubkey, suspended_until, now()])?;
+    tx.commit()?;
+    Ok(MailAddress { name: name.into(), suspended_until })
+}
+
+fn mail_route(connection: &Connection, name: &str) -> rusqlite::Result<Option<MailRoute>> {
+    let held: Option<(String, Option<i64>)> = connection
+        .prepare_cached("SELECT identity_pubkey, suspended_until FROM mail_addresses WHERE name = ?1 AND released = 0")?
+        .query_row(params![name], |row| Ok((row.get(0)?, row.get(1)?)))
+        .optional()?;
+    let Some((identity_pubkey, suspended_until)) = held else { return Ok(None) };
+    let machines = connection
+        .prepare_cached(
+            "SELECT r.machine_pubkey, m.box_pubkey FROM mail_runners r JOIN machines m ON m.machine_pubkey = r.machine_pubkey
+             WHERE r.identity_pubkey = ?1 AND m.identity_pubkey = ?1 ORDER BY r.machine_pubkey",
+        )?
+        .query_map(params![identity_pubkey], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(Some(MailRoute { identity_pubkey, address: MailAddress { name: name.into(), suspended_until }, machines }))
+}
+
+pub fn record_mail_send(connection: &mut Connection, identity_pubkey: &str, day: i64, bounces: i64, bounce_limit: i64, suspend_until: i64) -> rusqlite::Result<bool> {
+    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    tx.prepare_cached(
+        "INSERT INTO mail_usage (identity_pubkey, day, sent, bounces) VALUES (?1, ?2, 1, ?3)
+         ON CONFLICT(identity_pubkey, day) DO UPDATE SET sent = sent + 1, bounces = bounces + excluded.bounces",
+    )?
+    .execute(params![identity_pubkey, day, bounces])?;
+    let total: i64 = tx.prepare_cached("SELECT bounces FROM mail_usage WHERE identity_pubkey = ?1 AND day = ?2")?.query_row(params![identity_pubkey, day], |row| row.get(0))?;
+    let suspended = bounces > 0
+        && total >= bounce_limit
+        && tx
+            .prepare_cached("UPDATE mail_addresses SET suspended_until = ?2 WHERE identity_pubkey = ?1 AND released = 0 AND COALESCE(suspended_until, 0) < ?3")?
+            .execute(params![identity_pubkey, suspend_until, now()])?
+            > 0;
+    tx.commit()?;
+    Ok(suspended)
 }
 
 /// Identities nothing has touched since `before`. The caller leaves out the ones online.
@@ -926,6 +1024,59 @@ impl Store for Sqlite {
     async fn delete_share(&self, identity_pubkey: &str, id: &str) -> ApiResult<bool> {
         let (identity_pubkey, id) = (identity_pubkey.to_string(), id.to_string());
         self.write(move |db| Ok(db.execute("DELETE FROM shares WHERE id = ?1 AND identity_pubkey = ?2", params![id, identity_pubkey])? > 0)).await
+    }
+
+    async fn mail_address(&self, identity_pubkey: &str) -> ApiResult<Option<MailAddress>> {
+        let identity_pubkey = identity_pubkey.to_string();
+        self.read(move |db| Ok(mail_address(db, &identity_pubkey)?)).await
+    }
+
+    async fn claim_mail_address(&self, identity_pubkey: &str, name: &str) -> ApiResult<MailAddress> {
+        let (identity_pubkey, name) = (identity_pubkey.to_string(), name.to_string());
+        self.write(move |db| claim_mail_address(db, &identity_pubkey, &name)).await
+    }
+
+    async fn release_mail_address(&self, identity_pubkey: &str) -> ApiResult<bool> {
+        let identity_pubkey = identity_pubkey.to_string();
+        self.write(move |db| {
+            Ok(db.prepare_cached("UPDATE mail_addresses SET released = 1, changed_at = ?2 WHERE identity_pubkey = ?1 AND released = 0")?.execute(params![identity_pubkey, now()])? > 0)
+        })
+        .await
+    }
+
+    async fn set_mail_runner(&self, identity_pubkey: &str, machine_pubkey: &str) -> ApiResult<()> {
+        let (identity_pubkey, machine_pubkey) = (identity_pubkey.to_string(), machine_pubkey.to_string());
+        self.write(move |db| {
+            db.prepare_cached("INSERT OR REPLACE INTO mail_runners (machine_pubkey, identity_pubkey) VALUES (?1, ?2)")?.execute(params![machine_pubkey, identity_pubkey])?;
+            Ok(())
+        })
+        .await
+    }
+
+    async fn is_mail_runner(&self, machine_pubkey: &str) -> ApiResult<bool> {
+        let machine_pubkey = machine_pubkey.to_string();
+        self.read(move |db| Ok(db.prepare_cached("SELECT 1 FROM mail_runners WHERE machine_pubkey = ?1")?.query_row(params![machine_pubkey], |_| Ok(())).optional()?.is_some()))
+            .await
+    }
+
+    async fn mail_route(&self, name: &str) -> ApiResult<Option<MailRoute>> {
+        let name = name.to_string();
+        self.read(move |db| Ok(mail_route(db, &name)?)).await
+    }
+
+    async fn mail_usage(&self, identity_pubkey: &str, day: i64) -> ApiResult<MailUsage> {
+        let identity_pubkey = identity_pubkey.to_string();
+        self.read(move |db| {
+            let sent: Option<i64> = db.prepare_cached("SELECT sent FROM mail_usage WHERE identity_pubkey = ?1 AND day = ?2")?.query_row(params![identity_pubkey, day], |row| row.get(0)).optional()?;
+            let created_at: Option<i64> = db.prepare_cached("SELECT created_at FROM identities WHERE pubkey = ?1")?.query_row(params![identity_pubkey], |row| row.get(0)).optional()?;
+            Ok(MailUsage { sent: sent.unwrap_or(0), identity_created_at: created_at.unwrap_or(0) })
+        })
+        .await
+    }
+
+    async fn record_mail_send(&self, identity_pubkey: &str, day: i64, bounces: i64, bounce_limit: i64, suspend_until: i64) -> ApiResult<bool> {
+        let identity_pubkey = identity_pubkey.to_string();
+        self.write(move |db| Ok(record_mail_send(db, &identity_pubkey, day, bounces, bounce_limit, suspend_until)?)).await
     }
 
     async fn inactive_identities(&self, before: i64) -> ApiResult<Vec<String>> {

@@ -1,6 +1,7 @@
 //! The sync sockets: one per connected machine, grouped by identity. A socket carries signals
 //! and no data: `blobs` when the identity has a blob this machine may read, `machines` when
-//! its machine list or their presence changed. A machine is online while it has a socket here.
+//! its machine list or their presence changed, `mail` when its email address changed. A machine
+//! is online while it has a socket here.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -12,6 +13,7 @@ use tokio::sync::mpsc;
 pub enum Signal {
     Blobs,
     Machines,
+    Mail,
 }
 
 impl Signal {
@@ -19,6 +21,7 @@ impl Signal {
         match self {
             Signal::Blobs => r#"{"type":"blobs"}"#,
             Signal::Machines => r#"{"type":"machines"}"#,
+            Signal::Mail => r#"{"type":"mail"}"#,
         }
     }
 }
@@ -75,6 +78,11 @@ impl Hub {
 
     pub fn machines(&self, identity_pubkey: &str) {
         self.signal(identity_pubkey, Signal::Machines, |_| true);
+    }
+
+    /// The identity's email address was taken, changed, given up, or suspended.
+    pub fn mail(&self, identity_pubkey: &str) {
+        self.signal(identity_pubkey, Signal::Mail, |_| true);
     }
 
     /// Every socket here looks again: this process may have missed events.
