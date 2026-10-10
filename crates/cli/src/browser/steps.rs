@@ -238,6 +238,10 @@ impl Steps {
             for text in texts.chain(expected) {
                 *text = fill(text, inputs);
             }
+            // An input fills in a web address, never another kind of page.
+            if step.url.as_deref().is_some_and(|url| !(url.starts_with("https://") || url.starts_with("http://"))) {
+                return Err("A step's address must be an http or https address once its inputs are filled in.".into());
+            }
         }
         Ok(steps)
     }
@@ -290,5 +294,8 @@ mod tests {
         let filled = steps.with_inputs(&BTreeMap::from([("campaign".to_string(), "sale".to_string())])).unwrap();
         assert_eq!(filled.steps[0].value.as_deref(), Some("Spring sale"));
         assert_eq!(filled.steps[1].expect.as_ref().unwrap().text.as_deref(), Some("sale created"));
+        let opens = parse(&file(serde_json::json!([{ "action": "goto", "url": "{{campaign}}" }]))).unwrap();
+        assert!(opens.with_inputs(&BTreeMap::from([("campaign".to_string(), "javascript:alert(1)".to_string())])).unwrap_err().contains("http or https"));
+        assert!(opens.with_inputs(&BTreeMap::from([("campaign".to_string(), "https://ads.example.com/".to_string())])).is_ok());
     }
 }

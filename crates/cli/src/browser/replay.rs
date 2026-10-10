@@ -139,7 +139,14 @@ async fn act(server: &Server, step: &Step, deadline: Instant, cancel: &Cancellat
                     let clicked = server.browser_call("browser_click", json!({ "target": target })).await;
                     match clicked {
                         Ok(clicked) if !text_of(&clicked).contains("File chooser") => return Err(Halt::Mismatch("clicking it didn't ask for a file".into())),
-                        Ok(_) => server.browser_call("browser_file_upload", json!({ "paths": step.files })).await,
+                        Ok(_) => match server.browser_call("browser_file_upload", json!({ "paths": step.files })).await {
+                            Ok(uploaded) => Ok(uploaded),
+                            Err(error) => {
+                                // The file chooser it opened would hold up the browser's next call.
+                                let _ = server.browser_call("browser_file_upload", json!({})).await;
+                                return Err(Halt::Mismatch(format!("the file wasn't taken: {}", first_line(&error))));
+                            }
+                        },
                         Err(error) => Err(error),
                     }
                 }
