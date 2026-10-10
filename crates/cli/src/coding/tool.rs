@@ -74,7 +74,7 @@ impl Tool for CodingAgentTool {
             agents.find(&self.chat_id, &self.bot.id, id).ok_or_else(|| ToolError(format!("You have no coding agent {id} in this chat. coding_agent list shows yours.")))
         };
         let text = match args["action"].as_str() {
-            Some("start") => self.start(call_id, &args).await.map_err(ToolError)?,
+            Some("start") => self.start_unless_stopped(call_id, &args, &cancel).await.map_err(ToolError)?,
             Some("read") => {
                 let agent = agent()?;
                 let lines = args["lines"].as_u64().map(|lines| lines.clamp(1, 2000) as usize);
@@ -122,6 +122,35 @@ impl Tool for CodingAgentTool {
 }
 
 impl CodingAgentTool {
+    /// Starts the agent in a task of its own, since a host can take a while to get one ready and
+    /// a call Stop cuts off is dropped: a start stopped part way finishes, and its agent stops as
+    /// soon as it runs, so nothing is left running with no one following it.
+    pub(super) async fn start_unless_stopped(&self, call_id: &str, args: &Value, cancel: &CancellationToken) -> Result<String, String> {
+        let tool = CodingAgentTool {
+            app: self.app.clone(),
+            bot: self.bot.clone(),
+            chat_id: self.chat_id.clone(),
+            workdir: self.workdir.clone(),
+            trigger_message_id: self.trigger_message_id.clone(),
+        };
+        let (call_id, args) = (call_id.to_string(), args.clone());
+        let row = self.app.coding_agents.row(&self.chat_id, &call_id);
+        let mut starting = tokio::spawn(async move { tool.start(&call_id, &args).await });
+        tokio::select! {
+            started = &mut starting => started.map_err(|error| error.to_string())?,
+            _ = cancel.cancelled() => {
+                let (app, chat_id) = (self.app.clone(), self.chat_id.clone());
+                tokio::spawn(async move {
+                    let _ = starting.await;
+                    if let Some(agent) = row.and_then(|row| app.coding_agents.by_row(&chat_id, &row)) {
+                        super::stop(&app, &agent, "Stopped");
+                    }
+                });
+                Err("Stopped".into())
+            }
+        }
+    }
+
     async fn start(&self, call_id: &str, args: &Value) -> Result<String, String> {
         let app = &self.app;
         let prompt = args["prompt"].as_str().map(str::trim).filter(|prompt| !prompt.is_empty()).ok_or("start needs a prompt")?;

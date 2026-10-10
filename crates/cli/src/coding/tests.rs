@@ -284,7 +284,17 @@ async fn claude_code_works_in_a_worktree_asks_on_its_card_and_its_bot_hears_how_
 
     // The bot hears it with their references, once.
     let job = crate::runtime::agent_job(app, "chat", "b1", &row);
-    let cue = wake_cue(app, &job).unwrap();
+    // The news follows the outputs by a moment.
+    let cue = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Some(cue) = wake_cue(app, &job) {
+                return cue;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the bot hears it");
     assert!(cue.contains("is done") && cue.contains("Fixed it and opened") && cue.contains("fix-login.diff (message msg-"), "{cue}");
     assert!(wake_cue(app, &job).is_none(), "heard once");
     drop(held);
@@ -362,6 +372,30 @@ async fn codex_runs_read_only_commands_at_once_and_takes_a_message_while_it_work
     call(&tool, "call-3", json!({ "action": "stop", "id": agent.id() })).await.unwrap();
     assert_eq!(card(app, &row).state, "stopped");
     assert!(call(&tool, "call-4", json!({ "action": "read", "id": "agent-nope" })).await.unwrap_err().contains("no coding agent"));
+}
+
+#[tokio::test]
+async fn an_agent_whose_start_stop_cut_off_stops_as_soon_as_it_runs() {
+    let scratch = setup().await;
+    let app = &scratch.app;
+    let tool = tool(&scratch);
+    let row = start_row(app, "call-1");
+    // Stop lands while the start is under way, which the call does not wait out.
+    let stopped = CancellationToken::new();
+    stopped.cancel();
+    let result = tool.start_unless_stopped("call-1", &json!({ "action": "start", "agent": "claude", "folder": scratch.repo.to_str().unwrap(), "prompt": "Fix it" }), &stopped).await;
+    assert_eq!(result.unwrap_err(), "Stopped");
+    // Nothing is left running with no one following it.
+    let card = card_when(app, &row, |card| card.state == "stopped").await;
+    assert_eq!(card.outcome.as_deref(), Some("Stopped"));
+    let agent = app.coding_agents.of("chat", "b1").pop().unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while agent.is_running() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("its process went");
 }
 
 #[tokio::test]

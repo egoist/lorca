@@ -96,7 +96,7 @@ pub(crate) async fn spawn(program: &Path, args: &[String], cwd: &Path) -> Result
                     }
                 }
             }
-            tail.lines().map(str::trim).filter(|line| !line.is_empty()).next_back().map(|line| line.chars().take(300).collect::<String>())
+            tail.lines().map(str::trim).rfind(|line| !line.is_empty()).map(|line| line.chars().take(300).collect::<String>())
         });
         let (status, stopped) = tokio::select! {
             status = child.wait() => (status.ok(), false),

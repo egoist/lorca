@@ -795,7 +795,7 @@ async fn handle(app: &Arc<App>, agent: &Arc<Agent>, event: Event, generation: u6
             let previous = agent.transcript.lock().unwrap().screen.clone();
             let changed = previous.as_deref() != Some(screen.as_str());
             if changed {
-                if let Some(link) = screen.lines().filter_map(proof::pull_request).last() {
+                if let Some(link) = screen.lines().filter_map(proof::pull_request).next_back() {
                     agent.record.lock().unwrap().pull_request = Some(link);
                 }
                 // A spinner's timer ticking is not progress: only a change past its digits is.

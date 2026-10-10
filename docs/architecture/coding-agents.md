@@ -45,7 +45,7 @@ While an agent works, its run time counts toward the limits of the turn that gav
 
 ## Stop, quitting, and restarts
 
-Stop in the chat stops every coding agent there, as it does the bot's commands, here or on the Runner when the bot's turn is cancelled there; the card's Stop (`coding.stop`) reaches it from any Device. Deleting the chat or the bot stops and forgets its agents.
+Stop in the chat stops every coding agent there, as it does the bot's commands, here or on the Runner when the bot's turn is cancelled there ([Stop](stopping.md)). A start under way when the turn is stopped finishes in a task of its own (`start_unless_stopped`) and stops its agent as soon as it runs, so Stop never leaves one running unfollowed. The card's Stop (`coding.stop`) reaches it from any Device. Deleting the chat or the bot stops and forgets its agents.
 
 `agents/agents.json` (0600) keeps every agent's record: its chat, bot, card, kind, host and pane, session, folder, branch, state, and what it published. Quitting stops the agents Lorca runs, whose cards read "Stopped when Lorca quit" unless they were done, and leaves those in a pane running there. On the next start their handles still work: a done one starts again on a follow-up, and one in a pane that is still there is followed again. An ended agent is forgotten a month later. An update of the CLI waits while an agent Lorca runs is at work.
 
