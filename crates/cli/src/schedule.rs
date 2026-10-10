@@ -120,6 +120,16 @@ pub fn parse(text: &str) -> Result<Schedule, String> {
     }))
 }
 
+/// A schedule that comes round again, for what is shared or set up from the marketplace: a
+/// one-time date or a time around events belongs to one account's own day or calendar.
+pub fn parse_repeating(text: &str) -> Result<Schedule, String> {
+    let schedule = parse(text)?;
+    if !schedule.repeats() {
+        return Err("A shared routine repeats: use every 30m, every 2h, every 1d, or a cron expression.".into());
+    }
+    Ok(schedule)
+}
+
 /// `30m`, `2h`, `1d`, `30 minutes`, `2 hours`, `day`, `hour`, `hourly`, `daily`.
 fn parse_every(rest: &str) -> Result<Schedule, String> {
     let compact: String = rest.chars().filter(|c| !c.is_whitespace()).collect();
@@ -646,6 +656,9 @@ mod tests {
         assert!(parse("2d before events").is_err());
         assert!(parse("25h before events").unwrap_err().contains("within a day"));
         assert!(parse("sometime around events").is_err());
+        assert!(parse_repeating("15m before events").unwrap_err().contains("repeats"));
+        assert!(parse_repeating("once 2030-01-01 09:00").is_err());
+        assert!(parse_repeating("every 2h").is_ok());
         assert_eq!(parse("15m before events").unwrap().next_after(0, "UTC"), None, "the events place it");
         let offset = EventOffset { minutes: 15, after: false };
         assert_eq!(offset.due(10_000, 12_000), 9_100);

@@ -58,6 +58,20 @@ The script compares `X-Hub-Signature-256` with HMAC-SHA256 of the exact body in 
 
 An adapter for another service follows the same contract: verify the provider's signature and replay protection, pick a stable delivery id, sign the envelope.
 
+## A routine's webhook
+
+A routine can take any service's or script's request, with a URL and a key of its own: an event subscription whose `routine_id` is the routine and whose `event_types` is `["webhook"]`, and the gateway in webhook mode. `python3 scripts/event-gateway.py --route <route.json> --webhook-key-file <key-file> --lorca <path>` listens on `127.0.0.1:8984/hook` behind the user's HTTPS proxy and takes a body from a sender that holds the key, as `Authorization: Bearer <key>` or `X-Lorca-Key: <key>`, compared in constant time; the key has at least 32 bytes. The body is the event's `payload`: JSON as it came, any other text as a JSON string. Nothing signs a generic body, so an `Idempotency-Key` header makes a repeat one delivery, and without one every request is its own. Each routine's webhook is its own subscription, route, key, and gateway, so rotating one (`events reconnect`) leaves the others as they are. The run reads the body as untrusted data, like any event's.
+
+### No webhook inbox on the relay
+
+A webhook inbox on the relay, a public URL per routine whose requests the relay seals to the Runner, would spare the user the gateway and its HTTPS endpoint. The relay has none:
+
+- It would read every request in plaintext before sealing it. Services send webhooks unencrypted, so for that traffic the relay would stop being the store of ciphertext the [constraints](../../ARCHITECTURE.md#constraints) require: whoever runs it, lorca.app included, could read the pull requests, payments, and messages passing through.
+- A service's signature is checked with its secret. On the relay that is one more secret its operator holds; without it the relay keeps whatever anyone posts to a leaked URL until the Runner turns it away.
+- The relay takes only requests signed by an account's Devices. A public inbox is unauthenticated ingress with its own abuse, quota, and rate limits, and new relay endpoints that every client and relay must follow.
+
+The gateway keeps plaintext on a Device the user owns, and a tunnel or reverse proxy gives it the public URL. Following one pull request needs no webhook: a [watch](routine-triggers.md#watches) reads it through GitHub on the Runner.
+
 ## Signed delivery contract
 
 ```json

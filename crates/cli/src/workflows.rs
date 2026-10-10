@@ -110,7 +110,7 @@ impl Pack {
             if routine.name.trim().is_empty() || routine.name.chars().count() > crate::routines::MAX_NAME_CHARS || routine.prompt.trim().is_empty() {
                 return Err("A workflow routine needs a name and prompt.".into());
             }
-            crate::schedule::parse(&routine.schedule)?;
+            crate::schedule::parse_repeating(&routine.schedule)?;
         }
         Ok(pack)
     }
