@@ -140,10 +140,39 @@ enum Wire {
         var missedRunPolicy: String?
         var state: String?
         var health: Health?
+        var onceAt: Double?
+        var pullRequest: PullRequest?
+        var calendar: Calendar?
+
+        struct PullRequest: Decodable {
+            var repo: String
+            var number: Int
+            var title: String?
+            var url: String?
+        }
+
+        struct Calendar: Decodable {
+            struct Event: Decodable { var title: String? }
+            var account: String?
+            var matching: String?
+            var minutes: Int?
+            var after: Bool?
+            var nextEvent: Event?
+        }
 
         func toModel() -> Lorca.Routine {
-            Lorca.Routine(
-                id: id, botID: botId, name: name, prompt: prompt, schedule: schedule, scheduleText: Format.schedule(scheduleText ?? schedule),
+            let watch = pullRequest.map { RoutineWatch(repo: $0.repo, number: $0.number, title: $0.title ?? "", url: $0.url.flatMap(URL.init(string:))) }
+            let events = calendar.map {
+                RoutineCalendar(account: $0.account ?? "", matching: $0.matching, minutes: $0.minutes ?? 0, after: $0.after ?? false, nextEventTitle: $0.nextEvent?.title)
+            }
+            let zone = TimeZone(identifier: timezone ?? "") ?? .current
+            let words: String =
+                if let watch { L("Watches %@", watch.label) }
+                else if let events { Format.aroundEvents(minutes: events.minutes, after: events.after, matching: events.matching) }
+                else if let onceAt { Format.once(Date(timeIntervalSince1970: onceAt), in: zone) }
+                else { Format.schedule(scheduleText ?? schedule) }
+            return Lorca.Routine(
+                id: id, botID: botId, name: name, prompt: prompt, schedule: schedule, scheduleText: words,
                 isEnabled: isEnabled, pausedReason: pausedReason, lastRunAt: lastRunAt.map { Date(timeIntervalSince1970: $0) },
                 lastOutcome: lastOutcome, nextRunAt: nextRunAt.map { Date(timeIntervalSince1970: $0) }, isRunning: isRunning ?? false,
                 createdAt: Date(timeIntervalSince1970: createdAt), check: check,
@@ -154,7 +183,8 @@ enum Wire {
                     lastSuccessAt: health?.lastSuccessAt.map { Date(timeIntervalSince1970: $0) },
                     status: health?.status, connectionFailures: health?.connectionFailures ?? 0,
                     authenticationFailures: health?.authenticationFailures ?? 0, modelStatus: health?.model?.status,
-                    modelAuthenticationFailures: health?.model?.authenticationFailures ?? 0))
+                    modelAuthenticationFailures: health?.model?.authenticationFailures ?? 0),
+                onceAt: onceAt.map { Date(timeIntervalSince1970: $0) }, pullRequest: watch, calendar: events)
         }
     }
 
@@ -567,6 +597,7 @@ enum Wire {
         var draft: Draft?
         var note: String?
         var direct: Bool?
+        var secret: SecretAsk?
     }
 
     struct Draft: Decodable {
@@ -579,6 +610,37 @@ enum Wire {
         var body: String?
         var attachments: [File]?
         var reply: String?
+    }
+
+    struct SecretAsk: Decodable {
+        var use: String
+        var site: String?
+        var fields: [Field]
+
+        struct Field: Decodable {
+            var name: String
+            var label: String
+        }
+    }
+
+    struct SecretList: Decodable {
+        var secrets: [Secret]
+    }
+
+    struct Secret: Decodable {
+        var id: String
+        var botId: String
+        var name: String
+        var label: String
+        var use: String
+        var site: String?
+        var updatedAt: Double
+
+        func toModel() -> SavedSecret {
+            SavedSecret(
+                id: id, botID: botId, name: name, label: label, use: Lorca.SecretAsk.Use(rawValue: use) ?? .command, site: site,
+                updatedAt: Date(timeIntervalSince1970: updatedAt))
+        }
     }
 
     struct ReplyTo: Decodable {
@@ -788,7 +850,12 @@ extension Wire.Message {
                     pluginID: self.body.pluginId ?? "", pluginName: self.body.pluginName ?? "", tool: self.body.tool ?? "",
                     summary: self.body.summary ?? "", decision: PermissionRequest.Decision(rawValue: self.body.decision ?? "") ?? .pending,
                     link: self.body.link, code: self.body.code, reason: self.body.reason, rule: self.body.rule,
-                    command: self.body.command))
+                    command: self.body.command,
+                    secret: self.body.secret.map { ask in
+                        Lorca.SecretAsk(
+                            use: Lorca.SecretAsk.Use(rawValue: ask.use) ?? .command, site: ask.site,
+                            fields: ask.fields.map { Lorca.SecretAsk.Field(name: $0.name, label: $0.label) })
+                    }))
         case "draft":
             let draft = self.body.draft
             body = .draft(

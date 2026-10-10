@@ -3,15 +3,18 @@
 // online Runner's CLI running.
 
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-native";
 import { engine } from "../../../src/core/engine";
-import { deviceName, isRunner, providerLabel, type Device, type UpdateStatus } from "../../../src/core/model";
+import { deviceName, isRunner, providerLabel, type Device, type SavedSecret, type UpdateStatus } from "../../../src/core/model";
 import { deviceIsOnline, useStore } from "../../../src/core/store";
 import { t, useLanguage } from "../../../src/i18n";
 import { BotAvatar } from "../../../src/ui/Avatar";
 import { deviceSymbol } from "../../../src/ui/devices";
 import { Row, Section } from "../../../src/ui/forms";
+import { RowMenu } from "../../../src/ui/RowMenu";
+import { SecretSheet } from "../../../src/ui/SecretSheet";
+import { secretPlace } from "../../../src/ui/secrets";
 import { pluginStateWord } from "../../../src/ui/plugins";
 import { lastSeen } from "../../../src/ui/format";
 import { Symbol } from "../../../src/ui/Symbol";
@@ -147,6 +150,8 @@ export default function DeviceScreen() {
           </Section>
         )}
 
+        {runner && <SecretsSection device={device} />}
+
         <Section
           title={t("Machine")}
           footer={
@@ -188,6 +193,77 @@ export default function DeviceScreen() {
           </Section>
         )}
       </ScrollView>
+    </>
+  );
+}
+
+/// The secrets the Runner keeps for its bots, as the Mac's Secrets pane lists them: what each is,
+/// whose it is, and where it goes, never its value. A tap opens its menu: Replace…, which opens a
+/// field for the new value, or Delete…. Asked of the Runner through the relay when the screen
+/// opens; nothing shows while it has none.
+function SecretsSection({ device }: { device: Device }) {
+  useLanguage();
+  const bots = useStore((s) => s.bots);
+  const [secrets, setSecrets] = useState<SavedSecret[]>();
+  const [error, setError] = useState<string>();
+  const [replacing, setReplacing] = useState<SavedSecret>();
+  const loads = useRef(0);
+  const load = useCallback(() => {
+    const ask = ++loads.current;
+    engine
+      .secrets(device.id)
+      .then((list) => ask === loads.current && (setSecrets(list), setError(undefined)))
+      .catch((e: unknown) => ask === loads.current && setError(e instanceof Error ? e.message : String(e)));
+  }, [device.id]);
+  useEffect(load, [load]);
+
+  function confirmDelete(secret: SavedSecret, owner: string) {
+    alert(t("Delete “{name}”?", { name: secret.label }), t("{who} asks for it again the next time it needs it.", { who: owner }), [
+      { text: t("Cancel"), style: "cancel" },
+      {
+        text: t("Delete"),
+        style: "destructive",
+        onPress: () => {
+          engine
+            .deleteSecret(device.id, secret.id)
+            .then(load)
+            .catch((e: unknown) => alert(t("Couldn't delete “{name}”", { name: secret.label }), e instanceof Error ? e.message : String(e)));
+        },
+      },
+    ]);
+  }
+
+  if (!error && !secrets?.length) return null;
+  return (
+    <>
+      <Section title={t("Secrets")} footer={t("A bot asks in the chat when it needs a password or a key. What you save stays encrypted on its Runner, and the bot uses it by name without ever seeing it.")}>
+        {error && !secrets ? <Row title={error} /> : null}
+        {(secrets ?? []).map((secret) => {
+          const bot = bots.find((b) => b.id === secret.bot_id);
+          const owner = bot?.name ?? t("A deleted bot");
+          const place = secretPlace(secret);
+          return (
+            <RowMenu
+              key={secret.id}
+              actions={[
+                { id: "replace", title: t("Replace…"), symbol: "pencil" },
+                { id: "delete", title: t("Delete…"), symbol: "trash", destructive: true },
+              ]}
+              onChoose={(action) => (action === "replace" ? setReplacing(secret) : confirmDelete(secret, owner))}
+              label={`${secret.label}, ${owner} · ${place}`}
+            >
+              <Row title={secret.label} subtitle={`${owner} · ${place}`} leading={bot ? <BotAvatar bot={bot} size={32} /> : undefined} icon={bot ? undefined : "lock"} />
+            </RowMenu>
+          );
+        })}
+      </Section>
+      {replacing ? (
+        <SecretSheet
+          fields={[{ name: "value", label: t("New value") }]}
+          onDismiss={() => setReplacing(undefined)}
+          onSave={(values) => engine.replaceSecret(device.id, replacing.id, values.value).then(load)}
+        />
+      ) : null}
     </>
   );
 }

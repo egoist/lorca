@@ -200,6 +200,12 @@ export interface Routine {
   /** The script the Runner runs at each due time before the bot does; `next_run_at` is then the next check. */
   check?: string | null;
   created_at: number;
+  /** When a one-time routine runs; its Runner removes it after that run. */
+  once_at?: number | null;
+  /** The pull request a watch reads at each due time, until it merges or closes. */
+  pull_request?: { repo: string; number: number; title?: string; url?: string } | null;
+  /** The calendar events a routine around events runs before or after: so many minutes before they start, or after they end. */
+  calendar?: { account?: string; matching?: string | null; minutes?: number | null; after?: boolean | null; next_event?: { title?: string; start?: number; end?: number } | null } | null;
 }
 
 /// How a routine's checks and runs have gone, as its Runner records them.
@@ -280,7 +286,7 @@ export type Body =
   /// The bot asks before a plugin or shell action, or before installing a plugin (`tool` is `install`).
   /// `rule` is the rule Always allow adds, which Auto-review proposed for a shell command (`plugin_id` is `computer`);
   /// `command` is that command in full, where `summary` is its first line.
-  | { kind: "permission"; plugin_id: string; plugin_name: string; tool: string; summary: string; decision: "pending" | "allowed" | "always" | "denied" | "expired" | "dismissed" | "connected" | "failed"; reason?: string; rule?: string; command?: string; link?: string; code?: string }
+  | { kind: "permission"; plugin_id: string; plugin_name: string; tool: string; summary: string; decision: "pending" | "allowed" | "always" | "denied" | "expired" | "dismissed" | "connected" | "failed"; reason?: string; rule?: string; command?: string; link?: string; code?: string; secret?: SecretAsk }
   /// An email or Slack message the bot wrote in the chat, waiting for the user to send it: the
   /// chat's view of its review item, whose `version` Send and Discard name. `note` says why it
   /// was not sent or needs another look; `direct` is whether, with drafts off, the bot sends such
@@ -301,6 +307,27 @@ export interface MessageDraft {
   attachments?: { name: string; size: number }[];
   /** What it answers: an email's id or a Slack thread. */
   reply?: string;
+}
+
+/// What a secret request asks for (a permission card with `tool` `secret`): the values the bot
+/// names, and where its Runner uses them. The card takes the values; they go sealed to the Runner
+/// and never come back.
+export interface SecretAsk {
+  /** `browser` (typed into a sign-in page of `site` in the bot's Browser), `command` (an environment variable of its commands), or `plugin` (a setting of the card's plugin). */
+  use: "browser" | "command" | "plugin";
+  site?: string;
+  fields: { name: string; label: string }[];
+}
+
+/// A secret kept on a Runner for one of its bots, as Settings lists it: never its value.
+export interface SavedSecret {
+  id: string;
+  bot_id: string;
+  name: string;
+  label: string;
+  use: SecretAsk["use"];
+  site?: string;
+  updated_at: number;
 }
 
 /// Where a bash call's command stands: Auto-review checking it, the question it asks, the command

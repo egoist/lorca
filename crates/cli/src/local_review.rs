@@ -40,17 +40,26 @@ pub async fn before_tool_call(
     }
     let command = ctx.args.get("command").and_then(Value::as_str).unwrap_or("");
     let workdir = std::fs::canonicalize(workdir).unwrap_or_else(|_| workdir.to_path_buf());
+    // A command given saved secrets is always reviewed, knowing which: it holds credentials.
+    let secrets = crate::secrets::named_in(ctx.args);
     if app.auto_review().is_enabled
+        && secrets.is_empty()
         && (read_only(command) || stays_in_lorca(command, &workdir, &lorca_folders(app), dirs::home_dir().as_deref()))
     {
         return None;
     }
     let runner_id = app.this_device_id().unwrap_or_else(|| bot.runner_id.clone());
     let runner_name = app.device(&runner_id).map(|device| device.name).unwrap_or_else(|| "this Runner".into());
-    let description = format!(
+    let mut description = format!(
         "Run this shell command as the user on {runner_name}, with full filesystem, process, credential, and network access. Working directory: {}.",
         home_relative(&workdir)
     );
+    if !secrets.is_empty() {
+        description.push_str(&format!(
+            " It runs with the user's saved secrets {} in its environment, which the user gave this bot for its commands; sending one anywhere but the service it is for leaks it.",
+            secrets.iter().map(|name| format!("${name}")).collect::<Vec<_>>().join(", ")
+        ));
+    }
     // The reviewer judges the command, not the bot's own account of what it does.
     let mut args = ctx.args.clone();
     if let Some(fields) = args.as_object_mut() {

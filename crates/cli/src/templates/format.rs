@@ -228,7 +228,7 @@ impl Template {
                 return Err(format!("Routine {:?} is listed twice.", routine.name));
             }
             text_field("routine.prompt", &routine.prompt, 64 * 1024, true)?;
-            crate::schedule::parse(&routine.schedule)
+            crate::schedule::parse_repeating(&routine.schedule)
                 .map_err(|e| format!("Routine {:?}: {e}", routine.name))?;
             if let Some(timezone) = &routine.timezone {
                 text_field("routine.timezone", timezone, 100, true)?;

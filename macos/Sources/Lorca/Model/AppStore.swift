@@ -38,6 +38,7 @@ enum SettingsPane: String, CaseIterable {
     case autoReview = "auto-review"
     case sharedLinks = "shared-links"
     case plugins
+    case secrets
     case bots
     case device
     case advanced
@@ -48,7 +49,7 @@ enum SettingsPane: String, CaseIterable {
     var isDeviceScoped: Bool {
         switch self {
         case .general, .providers, .autoReview, .sharedLinks, .advanced: false
-        case .bots, .plugins, .device: true
+        case .bots, .plugins, .secrets, .device: true
         }
     }
 }

@@ -110,7 +110,7 @@ impl Pack {
             if routine.name.trim().is_empty() || routine.name.chars().count() > crate::routines::MAX_NAME_CHARS || routine.prompt.trim().is_empty() {
                 return Err("A workflow routine needs a name and prompt.".into());
             }
-            crate::schedule::parse(&routine.schedule)?;
+            crate::schedule::parse_repeating(&routine.schedule)?;
         }
         Ok(pack)
     }
@@ -566,6 +566,8 @@ fn materialize(app: &Arc<App>, setup: &mut Setup, answers: BTreeMap<String, Stri
                 last_outcome: None,
                 paused_reason: None,
                 check: None,
+                pull_request: None,
+                calendar: None,
                 created_at: now,
             };
             app.insert_routine(routine).map_err(|e| e.to_string())?

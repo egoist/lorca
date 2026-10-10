@@ -67,6 +67,7 @@ Identity 1──* Task         (durable work; an owning Bot, assigned Runner, an
 | Task               | Encrypted records, revisions, evidence references, and run claims | Account-encrypted task blobs; execution Jobs sealed to the assigned Runner |
 | Plugin             | Manifest, variables, secrets, tokens on the Runner        | Id and state inside the Runner's encrypted machine blob |
 | ProviderCredential | `credentials.json` on every Device                        | Inside the encrypted `credentials` blob                |
+| Secret             | A bot's, in `secrets.enc` on its Runner                   | Only as the sealed answer to its card                  |
 | Chat / Message     | Account/chat DEK                                          | Encrypted blobs                                        |
 | Job                | Any paired Device may create; the assigned Runner runs it | Sealed envelope to that Runner’s machine box key; deleted once run. A hard Stop sends `job_cancel` to the Device running it; the Runner seals how the turn ended (`job_result`) to the requesting Device, and lists the turn and what it is doing in its `machine` blob for every Device |
 
@@ -94,6 +95,7 @@ One doc per subject under `docs/architecture/`, each short enough to read in one
 | [Outputs and evidence](docs/architecture/outputs.md) | Bot-generated files and document links, immutable versions, task evidence references, encrypted transport and native previews |
 | [Stop](docs/architecture/stopping.md) | What Stop ends: the turn's model call and tool calls, a call that never returns, commands and browser calls, the work it handed off on any Runner; what keeps running |
 | [Terminal sessions](docs/architecture/terminal-sessions.md) | A bot's commands in terminals of their own: when a call returns, background commands, the command's card, answering and stopping, Running tasks |
+| [Secret requests](docs/architecture/secrets.md) | A password, key, or code a bot asks for on a card: sealed to its Runner, kept there, filled into Browser on its site or a command's environment by name, kept out of results and chats; managing a Runner's secrets |
 | [Browser sessions](docs/architecture/browser-sessions.md) | A bot's browser profiles on its Runner: their sign-ins, opening one in a window, taking the browser over and handing it back, screenshots in the chat, what works from another Device, the Profiles section |
 | [Codemode and Plugins](docs/architecture/plugins.md) | Scripts that call plugin tools, MCP plugins and their installs, sign-in, plugin calls at turn time |
 | [Integrations and named accounts](docs/architecture/integrations.md) | Slack, Gmail, Calendar, and Drive; stable account instances, OAuth on the Runner, account selection, access recovery, and source links |
@@ -103,7 +105,8 @@ One doc per subject under `docs/architecture/`, each short enough to read in one
 | [MCP servers](docs/architecture/mcp-servers.md) | The user's own MCP servers in a Runner's `mcp.json`: the file and other apps' spellings, sign-in when a server asks, the `mcp.*` methods and `lorca mcp`, the apps' MCP Servers section and server sheet |
 | [Bots and Memory](docs/architecture/bots.md) | The lead bot, DMs and groups, who answers, handoffs between bots, a bot's memory |
 | [Routines](docs/architecture/routines.md) | A bot's scheduled tasks: schedules and their timezones, runs and read-only checks, missed runs, health and recovery, and the apps' routine sheet and service row |
-| [Event triggers](docs/architecture/event-triggers.md) | Runner event subscriptions, gateways that sign and seal a service's events, the encrypted inbox, ordering and recovery |
+| [One-time routines, watches, and calendar events](docs/architecture/routine-triggers.md) | Routines that run once at a date and time, watch one pull request until it merges or closes, or run around a Calendar account's events; how the Runner reads GitHub and Calendar for them |
+| [Event triggers](docs/architecture/event-triggers.md) | Runner event subscriptions, gateways that sign and seal a service's events, a routine's webhook, why the relay holds no webhook inbox, the encrypted inbox, ordering and recovery |
 | [Durable tasks](docs/architecture/tasks.md) | Work that spans turns: owner, revisions, runs and recovery, evidence, the apps' Tasks section |
 | [Coordinator attention](docs/architecture/attention.md) | Consolidated reviews, blockers, commitments and changes, coordinator briefs, deduplication, encrypted records and notification preferences |
 | [Shared project context](docs/architecture/project-context.md) | Group briefs, goals, constraints, decisions, source freshness and corrections, encrypted reference assets, bounded bot discovery |

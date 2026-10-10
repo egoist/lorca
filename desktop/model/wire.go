@@ -164,11 +164,37 @@ type WireBody struct {
 	Draft         *DraftFields     `json:"draft"`
 	Note          *string          `json:"note"`
 	Direct        *bool            `json:"direct"`
+	Secret        *WireSecretAsk   `json:"secret"`
 	ReplyTo       *struct {
 		MessageID string     `json:"message_id"`
 		Author    WireAuthor `json:"author"`
 		Text      string     `json:"text"`
 	} `json:"reply_to"`
+}
+
+// WireSecretAsk is a secret request's ask, in the CLI's shape.
+type WireSecretAsk struct {
+	Use    string `json:"use"`
+	Site   string `json:"site"`
+	Fields []struct {
+		Name  string `json:"name"`
+		Label string `json:"label"`
+	} `json:"fields"`
+}
+
+// WireSecret is one of a Runner's secrets, as `secrets.list` answers it.
+type WireSecret struct {
+	ID        string  `json:"id"`
+	BotID     string  `json:"bot_id"`
+	Name      string  `json:"name"`
+	Label     string  `json:"label"`
+	Use       string  `json:"use"`
+	Site      string  `json:"site"`
+	UpdatedAt float64 `json:"updated_at"`
+}
+
+func (w WireSecret) model() SavedSecret {
+	return SavedSecret{ID: w.ID, BotID: w.BotID, Name: w.Name, Label: w.Label, Use: SecretUse(w.Use), Site: w.Site, UpdatedAt: w.UpdatedAt}
 }
 
 type WireMessage struct {
@@ -236,6 +262,23 @@ type WireRoutine struct {
 	MissedRunPolicy *string            `json:"missed_run_policy"`
 	State           *string            `json:"state"`
 	Health          *WireRoutineHealth `json:"health"`
+
+	OnceAt      *float64 `json:"once_at"`
+	PullRequest *struct {
+		Repo   string  `json:"repo"`
+		Number int     `json:"number"`
+		Title  *string `json:"title"`
+		URL    *string `json:"url"`
+	} `json:"pull_request"`
+	Calendar *struct {
+		Account   *string `json:"account"`
+		Matching  *string `json:"matching"`
+		Minutes   *int    `json:"minutes"`
+		After     *bool   `json:"after"`
+		NextEvent *struct {
+			Title *string `json:"title"`
+		} `json:"next_event"`
+	} `json:"calendar"`
 }
 
 type WireAutoReview struct {
@@ -753,6 +796,7 @@ func ToMessage(wire WireMessage) *Message {
 			Rule:       str(body.Rule),
 			HasRule:    body.Rule != nil,
 			Command:    str(body.Command),
+			Secret:     secretAsk(body.Secret),
 		}}
 	case "draft":
 		card := &DraftCard{ReviewID: str(body.ReviewID), State: str(body.State), PluginID: str(body.PluginID),
@@ -883,6 +927,27 @@ func ToRoutine(wire WireRoutine) *Routine {
 	}
 	if wire.NextRunAt != nil {
 		routine.NextRunAt = seconds(*wire.NextRunAt)
+	}
+	// A one-time routine, a watch, and a routine around events are worded here, in the app's
+	// language, from what the CLI says of them.
+	switch {
+	case wire.PullRequest != nil:
+		routine.PullRequest = &RoutineWatch{Repo: wire.PullRequest.Repo, Number: wire.PullRequest.Number, Title: str(wire.PullRequest.Title), URL: str(wire.PullRequest.URL)}
+		routine.ScheduleText = L("Watches %@", routine.PullRequest.Label())
+	case wire.Calendar != nil:
+		events := &RoutineCalendar{Account: str(wire.Calendar.Account), Matching: str(wire.Calendar.Matching)}
+		if wire.Calendar.Minutes != nil {
+			events.Minutes = *wire.Calendar.Minutes
+		}
+		events.After = flag(wire.Calendar.After)
+		if wire.Calendar.NextEvent != nil {
+			events.NextEventTitle = str(wire.Calendar.NextEvent.Title)
+		}
+		routine.Calendar = events
+		routine.ScheduleText = AroundEvents(events.Minutes, events.After, events.Matching)
+	case wire.OnceAt != nil:
+		routine.OnceAt = seconds(*wire.OnceAt)
+		routine.ScheduleText = Once(routine.OnceAt, routine.Timezone)
 	}
 	return routine
 }
@@ -1056,4 +1121,15 @@ func ToBotMemory(wire WireBotMemory) BotMemory {
 		memory.MaxLines, memory.MaxBytes = index.MaxLines, index.MaxBytes
 	}
 	return memory
+}
+
+func secretAsk(wire *WireSecretAsk) *SecretAsk {
+	if wire == nil {
+		return nil
+	}
+	ask := &SecretAsk{Use: SecretUse(wire.Use), Site: wire.Site}
+	for _, field := range wire.Fields {
+		ask.Fields = append(ask.Fields, SecretField{Name: field.Name, Label: field.Label})
+	}
+	return ask
 }

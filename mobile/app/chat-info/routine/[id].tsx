@@ -11,10 +11,11 @@ import { deviceName } from "../../../src/core/model";
 import { useBotMap, useBudget, useRoutines, useStore } from "../../../src/core/store";
 import { t, useLanguage } from "../../../src/i18n";
 import { alert } from "../../../src/ui/alert";
-import { daySeparator, scheduleText } from "../../../src/ui/format";
+import { daySeparator } from "../../../src/ui/format";
 import { Row, Section } from "../../../src/ui/forms";
 import { isStopped, limitsSummary, stoppedDetail, stoppedLabel } from "../../../src/ui/limits";
-import { checkIsFailing, lastCheck, lastRun, missedRuns, nextRunText, problemExplanation, problemNeedsUser, problemWord, routineProblem, timezoneLabel } from "../../../src/ui/routines";
+import { openLink } from "../../../src/ui/outputs";
+import { checkIsFailing, lastCheck, lastRun, looksFirst, missedRuns, nextRunText, problemExplanation, problemNeedsUser, problemWord, routineProblem, routineSchedule, routineSymbol, timezoneLabel } from "../../../src/ui/routines";
 import { Symbol } from "../../../src/ui/Symbol";
 import { accentColor, Font, usePalette } from "../../../src/ui/theme";
 
@@ -43,7 +44,7 @@ export default function RoutineScreen() {
       : problem
         ? { title: problemWord(problem), note: problemExplanation(problem, bot.name, runnerName), symbol: problemNeedsUser(problem) ? "exclamationmark.circle.fill" : "clock", color: problemNeedsUser(problem) ? orange : p.secondaryLabel }
         : routine.is_enabled
-          ? { title: t("On"), note: undefined, symbol: "clock", color: p.green }
+          ? { title: t("On"), note: undefined, symbol: routineSymbol(routine), color: p.green }
           : { title: routine.paused_reason === "away" ? t("Paused while you were away") : t("Paused"), note: undefined, symbol: "pause.circle", color: p.secondaryLabel };
   // A run needs its Runner online, and a routine paused by failed sign-ins needs Resume.
   const canRun = !routine.is_running && routine.state !== "waiting_for_runner" && routine.paused_reason !== "authentication";
@@ -83,10 +84,21 @@ export default function RoutineScreen() {
           />
         </Section>
 
-        <Section title={t("Schedule")} footer={missed.note}>
-          <Row title={scheduleText(routine.schedule_text)} detail={timezoneLabel(routine)} />
-          <Row title={routine.check ? t("Next check") : t("Next run")} detail={nextRunText(routine) ?? "—"} />
-          <Row title={t("Missed runs")} detail={missed.value} />
+        {/* A one-time routine runs once its Runner is back, whatever the policy. */}
+        <Section title={t("Schedule")} footer={routine.once_at ? undefined : missed.note}>
+          <Row title={routineSchedule(routine)} titleLines={2} detail={timezoneLabel(routine)} />
+          {/* The pull request opens on GitHub; the calendar names its account. */}
+          {routine.pull_request ? (
+            <Row
+              title={t("Pull request")}
+              detail={routine.pull_request.title || `${routine.pull_request.repo}#${routine.pull_request.number}`}
+              action={false}
+              onPress={routine.pull_request.url ? () => openLink(routine.pull_request!.url!) : undefined}
+            />
+          ) : null}
+          {routine.calendar?.account ? <Row title={t("Calendar")} detail={routine.calendar.account} /> : null}
+          <Row title={looksFirst(routine) ? t("Next check") : t("Next run")} subtitle={routine.calendar?.next_event?.title} detail={nextRunText(routine) ?? "—"} />
+          {routine.once_at ? null : <Row title={t("Missed runs")} detail={missed.value} />}
           {/* The time on the right and how it went under the title, so neither is cut short. */}
           {checked ? <Row title={t("Last check")} subtitle={checked.outcome} detail={checked.when} /> : null}
           {/* Only a failing check has a success to tell apart from it. */}

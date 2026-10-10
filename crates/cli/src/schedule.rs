@@ -1,6 +1,8 @@
-//! When a routine runs: an interval (`every 30m`, `every 2h`, `every 1d`) or a five-field cron
-//! expression (`0 9 * * 1-5`) read in the routine's IANA timezone. `describe` says it in words
-//! the way Grok Bot's routine panel does; `next_after` finds the next firing.
+//! When a routine runs: an interval (`every 30m`, `every 2h`, `every 1d`), a five-field cron
+//! expression (`0 9 * * 1-5`), or one date and time (`once 2026-10-12 09:00`), read in the
+//! routine's IANA timezone; or a time before or after calendar events (`15m before events`),
+//! which the events' own times place. `describe` says it in words the way Grok Bot's routine
+//! panel does; `next_after` finds the next firing.
 
 use chrono::{Datelike, TimeZone, Timelike};
 use chrono_tz::Tz;
@@ -24,6 +26,31 @@ pub enum Schedule {
     /// Every so many seconds, counted from the last run (or from when the routine was armed).
     Every(i64),
     Cron(Cron),
+    /// One date and time on the routine's clock: the routine runs once and is done.
+    Once(chrono::NaiveDateTime),
+    /// So many minutes before calendar events start, or after they end; the events place it.
+    Events(EventOffset),
+}
+
+/// Where a run falls against a calendar event: `minutes` before it starts, or after it ends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EventOffset {
+    pub minutes: u32,
+    pub after: bool,
+}
+
+impl EventOffset {
+    /// The longest an event schedule reaches before or after its event.
+    pub const MAX_MINUTES: u32 = 24 * 60;
+
+    /// When the run for an event that starts at `start` and ends at `end` is due.
+    pub fn due(&self, start: i64, end: i64) -> i64 {
+        if self.after {
+            end + self.minutes as i64 * 60
+        } else {
+            start - self.minutes as i64 * 60
+        }
+    }
 }
 
 /// A five-field cron expression as bit sets.
@@ -56,6 +83,12 @@ pub fn parse(text: &str) -> Result<Schedule, String> {
     if let Some(rest) = lowered.strip_prefix("every ").or_else(|| lowered.strip_prefix('@')) {
         return parse_every(rest.trim());
     }
+    if let Some(rest) = lowered.strip_prefix("once ") {
+        return parse_once(rest.trim());
+    }
+    if lowered.contains("event") {
+        return parse_events(&lowered);
+    }
     let fields: Vec<&str> = text.split_whitespace().collect();
     if fields.len() != 5 {
         return Err(format!(
@@ -87,6 +120,16 @@ pub fn parse(text: &str) -> Result<Schedule, String> {
     }))
 }
 
+/// A schedule that comes round again, for what is shared or set up from the marketplace: a
+/// one-time date or a time around events belongs to one account's own day or calendar.
+pub fn parse_repeating(text: &str) -> Result<Schedule, String> {
+    let schedule = parse(text)?;
+    if !schedule.repeats() {
+        return Err("A shared routine repeats: use every 30m, every 2h, every 1d, or a cron expression.".into());
+    }
+    Ok(schedule)
+}
+
 /// `30m`, `2h`, `1d`, `30 minutes`, `2 hours`, `day`, `hour`, `hourly`, `daily`.
 fn parse_every(rest: &str) -> Result<Schedule, String> {
     let compact: String = rest.chars().filter(|c| !c.is_whitespace()).collect();
@@ -115,6 +158,62 @@ fn parse_every(rest: &str) -> Result<Schedule, String> {
         return Err("That interval is longer than a year. Use a cron expression for a yearly date.".into());
     }
     Ok(Schedule::Every(secs))
+}
+
+/// `2026-10-12 09:00`, `2026-10-12T09:00`, `2026-10-12 9:00 am`: a date and a time of day.
+fn parse_once(rest: &str) -> Result<Schedule, String> {
+    let problem = || format!("Could not read the time {rest:?}. Give a date and a 24-hour time, like once 2026-10-12 09:00, on the routine's clock.");
+    // The date has no letters, so a `t` can only stand between it and the time.
+    let rest = rest.trim_start_matches("at ").replace(" at ", " ").replacen('t', " ", 1).replace("am", " am").replace("pm", " pm");
+    let mut parts = rest.split_whitespace();
+    let date = parts.next().and_then(|date| chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok()).ok_or_else(problem)?;
+    let clock = parts.next().ok_or_else(problem)?;
+    let suffix = parts.next();
+    if parts.next().is_some() {
+        return Err(problem());
+    }
+    let (hour, minute) = clock.split_once(':').and_then(|(h, m)| Some((h.parse::<u32>().ok()?, m.get(..2)?.parse::<u32>().ok()?))).ok_or_else(problem)?;
+    let hour = match suffix {
+        None => hour,
+        Some("am") if (1..=12).contains(&hour) => hour % 12,
+        Some("pm") if (1..=12).contains(&hour) => hour % 12 + 12,
+        Some(_) => return Err(problem()),
+    };
+    let time = chrono::NaiveTime::from_hms_opt(hour, minute, 0).ok_or_else(problem)?;
+    Ok(Schedule::Once(date.and_time(time)))
+}
+
+/// `15m before events`, `1h before events`, `at events`, `10m after events`, `when events end`.
+fn parse_events(text: &str) -> Result<Schedule, String> {
+    let problem = || format!("Could not read {text:?}. Use 15m before events, at events, or 10m after events.");
+    let words: String = text.replace("each ", "").replace("the ", "").replace("every ", "").replace("events", "event").split_whitespace().collect::<Vec<_>>().join(" ");
+    let words = words.trim_end_matches(" ends").trim_end_matches(" end").trim_end_matches(" starts").trim_end_matches(" start");
+    let (amount, after) = match words {
+        "at event" | "when event" | "at start of event" | "before event" => ("", false),
+        "at end of event" | "after event" => ("", true),
+        _ => match words.strip_suffix(" before event").map(|amount| (amount, false)).or_else(|| words.strip_suffix(" after event").map(|amount| (amount, true))) {
+            Some(found) => found,
+            None => return Err(problem()),
+        },
+    };
+    // "when events end" lost its last word above.
+    let after = after || (words == "when event" && text.contains(" end"));
+    let minutes = if amount.is_empty() {
+        0
+    } else {
+        let compact: String = amount.chars().filter(|c| !c.is_whitespace()).collect();
+        let digits: String = compact.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let value: u32 = digits.parse().map_err(|_| problem())?;
+        match &compact[digits.len()..] {
+            "m" | "min" | "mins" | "minute" | "minutes" => value,
+            "h" | "hr" | "hrs" | "hour" | "hours" => value.checked_mul(60).ok_or_else(problem)?,
+            _ => return Err(problem()),
+        }
+    };
+    if minutes > EventOffset::MAX_MINUTES {
+        return Err("Keep a time around events within a day of them.".into());
+    }
+    Ok(Schedule::Events(EventOffset { minutes, after }))
 }
 
 /// One cron field into a bit set: `*`, `*/n`, `a`, `a-b`, `a-b/n`, names, and lists of those.
@@ -175,7 +274,26 @@ impl Schedule {
         match self {
             Schedule::Every(secs) => after.checked_add(*secs),
             Schedule::Cron(cron) => cron.next_after(after, zone),
+            Schedule::Once(_) => self.once_at(zone).filter(|at| *at > after),
+            Schedule::Events(_) => None,
         }
+    }
+
+    /// The instant of a one-time schedule on `zone`'s clock. A time that daylight saving skips
+    /// runs at the same clock time an hour later; one it repeats, at its earlier instant.
+    fn once_at(&self, zone: Tz) -> Option<i64> {
+        let Schedule::Once(local) = self else { return None };
+        zone.from_local_datetime(local).earliest().or_else(|| zone.from_local_datetime(&(*local + chrono::Duration::hours(1))).earliest()).map(|at| at.timestamp())
+    }
+
+    /// The instant a one-time schedule runs, read in `zone`.
+    pub fn once_instant(&self, zone: &str) -> Option<i64> {
+        self.once_at(timezone(zone).ok()?)
+    }
+
+    /// An interval or a cron expression: a schedule that comes round again.
+    pub fn repeats(&self) -> bool {
+        matches!(self, Schedule::Every(_) | Schedule::Cron(_))
     }
 
     /// The schedule in words: "Every 15 minutes", "Weekdays at 9:00 AM".
@@ -183,6 +301,8 @@ impl Schedule {
         match self {
             Schedule::Every(secs) => describe_interval(*secs),
             Schedule::Cron(cron) => cron.describe(),
+            Schedule::Once(at) => format!("Once on {} at {}", at.format("%Y-%m-%d"), clock(at.hour(), at.minute())),
+            Schedule::Events(offset) => describe_events(*offset, None),
         }
     }
 
@@ -199,7 +319,30 @@ impl Schedule {
                 }
             }
             Schedule::Cron(cron) => cron.normalized.clone(),
+            Schedule::Once(at) => format!("once {}", at.format("%Y-%m-%d %H:%M")),
+            Schedule::Events(EventOffset { minutes, after }) => format!("{minutes}m {} events", if *after { "after" } else { "before" }),
         }
+    }
+}
+
+/// A time around calendar events in words, naming the events that match when only some do:
+/// "15 minutes before each event", "When events matching “Customer” end".
+pub fn describe_events(offset: EventOffset, matching: Option<&str>) -> String {
+    let span = |minutes: u32| match minutes {
+        m if m % 60 == 0 && m / 60 == 1 => "1 hour".to_string(),
+        m if m % 60 == 0 => format!("{} hours", m / 60),
+        1 => "1 minute".to_string(),
+        m => format!("{m} minutes"),
+    };
+    match (matching, offset.after, offset.minutes) {
+        (None, false, 0) => "When each event starts".into(),
+        (None, true, 0) => "When each event ends".into(),
+        (None, false, m) => format!("{} before each event", span(m)),
+        (None, true, m) => format!("{} after each event ends", span(m)),
+        (Some(words), false, 0) => format!("When events matching “{words}” start"),
+        (Some(words), true, 0) => format!("When events matching “{words}” end"),
+        (Some(words), false, m) => format!("{} before events matching “{words}”", span(m)),
+        (Some(words), true, m) => format!("{} after events matching “{words}” end", span(m)),
     }
 }
 
@@ -473,6 +616,53 @@ mod tests {
         assert_eq!(fold.next_after(first - 60, zone), Some(first));
         assert_eq!(fold.next_after(first, zone), Some(utc("2026-11-02T06:30:00Z")), "the repeated 01:30 never fires again");
         assert_eq!(fold.next_after(utc("2026-11-01T06:00:00Z"), zone), Some(utc("2026-11-02T06:30:00Z")), "restarting inside the fold does not repeat it");
+    }
+
+    #[test]
+    fn a_one_time_schedule_is_one_instant_on_the_routines_clock() {
+        let once = parse("once 2026-10-12 09:00").unwrap();
+        assert_eq!(once.canonical(), "once 2026-10-12 09:00");
+        assert_eq!(once.describe(), "Once on 2026-10-12 at 9:00 AM");
+        assert!(!once.repeats());
+        for spelling in ["Once 2026-10-12T09:00", "once 2026-10-12 9:00 am", "once 2026-10-12 at 9:00", "once 2026-10-12 9:00am"] {
+            assert_eq!(parse(spelling).unwrap(), once, "{spelling}");
+        }
+        assert_eq!(parse("once 2026-10-12 9:30 pm").unwrap().canonical(), "once 2026-10-12 21:30");
+        assert!(parse("once tomorrow").is_err());
+        assert!(parse("once 2026-10-12").is_err());
+        assert!(parse("once 2026-10-12 25:00").is_err());
+        let at = utc("2026-10-12T13:00:00Z");
+        assert_eq!(once.next_after(at - 1, "America/New_York"), Some(at));
+        assert_eq!(once.next_after(at, "America/New_York"), None, "it does not come round again");
+        assert_eq!(once.once_instant("Asia/Singapore"), Some(utc("2026-10-12T01:00:00Z")));
+        // 02:30 does not exist on March 8 in New York: it runs at 03:30.
+        assert_eq!(parse("once 2026-03-08 02:30").unwrap().once_instant("America/New_York"), Some(utc("2026-03-08T07:30:00Z")));
+    }
+
+    #[test]
+    fn times_around_events_read_back_in_words() {
+        let words = |text: &str| parse(text).unwrap().describe();
+        assert_eq!(parse("15m before events").unwrap(), Schedule::Events(EventOffset { minutes: 15, after: false }));
+        assert_eq!(parse("1h before events").unwrap().canonical(), "60m before events");
+        assert_eq!(parse("at events").unwrap().canonical(), "0m before events");
+        assert_eq!(parse("when events end").unwrap().canonical(), "0m after events");
+        assert_eq!(parse("10 minutes after each event").unwrap().canonical(), "10m after events");
+        assert_eq!(words("15m before events"), "15 minutes before each event");
+        assert_eq!(words("2h before events"), "2 hours before each event");
+        assert_eq!(words("at events"), "When each event starts");
+        assert_eq!(words("10m after events"), "10 minutes after each event ends");
+        assert_eq!(describe_events(EventOffset { minutes: 15, after: false }, Some("Customer")), "15 minutes before events matching “Customer”");
+        assert_eq!(describe_events(EventOffset { minutes: 0, after: true }, Some("Customer")), "When events matching “Customer” end");
+        assert!(parse("2d before events").is_err());
+        assert!(parse("25h before events").unwrap_err().contains("within a day"));
+        assert!(parse("sometime around events").is_err());
+        assert!(parse_repeating("15m before events").unwrap_err().contains("repeats"));
+        assert!(parse_repeating("once 2030-01-01 09:00").is_err());
+        assert!(parse_repeating("every 2h").is_ok());
+        assert_eq!(parse("15m before events").unwrap().next_after(0, "UTC"), None, "the events place it");
+        let offset = EventOffset { minutes: 15, after: false };
+        assert_eq!(offset.due(10_000, 12_000), 9_100);
+        assert_eq!(EventOffset { minutes: 10, after: true }.due(10_000, 12_000), 12_600);
     }
 
     #[test]

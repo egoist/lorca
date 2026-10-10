@@ -484,7 +484,7 @@ private final class TextRow: NSView {
 }
 
 /// A click anywhere on a row, for rows that open a link.
-private final class ClickHandler: NSClickGestureRecognizer {
+final class ClickHandler: NSClickGestureRecognizer {
     private let handler: () -> Void
 
     init(handler: @escaping () -> Void) {
