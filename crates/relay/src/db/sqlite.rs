@@ -784,7 +784,7 @@ fn mail_address(connection: &Connection, identity_pubkey: &str) -> rusqlite::Res
         .optional()
 }
 
-pub fn claim_mail_address(connection: &mut Connection, identity_pubkey: &str, name: &str) -> ApiResult<MailAddress> {
+pub fn claim_mail_address(connection: &mut Connection, identity_pubkey: &str, name: &str, max_names: i64) -> ApiResult<MailAddress> {
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let held: Option<(String, i64, Option<i64>)> = tx
         .prepare_cached("SELECT identity_pubkey, released, suspended_until FROM mail_addresses WHERE name = ?1")?
@@ -793,7 +793,13 @@ pub fn claim_mail_address(connection: &mut Connection, identity_pubkey: &str, na
     match held {
         Some((holder, _, _)) if holder != identity_pubkey => return Err(ApiError::conflict("That name is taken")),
         Some((_, 0, suspended_until)) => return Ok(MailAddress { name: name.into(), suspended_until }),
-        _ => {}
+        Some(_) => {}
+        None => {
+            let held: i64 = tx.prepare_cached("SELECT COUNT(*) FROM mail_addresses WHERE identity_pubkey = ?1")?.query_row(params![identity_pubkey], |row| row.get(0))?;
+            if held >= max_names {
+                return Err(ApiError::coded(axum::http::StatusCode::CONFLICT, "This account has taken as many names as it may", "limit"));
+            }
+        }
     }
     // A suspension stays with the account whichever name it takes next.
     let suspended_until: Option<i64> = tx
@@ -1031,9 +1037,9 @@ impl Store for Sqlite {
         self.read(move |db| Ok(mail_address(db, &identity_pubkey)?)).await
     }
 
-    async fn claim_mail_address(&self, identity_pubkey: &str, name: &str) -> ApiResult<MailAddress> {
+    async fn claim_mail_address(&self, identity_pubkey: &str, name: &str, max_names: i64) -> ApiResult<MailAddress> {
         let (identity_pubkey, name) = (identity_pubkey.to_string(), name.to_string());
-        self.write(move |db| claim_mail_address(db, &identity_pubkey, &name)).await
+        self.write(move |db| claim_mail_address(db, &identity_pubkey, &name, max_names)).await
     }
 
     async fn release_mail_address(&self, identity_pubkey: &str) -> ApiResult<bool> {

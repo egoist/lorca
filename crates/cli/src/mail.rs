@@ -239,6 +239,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             match app.relay.mail(reqwest::Method::POST, &url, &token, "/v1/mail/address", Some(&body)).await {
                 Ok(_) => {}
                 Err(error) if matches!(error.code.as_deref(), Some("invalid" | "reserved")) => return Ok(json!({ "problem": error.code })),
+                Err(error) if error.code.as_deref() == Some("limit") => return Err("This account has changed its address as many times as it may.".into()),
                 Err(error) if error.status == Some(409) => return Ok(json!({ "problem": "taken" })),
                 Err(error) if error.status == Some(404) => return Err("This relay has no email".into()),
                 Err(error) => return Err(error.message),

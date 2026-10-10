@@ -21,6 +21,9 @@ use crate::AppState;
 
 /// A Device's first days on the relay send at most `new_daily_sends`.
 const NEW_ACCOUNT_SECS: i64 = 7 * 86_400;
+/// Names one account may ever take. A name it gave up stays its own, so changing the address
+/// over and over would hold names nobody else could have.
+const MAX_NAMES: i64 = 10;
 /// How long an address that kept bouncing stays suspended.
 const SUSPENSION_SECS: i64 = 7 * 86_400;
 /// Names nobody may pick: the mailboxes mail standards and abuse desks expect, and the
@@ -135,14 +138,14 @@ async fn claim(State(state): State<AppState>, auth: Auth, Json(body): Json<Claim
     match body.name.as_deref() {
         Some(name) => {
             let name = check_name(name)?;
-            state.db.claim_mail_address(&auth.identity_pubkey, &name).await?;
+            state.db.claim_mail_address(&auth.identity_pubkey, &name, MAX_NAMES).await?;
         }
         None => {
             let mut attempts = 0;
             loop {
-                match state.db.claim_mail_address(&auth.identity_pubkey, &random_name()).await {
+                match state.db.claim_mail_address(&auth.identity_pubkey, &random_name(), MAX_NAMES).await {
                     Ok(_) => break,
-                    Err(error) if error.status() == StatusCode::CONFLICT && attempts < 8 => attempts += 1,
+                    Err(error) if error.status() == StatusCode::CONFLICT && error.code().is_none() && attempts < 8 => attempts += 1,
                     Err(error) => return Err(error),
                 }
             }

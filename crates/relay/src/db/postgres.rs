@@ -854,7 +854,7 @@ impl Store for Postgres {
         Ok(row.map(|row| MailAddress { name: row.get(0), suspended_until: row.get(1) }))
     }
 
-    async fn claim_mail_address(&self, identity_pubkey: &str, name: &str) -> ApiResult<MailAddress> {
+    async fn claim_mail_address(&self, identity_pubkey: &str, name: &str, max_names: i64) -> ApiResult<MailAddress> {
         let mut client = self.client().await?;
         let tx = client.transaction().await?;
         lock_identity(&tx, identity_pubkey).await?;
@@ -867,6 +867,11 @@ impl Store for Postgres {
             }
             if row.get::<_, i64>(1) == 0 {
                 return Ok(MailAddress { name: name.into(), suspended_until: row.get(2) });
+            }
+        } else {
+            let held: i64 = tx.query_one("SELECT COUNT(*) FROM mail_addresses WHERE identity_pubkey = $1", &[&identity_pubkey]).await?.get(0);
+            if held >= max_names {
+                return Err(ApiError::coded(axum::http::StatusCode::CONFLICT, "This account has taken as many names as it may", "limit"));
             }
         }
         // A suspension stays with the account whichever name it takes next.

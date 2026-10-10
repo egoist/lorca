@@ -452,20 +452,26 @@ async fn a_mail_address_is_one_per_identity_and_never_passes_to_another() {
         let (alice, bob) = (name("alice"), name("bob"));
         let (first, second) = (name("a").to_lowercase(), name("b").to_lowercase());
         assert_eq!(ok!(store.mail_address(&alice)), None);
-        ok!(store.claim_mail_address(&alice, &first));
+        ok!(store.claim_mail_address(&alice, &first, 10));
         assert_eq!(ok!(store.mail_address(&alice)).unwrap().name, first, "{}", store.describe());
         // The same name again changes nothing; another identity cannot have it.
-        ok!(store.claim_mail_address(&alice, &first));
-        let taken = store.claim_mail_address(&bob, &first).await.unwrap_err();
+        ok!(store.claim_mail_address(&alice, &first, 10));
+        let taken = store.claim_mail_address(&bob, &first, 10).await.unwrap_err();
         assert_eq!(taken.status(), axum::http::StatusCode::CONFLICT);
 
         // A new name gives the old one up, and the old one stays Alice's alone.
-        ok!(store.claim_mail_address(&alice, &second));
+        ok!(store.claim_mail_address(&alice, &second, 10));
         assert_eq!(ok!(store.mail_address(&alice)).unwrap().name, second);
         assert!(ok!(store.mail_route(&first)).is_none(), "a released name routes nowhere");
-        assert!(store.claim_mail_address(&bob, &first).await.is_err(), "a released name is not handed to anyone else");
-        ok!(store.claim_mail_address(&alice, &first));
+        assert!(store.claim_mail_address(&bob, &first, 10).await.is_err(), "a released name is not handed to anyone else");
+        ok!(store.claim_mail_address(&alice, &first, 10));
         assert_eq!(ok!(store.mail_address(&alice)).unwrap().name, first, "its holder may take it back");
+
+        // Names an account took count for good: it may not hold more than it is allowed.
+        let third = name("c").to_lowercase();
+        let limited = store.claim_mail_address(&alice, &third, 2).await.unwrap_err();
+        assert_eq!(limited.code(), Some("limit"), "{}", store.describe());
+        ok!(store.claim_mail_address(&alice, &second, 2));
 
         assert!(ok!(store.release_mail_address(&alice)));
         assert!(!ok!(store.release_mail_address(&alice)));
@@ -483,7 +489,7 @@ async fn mail_routes_to_the_identitys_paired_runners() {
         for machine in [&mac, &linux, &phone] {
             ok!(store.register_identity(&who, "content", machine, &format!("box-{machine}"), "attestation"));
         }
-        ok!(store.claim_mail_address(&who, &address));
+        ok!(store.claim_mail_address(&who, &address, 10));
         assert!(ok!(store.mail_route(&address)).unwrap().machines.is_empty());
         ok!(store.set_mail_runner(&who, &mac));
         ok!(store.set_mail_runner(&who, &linux));
@@ -503,7 +509,7 @@ async fn mail_routes_to_the_identitys_paired_runners() {
         // A deleted identity's address bounces, and its name stays taken.
         ok!(store.delete_identity(&who, true));
         assert!(ok!(store.mail_route(&address)).is_none());
-        assert!(store.claim_mail_address(&name("other"), &address).await.is_err());
+        assert!(store.claim_mail_address(&name("other"), &address, 10).await.is_err());
     }
 }
 
@@ -513,7 +519,7 @@ async fn bounces_suspend_an_address_and_the_suspension_follows_a_new_name() {
         let who = name("identity");
         ok!(store.register_identity(&who, "content", &name("machine"), "box", "attestation"));
         let (first, second) = (name("s").to_lowercase(), name("t").to_lowercase());
-        ok!(store.claim_mail_address(&who, &first));
+        ok!(store.claim_mail_address(&who, &first, 10));
         let day = now() / 86_400;
         let until = now() + 3600;
         assert!(!ok!(store.record_mail_send(&who, day, 0, 3, until)));
@@ -527,7 +533,7 @@ async fn bounces_suspend_an_address_and_the_suspension_follows_a_new_name() {
         assert!(ok!(store.mail_route(&first)).unwrap().address.is_suspended());
 
         ok!(store.release_mail_address(&who));
-        ok!(store.claim_mail_address(&who, &second));
+        ok!(store.claim_mail_address(&who, &second, 10));
         assert!(ok!(store.mail_address(&who)).unwrap().is_suspended(), "a new name keeps the suspension");
     }
 }

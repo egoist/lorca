@@ -372,8 +372,9 @@ pub trait Store: Send + Sync {
     /// The identity's address, if it holds one.
     async fn mail_address(&self, identity_pubkey: &str) -> ApiResult<Option<MailAddress>>;
     /// Gives the identity `name`, giving up the one it held. The same name again changes
-    /// nothing. `409` when another identity holds or held it.
-    async fn claim_mail_address(&self, identity_pubkey: &str, name: &str) -> ApiResult<MailAddress>;
+    /// nothing. `409` when another identity holds or held it, and `409` with the code `limit`
+    /// when a name it never held would make more than `max_names`.
+    async fn claim_mail_address(&self, identity_pubkey: &str, name: &str, max_names: i64) -> ApiResult<MailAddress>;
     /// False when the identity held no address.
     async fn release_mail_address(&self, identity_pubkey: &str) -> ApiResult<bool>;
     /// The machine takes the identity's mail: a Runner.

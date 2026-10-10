@@ -60,7 +60,6 @@ impl ApiError {
     pub fn status(&self) -> StatusCode {
         self.status
     }
-    #[cfg(test)]
     pub fn code(&self) -> Option<&'static str> {
         self.code
     }
