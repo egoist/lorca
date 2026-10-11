@@ -144,13 +144,14 @@ enum MainMenu {
         add(menu, L("Add Bot…"), #selector(RootSplitViewController.addBotToChat(_:)), "b", modifiers: [.command, .option])
         add(menu, L("Rename Chat…"), #selector(RootSplitViewController.renameChat(_:)), "r")
         add(menu, L("Pin Chat"), #selector(RootSplitViewController.togglePinChat(_:)), "p")
+        let submenus = ChatSubmenus.shared.makeSubmenus()
         // Mute Chat shows for a chat with its alerts on, Unmute Chat for a muted one.
         let mute = NSMenuItem(title: L("Mute Chat"), action: nil, keyEquivalent: "")
-        mute.submenu = ChatSubmenus.shared.mute
+        mute.submenu = submenus.mute
         menu.addItem(mute)
         add(menu, L("Unmute Chat"), #selector(RootSplitViewController.unmuteChat(_:)))
         let sections = NSMenuItem(title: L("Move to Section"), action: nil, keyEquivalent: "")
-        sections.submenu = ChatSubmenus.shared.sections
+        sections.submenu = submenus.sections
         menu.addItem(sections)
         add(menu, L("Hide Chat"), #selector(RootSplitViewController.toggleHideChat(_:)))
         add(menu, L("New Skill…"), #selector(RootSplitViewController.newSkill(_:)))

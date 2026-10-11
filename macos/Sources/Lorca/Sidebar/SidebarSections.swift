@@ -71,13 +71,17 @@ enum ChatMenus {
 final class ChatSubmenus: NSObject, NSMenuDelegate {
     static let shared = ChatSubmenus()
 
-    let mute = NSMenu(title: L("Mute Chat"))
-    let sections = NSMenu(title: L("Move to Section"))
+    private(set) var mute = NSMenu()
+    private(set) var sections = NSMenu()
 
-    override init() {
-        super.init()
+    /// Each menu bar build takes new submenus: a menu belongs to one item at a time, and a
+    /// language switch builds the menu bar again while the old one still holds the last pair.
+    func makeSubmenus() -> (mute: NSMenu, sections: NSMenu) {
+        mute = NSMenu(title: L("Mute Chat"))
+        sections = NSMenu(title: L("Move to Section"))
         mute.delegate = self
         sections.delegate = self
+        return (mute, sections)
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
