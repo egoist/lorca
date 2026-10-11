@@ -47,12 +47,24 @@ func TestChannelSheet(t *testing.T) {
 	m, tt := sheetTester(t, func(m *mainWindow) {})
 	m.presentChannel("ev-feedback", store.Bot("bot-tally"), m.open)
 	settle(tt)
-	for _, text := range []string{L("Listening"), "Telegram · Community", L("Every chat the bot is in"), "Mentions, replies, #feedback", L("Conversations"), "Acme Community"} {
+	for _, text := range []string{L("Listening"), "Telegram · Community", "Mentions, replies, #feedback", L("Asking to Chat"), "Acme Beta Testers", L("Group · %@", "Priya Nair"), L("Conversations"), "Acme Community"} {
 		if !tt.HasText(text) {
 			t.Errorf("no %q in %q", text, tt.Texts())
 		}
 	}
 	renderBoth(t, tt, "channel-sheet")
+
+	// Allowed, the chat that asked joins the channel's chats.
+	if err := tt.Click(L("Allow")); err != nil {
+		t.Fatal(err)
+	}
+	settle(tt)
+	if channel := store.Channel("ev-feedback"); len(channel.Requests) != 0 || len(channel.Chats) != 2 || channel.Chats[1].Title != "Acme Beta Testers" {
+		t.Errorf("Allow left %+v", channel)
+	}
+	if tt.HasText(L("Asking to Chat")) {
+		t.Error("the section stays with nothing asking")
+	}
 	closeSheet(t, m, tt)
 
 	store.Channel("ev-feedback").State, store.Channel("ev-feedback").HeldDelivery = model.ChannelHeld, "d1"

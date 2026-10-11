@@ -6,6 +6,12 @@ and the update window shows it.
 
 ## [Unreleased]
 
+- A channel answers only in the chats you allow. Anyone can message a Telegram bot or add it to
+  their group, so a chat you haven't allowed now asks first: the channel's row says A chat is
+  waiting, and its sheet lists it under Asking to Chat with Allow and Ignore. Until you allow it,
+  the bot does nothing there. A channel that listened in every chat its bot was in now listens
+  nowhere until you allow its chats, and each chat asks once someone writes there.
+
 ## [0.1.8]
 
 - A Telegram channel that listens for mentions or hashtags tells you when it can't hear them. While

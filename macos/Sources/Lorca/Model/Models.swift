@@ -491,6 +491,16 @@ struct ChannelStatus: Identifiable, Hashable {
         var title: String
     }
 
+    /// A chat that wrote to the account's bot or added it to a group, waiting for the user to
+    /// allow it; the bot answers nothing there meanwhile.
+    struct Request: Hashable {
+        var id: String
+        var title: String
+        var isPrivate: Bool
+        /// Who wrote, or who added the bot to the group.
+        var from: String
+    }
+
     let id: String
     var botID: Bot.ID
     var name: String
@@ -502,6 +512,7 @@ struct ChannelStatus: Identifiable, Hashable {
     var state: State
     var detail: String
     var heldDelivery: String?
+    var requests: [Request] = []
 
     var serviceName: String { service == "slack" ? "Slack" : "Telegram" }
     var isPaused: Bool { state == .paused }

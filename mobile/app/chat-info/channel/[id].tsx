@@ -1,17 +1,18 @@
 // A channel, slid in from its row in Details: whether it listens, and what holds it when a
 // message's turn didn't finish or its account can't be read; where it listens and what it takes;
-// the task the bot does with each message; and its conversations, each a tap away. The bot sets a
-// channel up and changes it when asked in chat; here the user pauses it, settles a held message,
-// or removes it.
+// the chats asking to be allowed; the task the bot does with each message; and its conversations,
+// each a tap away. The bot sets a channel up and changes it when asked in chat; here the user
+// pauses it, allows or ignores a chat, settles a held message, or removes it.
 
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { useShallow } from "zustand/react/shallow";
 import { chatTitle, engine } from "../../../src/core/engine";
+import type { ChatRequest } from "../../../src/core/model";
 import { useStore } from "../../../src/core/store";
 import { t, useLanguage } from "../../../src/i18n";
 import { alert } from "../../../src/ui/alert";
-import { channelChats, listenSummary, serviceName } from "../../../src/ui/channels";
+import { channelChats, listenSummary, requestKind, serviceName } from "../../../src/ui/channels";
 import { Row, Section, ToggleRow } from "../../../src/ui/forms";
 import { stamp } from "../../../src/ui/format";
 import { usePalette } from "../../../src/ui/theme";
@@ -34,6 +35,20 @@ export default function ChannelScreen() {
   const footer = settles
     ? t("A message’s turn didn’t finish, so later messages wait. Read its conversation, then try it again or skip it.")
     : channel.detail || undefined;
+  const hint =
+    channel.service === "slack"
+      ? t("Invite the bot to a channel or send it a message, then allow the chat here.")
+      : t("Add the bot to a group or send it a message, then allow the chat here.");
+
+  // Anyone can message the bot or add it to a group; it answers only where the user allows.
+  function answer(request: ChatRequest) {
+    const name = bot?.name ?? t("The bot");
+    alert(t("Let “{chat}” chat with {name}?", { chat: request.title, name }), t("{name} answers there from now on. An ignored chat doesn’t ask again.", { name }), [
+      { text: t("Cancel"), style: "cancel" },
+      { text: t("Ignore"), style: "destructive", onPress: () => engine.answerChatRequest(channel!.id, request.id, false) },
+      { text: t("Allow"), onPress: () => engine.answerChatRequest(channel!.id, request.id, true) },
+    ]);
+  }
 
   function confirmRemove() {
     alert(t("Remove “{name}”?", { name: channel!.name }), t("{name} stops listening there. Its conversations stay.", { name: bot?.name ?? t("The bot") }), [
@@ -60,11 +75,18 @@ export default function ChannelScreen() {
           {settles && <Row title={t("Skip")} action onPress={() => engine.settleHeldMessage(channel.id, false)} />}
           {channel.state === "offline" && <Row title={t("State")} detail={t("Can’t connect")} />}
         </Section>
-        <Section>
+        <Section footer={!channel.chats?.length && !channel.requests?.length ? hint : undefined}>
           <Row title={t("Account")} detail={account?.name ?? serviceName(channel.service)} />
           <Row title={t("Chats")} subtitle={channelChats(channel)} subtitleLines={3} />
           <Row title={t("Messages")} subtitle={listenSummary(channel.listen)} subtitleLines={2} />
         </Section>
+        {!!channel.requests?.length && (
+          <Section title={t("Asking to Chat")} footer={t("{name} answers only in chats you allow. An ignored chat doesn’t ask again.", { name: bot?.name ?? t("The bot") })}>
+            {channel.requests.map((request) => (
+              <Row key={request.id} title={request.title} subtitle={requestKind(request)} onPress={() => answer(request)} />
+            ))}
+          </Section>
+        )}
         <Section title={t("Task")}>
           <View style={styles.task}>
             <Text style={[styles.taskText, { color: p.label }]} selectable>

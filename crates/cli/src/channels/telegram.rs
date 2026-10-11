@@ -9,7 +9,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
-use super::{clean, ingest, load_account, mentions, pause, save_account, set_identity, set_problem, Identity, Incoming, TELEGRAM};
+use super::{ask, clean, ingest, load_account, mentions, pause, set_identity, set_problem, update_account, withdraw, ChatRequest, Identity, Incoming, TELEGRAM};
 use crate::app::App;
 use crate::plugins::builtin::{structured_result, text_result};
 
@@ -105,7 +105,8 @@ pub async fn read(app: Arc<App>, account_id: String, token: String, cancel: Canc
     };
     loop {
         let offset = load_account(&app, &account_id).offset;
-        let body = json!({ "offset": offset, "timeout": POLL_SECS, "allowed_updates": ["message"] });
+        // `my_chat_member` says when someone adds the bot to a group, which then asks the user.
+        let body = json!({ "offset": offset, "timeout": POLL_SECS, "allowed_updates": ["message", "my_chat_member"] });
         let polled = tokio::select! {
             polled = call(&app, &token, "getUpdates", body, Duration::from_secs(POLL_SECS + 15)) => polled,
             _ = cancel.cancelled() => return,
@@ -133,9 +134,15 @@ pub async fn read(app: Arc<App>, account_id: String, token: String, cancel: Canc
                     break;
                 }
             }
-            let mut state = load_account(&app, &account_id);
-            state.offset = Some(update_id + 1);
-            if let Err(error) = save_account(&app, &account_id, &state) {
+            match membership(update) {
+                Some(Membership::Added(request)) => ask(&app, &account_id, request),
+                Some(Membership::Left(chat_id)) => withdraw(&app, &account_id, &chat_id),
+                None => {}
+            }
+            if let Err(error) = update_account(&app, &account_id, |state| {
+                state.offset = Some(update_id + 1);
+                true
+            }) {
                 tracing::error!(%error, "saving a Telegram account's place");
                 stuck = true;
                 break;
@@ -218,6 +225,41 @@ pub fn incoming(account_id: &str, me: &Identity, update: &Value) -> Option<Incom
         date: message["date"].as_i64().unwrap_or(0),
         mentions_bot,
         replies_to_bot,
+    })
+}
+
+/// The bot joining or leaving a group, from a `my_chat_member` update.
+#[derive(Debug, PartialEq)]
+pub enum Membership {
+    /// Someone added the bot to a group: the group asks to be allowed.
+    Added(ChatRequest),
+    /// The bot left the group or was removed: its request goes.
+    Left(String),
+}
+
+pub fn membership(update: &Value) -> Option<Membership> {
+    let change = update.get("my_chat_member")?;
+    let chat = &change["chat"];
+    // A Telegram channel's posts are not messages a channel reads, and a private chat's own
+    // first message asks for it.
+    if !matches!(chat["type"].as_str(), Some("group" | "supergroup")) {
+        return None;
+    }
+    let chat_id = id_text(&chat["id"])?;
+    let gone = |status: &Value| matches!(status.as_str(), Some("left" | "kicked"));
+    let (old, new) = (&change["old_chat_member"], &change["new_chat_member"]);
+    if gone(&new["status"]) || (new["status"] == "restricted" && new["is_member"] == false) {
+        return Some(Membership::Left(chat_id));
+    }
+    let was_out = gone(&old["status"]) || (old["status"] == "restricted" && old["is_member"] == false);
+    was_out.then(|| {
+        Membership::Added(ChatRequest {
+            id: chat_id,
+            title: clean(chat["title"].as_str().unwrap_or("Telegram"), 80),
+            private: false,
+            from: clean(&person(&change["from"]), 64),
+            at: crate::config::now_unix(),
+        })
     })
 }
 

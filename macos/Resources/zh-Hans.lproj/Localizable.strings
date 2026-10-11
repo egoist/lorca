@@ -1347,7 +1347,6 @@
 "mentions" = "提及";
 "replies" = "回复";
 ", |list" = "、";
-"Every chat the bot is in" = "账户所在的所有聊天";
 "A message’s turn didn’t finish, so later messages wait. Read its conversation, then try it again or skip it." = "有条消息没有处理完，后面的消息都在等待。先看看它的对话，再重试或跳过。";
 "%@ stops listening there. Its conversations stay." = "%@ 不再接收那里的消息。已有的对话会保留。";
 "Watches %@" = "关注 %@";
@@ -1475,3 +1474,12 @@
 "Rename Device" = "重命名设备";
 "Every paired Device shows this name. Leave it blank to use the name the machine goes by." = "所有已配对的设备都显示这个名称。留空则使用这台机器自己的名称。";
 "Privacy mode on" = "隐私模式开启";
+"Asking to Chat" = "请求对话";
+"A chat is waiting" = "有聊天等待允许";
+"Direct message" = "单聊";
+"Ignore" = "忽略";
+"Add the bot to a group or send it a message, then allow the chat here." = "把账户拉进群聊或给它发一条消息，然后在这里允许该聊天。";
+"Invite the bot to a channel or send it a message, then allow the chat here." = "把账户邀请进 Slack 频道或给它发一条消息，然后在这里允许该聊天。";
+"%d chats are waiting" = "%d 个聊天等待允许";
+"Group · %@" = "群聊 · %@";
+"%@ answers only in chats you allow. An ignored chat doesn’t ask again." = "%@ 只在你允许的聊天里回复。忽略的聊天不会再次请求。";

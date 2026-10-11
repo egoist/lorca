@@ -2083,6 +2083,27 @@ func (s *Store) SettleHeldMessage(id string, retry bool) {
 	s.perform(method, map[string]any{"runner_id": runner, "id": held})
 }
 
+// AnswerChatRequest answers a chat asking a channel's bot: allowed, the channel listens there from
+// now on; ignored, the chat doesn't ask again.
+func (s *Store) AnswerChatRequest(id, chatID string, allow bool) {
+	channel, runner := s.Channel(id), s.channelRunner(id)
+	if channel == nil {
+		return
+	}
+	for _, request := range channel.Requests {
+		if request.ID == chatID && allow {
+			channel.Chats = append(channel.Chats, ChannelChat{ID: request.ID, Title: request.Title})
+		}
+	}
+	channel.Requests = slices.DeleteFunc(channel.Requests, func(request ChatRequest) bool { return request.ID == chatID })
+	s.emit(Event{Kind: EventRosterChanged})
+	method := "events.ignore_chat"
+	if allow {
+		method = "events.allow_chat"
+	}
+	s.perform(method, map[string]any{"runner_id": runner, "id": id, "chat_id": chatID})
+}
+
 // RemoveChannel removes a channel from its Runner; its conversations stay.
 func (s *Store) RemoveChannel(id string) {
 	runner := s.channelRunner(id)

@@ -1581,6 +1581,18 @@ final class AppStore {
         perform(retry ? "events.retry" : "events.discard", ["runner_id": runnerID, "id": held])
     }
 
+    /// Answers a chat asking a channel's bot: allowed, the channel listens there from now on;
+    /// ignored, the chat doesn't ask again.
+    func answerChatRequest(of id: String, chatID: String, allow: Bool) {
+        guard let runnerID = runnerID(ofChannel: id) else { return }
+        let request = channel(id)?.requests.first { $0.id == chatID }
+        updateChannel(id) { channel in
+            channel.requests.removeAll { $0.id == chatID }
+            if allow, let request { channel.chats.append(.init(id: request.id, title: request.title)) }
+        }
+        perform(allow ? "events.allow_chat" : "events.ignore_chat", ["runner_id": runnerID, "id": id, "chat_id": chatID])
+    }
+
     func removeChannel(_ id: String) {
         guard let runnerID = runnerID(ofChannel: id) else { return }
         for index in devices.indices { devices[index].channels.removeAll { $0.id == id } }

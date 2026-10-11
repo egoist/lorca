@@ -97,9 +97,11 @@ func mockDevices() []*Device {
 func mockChannels() []Channel {
 	return []Channel{{
 		ID: "ev-feedback", BotID: "bot-tally", Name: "Community feedback", Service: "telegram", AccountID: "telegram-5f0c",
-		Listen: ChannelListen{Mentions: true, Replies: true, Tags: []string{"feedback"}},
-		Task:   "Decide whether the new message is product feedback. If it is, find the matching open issue in acme/app and comment on it, or open a new one labeled feedback with the person's words quoted. Then reply to the person in their thread in one line with the issue number.",
-		State:  ChannelListening,
+		Chats:    []ChannelChat{{ID: "-1001846203311", Title: "Acme Community"}},
+		Listen:   ChannelListen{Mentions: true, Replies: true, Tags: []string{"feedback"}},
+		Task:     "Decide whether the new message is product feedback. If it is, find the matching open issue in acme/app and comment on it, or open a new one labeled feedback with the person's words quoted. Then reply to the person in their thread in one line with the issue number.",
+		State:    ChannelListening,
+		Requests: []ChatRequest{{ID: "-1002218840551", Title: "Acme Beta Testers", From: "Priya Nair"}},
 	}}
 }
 

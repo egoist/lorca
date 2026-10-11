@@ -175,6 +175,12 @@ type WireChannel struct {
 	State        string        `json:"state"`
 	Detail       string        `json:"detail"`
 	HeldDelivery string        `json:"held_delivery"`
+	Requests     []struct {
+		ID      string `json:"id"`
+		Title   string `json:"title"`
+		Private bool   `json:"private"`
+		From    string `json:"from"`
+	} `json:"requests"`
 }
 
 // WireChatChannel is where a channel's conversation happens.
@@ -832,6 +838,9 @@ func ToChannel(wire WireChannel) Channel {
 	}
 	for _, chat := range wire.Chats {
 		channel.Chats = append(channel.Chats, ChannelChat{ID: chat.ID, Title: chat.Title})
+	}
+	for _, request := range wire.Requests {
+		channel.Requests = append(channel.Requests, ChatRequest{ID: request.ID, Title: request.Title, Private: request.Private, From: request.From})
 	}
 	return channel
 }
