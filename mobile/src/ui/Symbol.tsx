@@ -139,7 +139,6 @@ const ANDROID: Record<string, string> = {
   // Workflows.
   envelope: "mail",
   // Channels' services.
-  "paperplane.fill": "send",
   paperplane: "send",
   number: "tag",
   "arrow.triangle.branch": "call_split",

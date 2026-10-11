@@ -55,18 +55,24 @@ export const BotAvatar = memo(function BotAvatar({ bot, size = 40, working = fal
   );
 });
 
-/// A channel conversation's service over the avatar's bottom-right edge: Telegram's paper plane
-/// on its blue, Slack's # in its aubergine on white, ringed in the surface color.
+/// The services' real marks as round badges, rendered from the Mac's PluginLogo SVGs:
+/// Telegram's disc as it is, Slack's mark on white.
+const SERVICE_MARKS: Record<string, number> = {
+  telegram: require("../../assets/services/telegram.png"),
+  slack: require("../../assets/services/slack.png"),
+};
+
+/// A channel conversation's service mark over the avatar's bottom-right edge, ringed in the
+/// surface color.
 function ServiceBadge({ service, size, ring }: { service: string; size: number; ring: any }) {
+  const mark = SERVICE_MARKS[service];
+  if (!mark) return null;
   const badge = Math.round(size * 0.4);
   const ringWidth = Math.max(1.5, badge * 0.1);
   const outer = badge + ringWidth * 2;
-  const telegram = service === "telegram";
   return (
     <View style={[styles.badge, { width: outer, height: outer, borderRadius: outer / 2, backgroundColor: ring, right: -ringWidth, bottom: -ringWidth }]}>
-      <View style={[styles.disc, { width: badge, height: badge, borderRadius: badge / 2, backgroundColor: telegram ? "#26A5E4" : "#FFFFFF" }]}>
-        <Symbol name={telegram ? "paperplane.fill" : "number"} size={badge * 0.56} color={telegram ? "#FFFFFF" : "#4A154B"} weight="bold" style={telegram ? { marginLeft: -badge * 0.06, marginTop: badge * 0.04 } : undefined} />
-      </View>
+      <Image source={mark} style={{ width: badge, height: badge }} />
     </View>
   );
 }
