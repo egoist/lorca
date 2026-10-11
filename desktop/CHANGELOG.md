@@ -6,6 +6,10 @@ and the update window shows it.
 
 ## [Unreleased]
 
+- A chat that asks for a channel gets one reply, "Pending approval", and once you allow it, the bot
+  answers what people asked while it waited. A chat that never asks, such as a group where the bot
+  only hears replies to it, can be added by its id with Add… on the channel's Chats row.
+
 ## [0.1.9]
 
 - A channel answers only in the chats you allow. Anyone can message a Telegram bot or add it to

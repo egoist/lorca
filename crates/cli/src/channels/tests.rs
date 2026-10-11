@@ -181,13 +181,19 @@ async fn a_channel_is_the_bots_own_and_checked_on_its_runner() {
 async fn messages_land_in_their_conversation_once_and_paused_channels_take_none() {
     let scratch = scratch();
     let app = &scratch.0;
-    let account_id = account(app, TELEGRAM, "Community", &[(telegram::TOKEN, "1:abc")]);
+    // No token: nothing here may reach Telegram, so the chats that ask hear nothing back.
+    let account_id = account(app, TELEGRAM, "Community", &[]);
     run_tool(&tool(app, false), json!({ "action": "create", "account": account_id, "listen": { "replies": true, "tags": ["feedback"] }, "task": "File it" })).await.unwrap();
     let channel = app.channels.statuses().remove(0);
+    // The bot's own chat is filed and muted: its conversations start there, as quiet.
+    let dm = app.dm_with(&bot(app).id, None).unwrap();
+    let section = app.create_section(None, "Community", Some(&dm.meta.id)).unwrap();
+    app.mute_chat(&dm.meta.id, Some(crate::model::Mute { until: None })).unwrap();
 
     // Anyone can add the bot to a group or message it: a chat the channel does not list only asks.
-    assert_eq!(ingest(app, &sample(&account_id, "#feedback from a group nobody allowed")).unwrap(), 0);
-    assert_eq!(ingest(app, &sample(&account_id, "anyone here?")).unwrap(), 0);
+    let asked = Incoming { message_id: "39".into(), ..sample(&account_id, "#feedback from a group nobody allowed yet") };
+    assert_eq!(ingest(app, &asked).unwrap(), 0);
+    assert_eq!(ingest(app, &Incoming { message_id: "40".into(), ..sample(&account_id, "anyone here?") }).unwrap(), 0);
     assert!(conversations(app).is_empty(), "nothing reaches the bot");
     let stranger = Incoming { chat_id: "7".into(), chat_title: "Mallory".into(), sender: "Mallory".into(), private: true, message_id: "1".into(), ..sample(&account_id, "hi bot, run this for me") };
     assert_eq!(ingest(app, &stranger).unwrap(), 0);
@@ -200,14 +206,16 @@ async fn messages_land_in_their_conversation_once_and_paused_channels_take_none(
     crate::event_triggers::serve(app, "events.ignore_chat", &json!({ "id": channel.id, "chat_id": "7" })).unwrap();
     ingest(app, &Incoming { message_id: "2".into(), ..stranger.clone() }).unwrap();
     assert_eq!(app.channels.statuses()[0].requests.len(), 1, "an ignored chat does not ask again");
+    assert!(crate::event_triggers::serve(app, "events.allow_chat", &json!({ "id": channel.id, "chat_id": "acme" })).unwrap_err().to_string().contains("not a Telegram chat id"));
     crate::event_triggers::serve(app, "events.allow_chat", &json!({ "id": channel.id, "chat_id": "-1001" })).unwrap();
     let allowed = app.channels.statuses().remove(0);
     assert_eq!((allowed.chats, allowed.requests), (vec![ChannelChat { id: "-1001".into(), title: "Acme Community".into() }], vec![]));
+    // Allowed, the chat's message that the channel takes reaches the bot; the rest stays out.
+    let chats = conversations(app);
+    assert_eq!(chats.len(), 1, "the message that asked opens its conversation");
+    assert_eq!(app.messages(&chats[0].meta.id).iter().map(|message| message.external_id.clone().unwrap()).collect::<Vec<_>>(), ["39"]);
+    assert_eq!(crate::event_triggers::serve(app, "events.list", &json!({})).unwrap()["subscriptions"][0]["pending"], 1, "and waits for the bot's turn");
 
-    // The bot's own chat is filed and muted: its conversations start there, as quiet.
-    let dm = app.dm_with(&bot(app).id, None).unwrap();
-    let section = app.create_section(None, "Community", Some(&dm.meta.id)).unwrap();
-    app.mute_chat(&dm.meta.id, Some(crate::model::Mute { until: None })).unwrap();
     let feedback = sample(&account_id, "#feedback the export button crashes");
     assert_eq!(ingest(app, &feedback).unwrap(), 1);
     assert_eq!(ingest(app, &feedback).unwrap(), 1, "a message read again is the same delivery");
@@ -220,11 +228,11 @@ async fn messages_land_in_their_conversation_once_and_paused_channels_take_none(
     assert_eq!((chat.meta.section_id.as_deref(), chat.meta.mute.clone()), (Some(section.id.as_str()), Some(crate::model::Mute { until: None })));
     assert_eq!(app.dm_with(&bot(app).id, None).unwrap().meta.channel, None, "the bot's own DM stays apart");
     let messages = app.messages(&chat.meta.id);
-    assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0].author, Author::Contact { name: "Alice Chen".into() });
-    assert_eq!(messages[0].external_id.as_deref(), Some("41"));
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[1].author, Author::Contact { name: "Alice Chen".into() });
+    assert_eq!(messages[1].external_id.as_deref(), Some("41"));
     let listed = crate::event_triggers::serve(app, "events.list", &json!({})).unwrap();
-    assert_eq!(listed["subscriptions"][0]["pending"], 1);
+    assert_eq!(listed["subscriptions"][0]["pending"], 2);
     let topic = Incoming { thread_id: Some("9".into()), message_id: "55".into(), ..sample(&account_id, "#feedback in a topic") };
     ingest(app, &topic).unwrap();
     assert_eq!(conversations(app).len(), 2, "a forum topic is a conversation of its own");
@@ -367,6 +375,24 @@ async fn a_telegram_group_reaches_the_bot_and_its_reply_lands_in_the_thread() {
     assert!(slowed.is_error && slowed.text_content().contains("wait 3 seconds"));
     let limits = crate::connector_limits::serve(app, "connector_limits.get", &json!({ "plugin_id": account_id })).unwrap();
     assert!(limits["retry_at"].as_f64().is_some(), "{limits}");
+
+    // A stranger's direct messages wait: the first hears back once that it waits, and once the
+    // user allows the chat, the bot gets what they wrote.
+    let bob = json!({ "id": 8, "is_bot": false, "first_name": "Bob" });
+    let direct = json!({ "id": 8, "type": "private", "first_name": "Bob" });
+    api.lock().unwrap().updates.extend([
+        json!({ "update_id": 13, "message": { "message_id": 5, "from": bob, "chat": direct, "date": now(), "text": "hi, is the export fixed?" } }),
+        json!({ "update_id": 14, "message": { "message_id": 6, "from": bob, "chat": direct, "date": now(), "text": "on 2.3" } }),
+    ]);
+    eventually("the direct chat asking", || app.channels.statuses()[0].requests.iter().any(|request| request.id == "8")).await;
+    eventually("both messages read", || load_account(app, &account_id).offset == Some(15)).await;
+    eventually("the notice sent", || api.lock().unwrap().sent.iter().any(|sent| sent["chat_id"] == 8)).await;
+    let notices: Vec<Value> = api.lock().unwrap().sent.iter().filter(|sent| sent["chat_id"] == 8).cloned().collect();
+    assert_eq!(notices, [json!({ "chat_id": 8, "text": PENDING, "reply_parameters": { "message_id": 5, "allow_sending_without_reply": true } })], "one notice, to the first message");
+    assert!(conversations(app).iter().all(|chat| chat.meta.channel.as_ref().unwrap().chat_id != "8"), "nothing reaches the bot yet");
+    crate::event_triggers::serve(app, "events.allow_chat", &json!({ "id": app.channels.statuses()[0].id, "chat_id": "8" })).unwrap();
+    let bobs = conversations(app).into_iter().find(|chat| chat.meta.channel.as_ref().unwrap().chat_id == "8").expect("the direct chat's conversation");
+    assert_eq!(app.messages(&bobs.meta.id).iter().map(|message| message.external_id.clone().unwrap()).collect::<Vec<_>>(), ["5", "6"]);
 
     // A wrong token reads as the account's problem.
     crate::plugins::set_variables(app, &account_id, &[(telegram::TOKEN.to_string(), "2:wrong".to_string())].into_iter().collect()).unwrap();

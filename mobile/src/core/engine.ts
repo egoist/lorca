@@ -1119,6 +1119,19 @@ class Engine {
     void core.request(allow ? "events.allow_chat" : "events.ignore_chat", { runner_id: found.runnerId, id, chat_id: chatId });
   }
 
+  /// Lets a chat in by its id, typed by the user: the channel listens there from now on. Rejects
+  /// with the Runner's words when the id isn't one of the service's.
+  async addChat(id: string, chatId: string) {
+    const found = channelById(id);
+    if (!found) return;
+    await core.request("events.allow_chat", { runner_id: found.runnerId, id, chat_id: chatId });
+    patchChannel(id, (c) => ({
+      ...c,
+      requests: c.requests?.filter((r) => r.id !== chatId),
+      chats: c.chats?.some((chat) => chat.id === chatId) ? c.chats : [...(c.chats ?? []), { id: chatId }],
+    }));
+  }
+
   /// Removes a channel from its Runner; its conversations stay.
   removeChannel(id: string) {
     const found = channelById(id);

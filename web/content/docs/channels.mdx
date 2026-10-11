@@ -35,7 +35,9 @@ A conversation starts in the same [section](/docs/chats#organize-chats) as the b
 
 Anyone can message a Telegram bot or add it to their group, and anyone in your Slack workspace, or in a Slack Connect channel the bot is in, can write to it. So a channel answers only in the chats you allow, and everyone in an allowed chat can reach it.
 
-When someone adds the bot to a group, or a chat you haven't allowed writes something the channel would take, that chat **asks**: the channel's row reads **A chat is waiting**, and its sheet lists it under **Asking to Chat** with who wrote or added the bot. **Allow** lets the bot answer there from then on; **Ignore** keeps the chat from asking again. Until you allow it, the bot does nothing there, and the people in it hear nothing back. To message the bot yourself, send it a message once and allow that chat too.
+When someone adds the bot to a group, or a chat you haven't allowed writes something the channel would take, that chat **asks**: the channel's row reads **A chat is waiting**, and its sheet lists it under **Asking to Chat** with who wrote or added the bot. **Allow** lets the bot answer there from then on, starting with what people asked it while the chat waited; **Ignore** keeps the chat from asking again. Until you allow it, the bot does nothing there: the first person who writes to it gets one reply, "Pending approval", and nothing more. To message the bot yourself, send it a message once and allow that chat too.
+
+If a chat never asks, for example a group where the bot only hears replies to it, use **Add…** on the sheet's **Chats** row and paste the chat's id, such as `-1001234567890` for a Telegram group.
 
 You can also tell the bot: "Allow Acme Beta Testers in the feedback channel." A message from outside can't allow a chat, since only your own messages change a channel.
 

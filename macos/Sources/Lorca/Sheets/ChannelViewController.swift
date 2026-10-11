@@ -145,9 +145,11 @@ final class ChannelViewController: SheetViewController {
         let chats = channel.chats.isEmpty
             ? L("None yet")
             : channel.chats.map { $0.title.isEmpty ? $0.id : $0.title }.joined(separator: L(", ", context: "list"))
+        let chatsRow = ActionRow(key: L("Chats"), value: chats, tint: .labelColor, actionTitle: L("Add…"))
+        chatsRow.onAction = { [weak self] in self?.askChatID() }
         rows += [
             KeyValueRow(key: L("Account"), value: store.accountName(of: channel)),
-            KeyValueRow(key: L("Chats"), value: chats),
+            chatsRow,
             KeyValueRow(key: L("Messages"), value: channel.listen.summary),
         ]
         if channel.chats.isEmpty && channel.requests.isEmpty {
@@ -186,6 +188,45 @@ final class ChannelViewController: SheetViewController {
 
     @objc private func toggled() {
         store.setChannelPaused(channelID, toggle.state == .off)
+    }
+
+    /// Asks for a chat's id, for a chat that can't ask itself: one where the bot hears nothing it
+    /// would answer, such as a group from before the bot needed chats allowed.
+    private func askChatID() {
+        guard let channel = store.channel(channelID), let window = view.window else { return }
+        let alert = NSAlert()
+        alert.messageText = L("Add a Chat")
+        alert.informativeText = channel.service == "slack"
+            ? L("Paste the channel’s id, such as C0123456789. Or message the bot there, and the chat asks here.")
+            : L("Paste the chat’s id, such as -1001234567890 for a group. Or message the bot there, and the chat asks here.")
+        alert.addButton(withTitle: L("Add"))
+        alert.addButton(withTitle: L("Cancel"))
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        field.placeholderString = L("Chat ID")
+        alert.accessoryView = field
+        alert.beginSheetModal(for: window) { [weak self] response in
+            let chatID = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard response == .alertFirstButtonReturn, !chatID.isEmpty else { return }
+            self?.add(chatID)
+        }
+        // The accessory view only becomes first responder once the sheet exists.
+        DispatchQueue.main.async { alert.window.makeFirstResponder(field) }
+    }
+
+    private func add(_ chatID: String) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                try await store.addChat(chatID, to: channelID)
+            } catch {
+                guard let window = view.window else { return }
+                let failed = NSAlert()
+                failed.messageText = L("Couldn’t add the chat")
+                failed.informativeText = error.localizedDescription
+                failed.addButton(withTitle: L("OK"))
+                failed.beginSheetModal(for: window) { _ in }
+            }
+        }
     }
 
     private func answer(_ chatID: String, allow: Bool) {

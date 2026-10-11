@@ -6,6 +6,8 @@ Sparkle shows it in the update window. The Windows and Linux app's are in
 
 ## [Unreleased]
 
+- A chat that asks for a channel gets one reply, "Pending approval", and once you allow it, the bot answers what people asked while it waited. A chat that never asks, such as a group where the bot only hears replies to it, can be added by its id with Add… on the channel's Chats row.
+
 ## [1.0.14]
 
 - A channel answers only in the chats you allow. Anyone can message a Telegram bot or add it to their group, so a chat you haven't allowed now asks first: the channel's row says A chat is waiting, and its sheet lists it under Asking to Chat with Allow and Ignore. Until you allow it, the bot does nothing there. A channel that listened in every chat its bot was in now listens nowhere until you allow its chats, and each chat asks once someone writes there.

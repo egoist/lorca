@@ -1593,6 +1593,24 @@ final class AppStore {
         perform(allow ? "events.allow_chat" : "events.ignore_chat", ["runner_id": runnerID, "id": id, "chat_id": chatID])
     }
 
+    /// Lets a chat in by its id, typed by the user: the channel listens there from now on. The
+    /// Runner refuses an id that isn't one of the service's.
+    func addChat(_ chatID: String, to id: String) async throws {
+        guard let runnerID = runnerID(ofChannel: id) else { return }
+        let before = channel(id)
+        updateChannel(id) { channel in
+            channel.requests.removeAll { $0.id == chatID }
+            if !channel.chats.contains(where: { $0.id == chatID }) { channel.chats.append(.init(id: chatID, title: "")) }
+        }
+        if isMock { return }
+        do {
+            _ = try await client.request("events.allow_chat", ["runner_id": runnerID, "id": id, "chat_id": chatID])
+        } catch {
+            if let before { updateChannel(id) { $0 = before } }
+            throw error
+        }
+    }
+
     func removeChannel(_ id: String) {
         guard let runnerID = runnerID(ofChannel: id) else { return }
         for index in devices.indices { devices[index].channels.removeAll { $0.id == id } }

@@ -91,7 +91,9 @@ func (w *appWindow) channelView(c *ui.Context, s *sheet, title, channelID string
 				chats = strings.Join(names, Lc(", ", "list"))
 			}
 			keyValueRow(c.Key("account"), k, L("Account"), store.AccountName(channel), false, nil)
-			keyValueRow(c.Key("chats"), k, L("Chats"), chats, false, nil)
+			if _, add := actionRow(c.Key("chats"), k, L("Chats"), actionRowOptions{Value: chats, Action: L("Add…")}); add.Action {
+				w.askChatID(channel.ID, channel.Service)
+			}
 			keyValueRow(c.Key("messages"), k, L("Messages"), channel.Listen.Summary(), false, nil)
 			if len(channel.Chats) == 0 && len(channel.Requests) == 0 {
 				hint := L("Add the bot to a group or send it a message, then allow the chat here.")
@@ -149,6 +151,34 @@ func (w *appWindow) channelView(c *ui.Context, s *sheet, title, channelID string
 	if result.Confirmed || result.Cancelled {
 		s.dismiss()
 	}
+}
+
+// askChatID asks for a chat's id, for a chat that can't ask itself: one where the bot hears nothing
+// it would answer, such as a group from before the bot needed chats allowed.
+func (w *appWindow) askChatID(channelID, service string) {
+	value := ""
+	informative := L("Paste the chat’s id, such as -1001234567890 for a group. Or message the bot there, and the chat asks here.")
+	if service == "slack" {
+		informative = L("Paste the channel’s id, such as C0123456789. Or message the bot there, and the chat asks here.")
+	}
+	w.showAlert(alertOptions{
+		Message:     L("Add a Chat"),
+		Informative: informative,
+		Buttons:     []alertButton{{Title: L("Add")}, {Title: L("Cancel")}},
+		Accessory: func(c *ui.Context) {
+			textField(c, &value, fieldOptions{Placeholder: L("Chat ID"), AutoFocus: true})
+		},
+	}, func(answer int) {
+		chatID := strings.TrimSpace(value)
+		if answer != 0 || chatID == "" {
+			return
+		}
+		store.AddChat(channelID, chatID, func(err error) {
+			if err != nil {
+				w.showAlert(alertOptions{Message: L("Couldn’t add the chat"), Informative: model.ErrorText(err)}, nil)
+			}
+		})
+	})
 }
 
 // confirmRemoveChannel asks before removing a channel; its conversations stay.

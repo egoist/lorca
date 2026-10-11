@@ -135,7 +135,9 @@ pub async fn read(app: Arc<App>, account_id: String, token: String, cancel: Canc
                 }
             }
             match membership(update) {
-                Some(Membership::Added(request)) => ask(&app, &account_id, request),
+                Some(Membership::Added(request)) => {
+                    ask(&app, &account_id, request, None);
+                }
                 Some(Membership::Left(chat_id)) => withdraw(&app, &account_id, &chat_id),
                 None => {}
             }
@@ -225,7 +227,22 @@ pub fn incoming(account_id: &str, me: &Identity, update: &Value) -> Option<Incom
         date: message["date"].as_i64().unwrap_or(0),
         mentions_bot,
         replies_to_bot,
+        held: false,
     })
+}
+
+/// Tells a chat that asks that the bot answers once its owner allows it, as a reply to the
+/// message that asked. Best effort: nothing else waits on it.
+pub async fn notice(app: &App, token: &str, chat_id: &str, message_id: &str, thread_id: Option<&str>) {
+    let number = |id: &str| id.parse::<i64>().map(Value::from).unwrap_or_else(|_| json!(id));
+    let mut body = json!({ "chat_id": number(chat_id), "text": super::PENDING,
+        "reply_parameters": { "message_id": number(message_id), "allow_sending_without_reply": true } });
+    if let Some(thread_id) = thread_id {
+        body["message_thread_id"] = number(thread_id);
+    }
+    if let Err(error) = call(app, token, "sendMessage", body, Duration::from_secs(30)).await {
+        tracing::debug!(?error, "telling a Telegram chat it waits");
+    }
 }
 
 /// The bot joining or leaving a group, from a `my_chat_member` update.

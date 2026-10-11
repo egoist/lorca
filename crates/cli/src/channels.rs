@@ -200,6 +200,9 @@ pub struct Incoming {
     pub date: i64,
     pub mentions_bot: bool,
     pub replies_to_bot: bool,
+    /// Kept while its chat asked, and handed over once the user allowed the chat: the channel takes
+    /// it although it came before the channel listened there.
+    pub held: bool,
 }
 
 /// A name or title someone outside Lorca chose, as it may appear around their words: one line,
@@ -353,6 +356,68 @@ mod runner {
         /// Chats the user ignored, which do not ask again.
         #[serde(default)]
         pub ignored: Vec<String>,
+        /// What people wrote to the bot in chats that ask, which a channel would take, oldest
+        /// first: the bot handles it once the user allows the chat.
+        #[serde(default)]
+        pub held: Vec<HeldMessage>,
+    }
+
+    /// A message from a chat that asks, kept as the reader handed it over.
+    #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+    pub(crate) struct HeldMessage {
+        pub chat_id: String,
+        pub chat_title: String,
+        #[serde(default)]
+        pub private: bool,
+        #[serde(default)]
+        pub thread_id: Option<String>,
+        pub message_id: String,
+        #[serde(default)]
+        pub reply_to: Option<String>,
+        pub sender: String,
+        pub text: String,
+        pub date: i64,
+        #[serde(default)]
+        pub mentions_bot: bool,
+        #[serde(default)]
+        pub replies_to_bot: bool,
+    }
+
+    impl HeldMessage {
+        fn of(incoming: &Incoming) -> HeldMessage {
+            HeldMessage {
+                chat_id: incoming.chat_id.clone(),
+                chat_title: incoming.chat_title.clone(),
+                private: incoming.private,
+                thread_id: incoming.thread_id.clone(),
+                message_id: incoming.message_id.clone(),
+                reply_to: incoming.reply_to.clone(),
+                sender: incoming.sender.clone(),
+                text: incoming.text.clone(),
+                date: if incoming.date > 0 { incoming.date } else { crate::config::now_unix() },
+                mentions_bot: incoming.mentions_bot,
+                replies_to_bot: incoming.replies_to_bot,
+            }
+        }
+
+        fn incoming(self, service: &'static str, account_id: &str) -> Incoming {
+            Incoming {
+                service,
+                account_id: account_id.to_string(),
+                chat_id: self.chat_id,
+                chat_title: self.chat_title,
+                private: self.private,
+                thread_id: self.thread_id,
+                message_id: self.message_id,
+                reply_to: self.reply_to,
+                sender: self.sender,
+                text: self.text,
+                date: self.date,
+                mentions_bot: self.mentions_bot,
+                replies_to_bot: self.replies_to_bot,
+                held: true,
+            }
+        }
     }
 
     const ACCOUNT_KIND: &str = "channel_account";
@@ -361,6 +426,12 @@ mod runner {
     const MAX_IGNORED: usize = 200;
     /// How often a chat that keeps writing refreshes its request, in seconds.
     const REQUEST_REFRESH: i64 = 3600;
+    /// What a chat that asks hears back, once: the first time someone there writes something a
+    /// channel would take.
+    pub const PENDING: &str = "Pending approval: this bot answers here once its owner allows this chat.";
+    /// How many of a waiting chat's messages the bot handles once it is allowed, and for how long.
+    const MAX_HELD: usize = 5;
+    const HELD_FOR: i64 = 24 * 3600;
 
     /// Held while an account's state is read, changed, and written, since its reader, the apps, and
     /// the bot each change a part of it.
@@ -602,21 +673,23 @@ mod runner {
         let mut taken = 0;
         let channels = event_triggers::channel_configs(app, &incoming.account_id)?;
         let allowed = channels.iter().any(|(_, config, _)| config.channel.as_ref().is_some_and(|spec| spec.chats.iter().any(|chat| chat.id == incoming.chat_id)));
-        let mut asks = false;
+        let (mut asks, mut wanted) = (false, false);
         for (channel_id, config, listening_since) in channels {
             let Some(spec) = &config.channel else { continue };
             // A message from before the channel listened, which Telegram held for a day, is old news.
-            if incoming.date > 0 && incoming.date < listening_since - 5 {
+            if !incoming.held && incoming.date > 0 && incoming.date < listening_since - 5 {
                 continue;
             }
             // A paused channel takes nothing new; what it queued waits for it.
             if !config.is_enabled || config.expires_at.is_some_and(|at| at <= crate::config::now_unix()) || service_of(&config.source) != Some(incoming.service) {
                 continue;
             }
-            // Only a chat the user allowed reaches the bot. Elsewhere, a message the channel would
-            // take asks the user to allow its chat, and nobody there hears back.
+            // Only a chat the user allowed reaches the bot. Elsewhere, any message Telegram or Slack
+            // hands the bot asks the user to allow its chat, and nobody there hears back; one the
+            // channel would take waits for the bot until then.
             if !spec.chats.iter().any(|chat| chat.id == incoming.chat_id) {
-                asks |= !allowed && spec.listen.takes(incoming);
+                asks |= !allowed;
+                wanted |= !allowed && spec.listen.takes(incoming);
                 continue;
             }
             // A Slack thread the channel already keeps a conversation for is one the bot is in.
@@ -645,50 +718,116 @@ mod runner {
         }
         if asks {
             let request = ChatRequest { id: incoming.chat_id.clone(), title: incoming.chat_title.clone(), private: incoming.private, from: incoming.sender.clone(), at: crate::config::now_unix() };
-            ask(app, &incoming.account_id, request);
+            if ask(app, &incoming.account_id, request, wanted.then(|| HeldMessage::of(incoming))) {
+                pending(app, incoming);
+            }
         }
         Ok(taken)
     }
 
     // MARK: - Chats that ask
 
-    /// Keeps a chat's request to be allowed, unless the user ignored it or a channel of the account
-    /// listens there already. A chat that keeps writing refreshes it at most once an hour.
-    pub fn ask(app: &Arc<App>, account_id: &str, request: ChatRequest) {
+    /// Keeps a chat's request to be allowed, and the message that a channel would take, unless the
+    /// user ignored it or a channel of the account listens there already. A chat that keeps
+    /// writing refreshes its request at most once an hour, and keeps its newest five messages.
+    /// Returns whether the message is the first the chat keeps, which the chat hears back on.
+    pub(crate) fn ask(app: &Arc<App>, account_id: &str, request: ChatRequest, message: Option<HeldMessage>) -> bool {
         let listed = event_triggers::channel_configs(app, account_id)
             .unwrap_or_default()
             .iter()
             .any(|(_, config, _)| config.channel.as_ref().is_some_and(|spec| spec.chats.iter().any(|chat| chat.id == request.id)));
         if listed {
-            return;
+            return false;
         }
+        let (mut asked, mut first) = (false, false);
         let changed = update_account(app, account_id, |state| {
             if state.ignored.contains(&request.id) {
                 return false;
             }
-            if let Some(known) = state.requests.iter().find(|known| known.id == request.id) {
-                if known.title == request.title && known.private == request.private && request.at - known.at < REQUEST_REFRESH {
-                    return false;
-                }
+            let chat_id = request.id.clone();
+            let fresh = state.requests.iter().find(|known| known.id == request.id).is_some_and(|known| {
+                known.title == request.title && known.private == request.private && request.at - known.at < REQUEST_REFRESH
+            });
+            if !fresh {
+                state.requests.retain(|known| known.id != request.id);
+                state.requests.insert(0, request);
+                state.requests.truncate(MAX_REQUESTS);
+                asked = true;
             }
-            state.requests.retain(|known| known.id != request.id);
-            state.requests.insert(0, request);
-            state.requests.truncate(MAX_REQUESTS);
+            if let Some(message) = message {
+                first = !state.held.iter().any(|known| known.chat_id == message.chat_id);
+                if !state.held.iter().any(|known| known.chat_id == message.chat_id && known.message_id == message.message_id) {
+                    state.held.push(message);
+                }
+                let mine = state.held.iter().filter(|known| known.chat_id == chat_id).count();
+                let mut extra = mine.saturating_sub(MAX_HELD);
+                state.held.retain(|known| known.chat_id != chat_id || extra == 0 || {
+                    extra -= 1;
+                    false
+                });
+            }
+            // A chat that no longer asks keeps nothing waiting.
+            let requests = state.requests.clone();
+            state.held.retain(|known| requests.iter().any(|request| request.id == known.chat_id));
             true
+        });
+        match changed {
+            Ok(true) if asked => refresh(app),
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(%error, "keeping a chat's request");
+                return false;
+            }
+        }
+        first
+    }
+
+    /// Tells the chat that its message waits for the owner, in its thread, from the account's own
+    /// bot; nothing is kept of it in Lorca.
+    fn pending(app: &Arc<App>, incoming: &Incoming) {
+        let (Some(tokens), Ok(runtime)) = (tokens(app, &incoming.account_id, incoming.service), tokio::runtime::Handle::try_current()) else { return };
+        let (app, incoming) = (app.clone(), incoming.clone());
+        runtime.spawn(async move {
+            match incoming.service {
+                TELEGRAM => telegram::notice(&app, &tokens[0], &incoming.chat_id, &incoming.message_id, incoming.thread_id.as_deref()).await,
+                _ => slack::notice(&app, &tokens[0], &incoming.chat_id, incoming.thread_id.as_deref()).await,
+            }
+        });
+    }
+
+    /// Lets a chat in once a channel lists it: its request goes, and the bot handles what people
+    /// wrote there while it asked, as the reader would have handed it over.
+    fn admitted(app: &Arc<App>, account_id: &str, chat_id: &str) {
+        let mut waiting = Vec::new();
+        let changed = update_account(app, account_id, |state| {
+            let before = (state.requests.len(), state.held.len());
+            state.requests.retain(|known| known.id != chat_id);
+            waiting = state.held.iter().filter(|known| known.chat_id == chat_id).cloned().collect();
+            state.held.retain(|known| known.chat_id != chat_id);
+            before != (state.requests.len(), state.held.len())
         });
         match changed {
             Ok(true) => refresh(app),
             Ok(false) => {}
-            Err(error) => tracing::warn!(%error, "keeping a chat's request"),
+            Err(error) => tracing::warn!(%error, "letting a chat in"),
+        }
+        let service = app.plugins.lock().unwrap().get(account_id).and_then(|plugin| service_of(plugin.service_id()));
+        let Some(service) = service else { return };
+        let now = crate::config::now_unix();
+        for message in waiting.into_iter().filter(|message| now - message.date < HELD_FOR) {
+            if let Err(error) = ingest(app, &message.incoming(service, account_id)) {
+                tracing::warn!(%error, "handing over a waiting chat's message");
+            }
         }
     }
 
-    /// Drops a chat's request: the bot left the group, or a channel listens there now.
+    /// Drops a chat's request and what it kept: the bot left the group.
     pub fn withdraw(app: &Arc<App>, account_id: &str, chat_id: &str) {
         let changed = update_account(app, account_id, |state| {
-            let before = state.requests.len();
+            let before = (state.requests.len(), state.held.len());
             state.requests.retain(|known| known.id != chat_id);
-            state.requests.len() != before
+            state.held.retain(|known| known.chat_id != chat_id);
+            before != (state.requests.len(), state.held.len())
         });
         match changed {
             Ok(true) => refresh(app),
@@ -709,6 +848,7 @@ mod runner {
         if method == "events.ignore_chat" {
             update_account(app, &account_id, |state| {
                 state.requests.retain(|known| known.id != chat_id);
+                state.held.retain(|known| known.chat_id != chat_id);
                 if !state.ignored.iter().any(|known| known == chat_id) {
                     state.ignored.insert(0, chat_id.to_string());
                     state.ignored.truncate(MAX_IGNORED);
@@ -718,10 +858,11 @@ mod runner {
             refresh(app);
             return Ok(json!({}));
         }
+        check_chat_id(&config.source, chat_id).map_err(anyhow::Error::msg)?;
         let title = load_account(app, &account_id).requests.into_iter().find(|known| known.id == chat_id).map(|known| known.title).unwrap_or_default();
         allow(app, &mut config, &[ChannelChat { id: chat_id.to_string(), title }])?;
         event_triggers::serve(app, "events.update", &json!({ "id": id, "config": config }))?;
-        withdraw(app, &account_id, chat_id);
+        admitted(app, &account_id, chat_id);
         Ok(json!({}))
     }
 
@@ -1095,7 +1236,7 @@ mod runner {
             allow(&self.app, &mut config, &chats).map_err(|e| e.to_string())?;
             let created = event_triggers::serve(&self.app, "events.create", &json!({ "config": config })).map_err(|e| e.to_string())?;
             for chat in &chats {
-                withdraw(&self.app, &account_id, &chat.id);
+                admitted(&self.app, &account_id, &chat.id);
             }
             let status = self.find(created["id"].as_str().unwrap_or_default())?;
             let nowhere = if status.chats.is_empty() {
@@ -1134,12 +1275,15 @@ mod runner {
             if ids.is_empty() {
                 return Err("Give the chat ids to allow.".into());
             }
+            for id in &ids {
+                check_chat_id(&current.service, id)?;
+            }
             let chats: Vec<ChannelChat> = ids.iter().map(|id| ChannelChat { id: id.clone(), title: titled(&current, id) }).collect();
             let mut config = event_triggers::channel_config(&self.app, &current.id).map_err(|e| e.to_string())?;
             allow(&self.app, &mut config, &chats).map_err(|e| e.to_string())?;
             event_triggers::serve(&self.app, "events.update", &json!({ "id": current.id, "config": config })).map_err(|e| e.to_string())?;
             for chat in &chats {
-                withdraw(&self.app, &current.account_id, &chat.id);
+                admitted(&self.app, &current.account_id, &chat.id);
             }
             let names = chats.iter().map(|chat| if chat.title.is_empty() { chat.id.clone() } else { chat.title.clone() }).collect::<Vec<_>>().join(", ");
             Ok(format!("{} listens in {names} now.", current.name))
@@ -1153,6 +1297,16 @@ mod runner {
                 "resume" => format!("Listening again: {}.", current.name),
                 _ => format!("Removed {}. Its conversations stay.", current.name),
             })
+        }
+    }
+
+    /// Whether `id` reads as a chat id on the service: Telegram's are numbers (a group's starts
+    /// with -100), Slack's are letters and digits (C…, G…, D…).
+    pub fn check_chat_id(service: &str, id: &str) -> Result<(), String> {
+        match service {
+            TELEGRAM if id.parse::<i64>().is_err() => Err(format!("{id:?} is not a Telegram chat id: it is a number, such as -1001234567890.")),
+            SLACK if id.is_empty() || id.len() > 32 || !id.chars().all(|c| c.is_ascii_alphanumeric()) => Err(format!("{id:?} is not a Slack channel id, such as C0123456789.")),
+            _ => Ok(()),
         }
     }
 

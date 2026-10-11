@@ -1028,4 +1028,10 @@ export const zh: Record<string, string> = {
   "{name} answers only in chats you allow. An ignored chat doesn’t ask again.": "{name} 只在你允许的聊天里回复。忽略的聊天不会再次请求。",
   "Let “{chat}” chat with {name}?": "允许“{chat}”与 {name} 对话？",
   "{name} answers there from now on. An ignored chat doesn’t ask again.": "从现在起 {name} 会在那里回复。忽略的聊天不会再次请求。",
+  "Add a Chat": "添加聊天",
+  "Chat ID": "聊天 ID",
+  "Couldn’t add the chat": "无法添加聊天",
+  "Paste the chat’s id, such as -1001234567890 for a group. Or message the bot there, and the chat asks here.": "粘贴聊天的 ID，群聊的 ID 形如 -1001234567890。也可以在那里给机器人发条消息，这个聊天就会在这里请求对话。",
+  "Paste the channel’s id, such as C0123456789. Or message the bot there, and the chat asks here.": "粘贴 Slack 频道的 ID，形如 C0123456789。也可以在那里给机器人发条消息，这个聊天就会在这里请求对话。",
+  "Add Chat…": "添加聊天…",
 };
