@@ -111,6 +111,42 @@ func TestAttentionPopover(t *testing.T) {
 	}
 }
 
+// A row waiting on a review opens the review's chat and its sheet; once the review is decided the
+// row opens only the chat.
+func TestAttentionRowOpensItsReview(t *testing.T) {
+	m := demoWindow(t)
+	m.selectChat("chat-relay")
+	tt := ui.NewTester(m.frame(m.view), 1180, 760)
+	tt.SetScale(2)
+	attentionFixture()
+	store.Attention.Items[1].Sources = []model.AttentionSource{{ChatID: "chat-launch"}, {ChatID: "chat-nova", ReviewID: "review-comment"}}
+	settle(tt)
+	m.run("attention")
+	settle(tt)
+	if err := tt.Click("Release notes draft"); err != nil {
+		t.Fatal(err)
+	}
+	settleTransitions(tt)
+	if m.selection.ChatID != "chat-nova" || m.attention.open || !m.hasSheet() {
+		t.Fatalf("selection %q, open %v, sheet %v", m.selection.ChatID, m.attention.open, m.hasSheet())
+	}
+	tt.Key(0, ui.KeyEscape)
+	settleTransitions(tt)
+	if m.hasSheet() {
+		t.Fatal("Escape left the sheet up")
+	}
+	store.Review("review-comment").State = "rejected"
+	m.run("attention")
+	settle(tt)
+	if err := tt.Click("Release notes draft"); err != nil {
+		t.Fatal(err)
+	}
+	settleTransitions(tt)
+	if m.selection.ChatID != "chat-launch" || m.hasSheet() {
+		t.Fatalf("decided: selection %q, sheet %v", m.selection.ChatID, m.hasSheet())
+	}
+}
+
 func TestAttentionMenuCommandWithNothingWaiting(t *testing.T) {
 	m := demoWindow(t)
 	m.selectChat("chat-relay")

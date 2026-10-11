@@ -1,5 +1,6 @@
 // What waits on the user across chats, after the Mac's Attention popover: each coordinator's
-// latest brief, then the items, urgent first. A tap opens the chat an item came from; a long
+// latest brief, then the items, urgent first. A tap opens the chat an item came from, and when
+// the item waits on a review the chat's details list, that review's screen over it; a long
 // press opens another of its chats or marks it resolved. The ⋯ menu holds the notification
 // switches and the coordinator. Bots keep the list; the core sends it whole (`attention.changed`).
 
@@ -11,7 +12,7 @@ import { Alert, Platform, ScrollView, StyleSheet, Text, View } from "react-nativ
 import { request } from "../modules/lorca-core";
 import type { AttentionBrief, AttentionItem } from "../src/core/attention";
 import { chatTitle } from "../src/core/engine";
-import type { Chat } from "../src/core/model";
+import { reviewIsOpen, type Chat, type ReviewItem } from "../src/core/model";
 import { useBotMap, useStore } from "../src/core/store";
 import { t, useLanguage } from "../src/i18n";
 import { BotAvatar } from "../src/ui/Avatar";
@@ -48,12 +49,23 @@ export default function AttentionScreen() {
   const p = usePalette();
   const attention = useStore((s) => s.attention);
   const chats = useStore((s) => s.chats);
+  const reviews = useStore((s) => s.reviews);
   const open = (chatId: string) => router.dismissTo(`/chat/${chatId}`);
+  const openReview = (review: ReviewItem) => {
+    router.dismissTo(`/chat/${review.origin.chat_id}`);
+    router.push(`/chat-info/review/${review.id}`);
+  };
   // A row's menu is a native view that keeps the width its content first had, so the rows wait
   // for the sheet's width and take the cell's from the start.
   const [width, setWidth] = useState(0);
   const sourceChats = (item: AttentionItem) =>
     item.sources.map((source) => chats.find((chat) => chat.id === source.chat_id)).filter((chat, index, all): chat is Chat => !!chat && all.indexOf(chat) === index);
+  // The review the item waits on while it is open and decided on its own screen, not a draft card
+  // in the chat.
+  const openReviewOf = (item: AttentionItem) =>
+    item.sources
+      .map((source) => source.review_id && reviews.find((review) => review.id === source.review_id))
+      .find((review): review is ReviewItem => !!review && reviewIsOpen(review) && !review.is_message && chats.some((chat) => chat.id === review.origin.chat_id));
   return (
     <>
       <Stack.Screen options={{ title: t("Attention") }} />
@@ -68,7 +80,7 @@ export default function AttentionScreen() {
         {attention.items.length > 0 && width > 0 ? (
           <Section>
             {attention.items.map((item) => (
-              <ItemRow key={item.id} item={item} chats={sourceChats(item)} width={width} onOpen={open} />
+              <ItemRow key={item.id} item={item} chats={sourceChats(item)} review={openReviewOf(item)} width={width} onOpen={open} onOpenReview={openReview} />
             ))}
           </Section>
         ) : null}
@@ -154,7 +166,21 @@ function BriefCell({ brief, onPress }: { brief: AttentionBrief; onPress: () => v
 }
 
 /// The category's symbol, the title, the next action, and "Review · Launch copy, Writer".
-function ItemRow({ item, chats, width, onOpen }: { item: AttentionItem; chats: Chat[]; width: number; onOpen: (chatId: string) => void }) {
+function ItemRow({
+  item,
+  chats,
+  review,
+  width,
+  onOpen,
+  onOpenReview,
+}: {
+  item: AttentionItem;
+  chats: Chat[];
+  review: ReviewItem | undefined;
+  width: number;
+  onOpen: (chatId: string) => void;
+  onOpenReview: (review: ReviewItem) => void;
+}) {
   useLanguage();
   const p = usePalette();
   const menu = useRef<MenuComponentRef>(null);
@@ -178,7 +204,7 @@ function ItemRow({ item, chats, width, onOpen }: { item: AttentionItem; chats: C
       }}
     >
       <Pressable
-        onPress={first ? () => onOpen(first.id) : undefined}
+        onPress={review ? () => onOpenReview(review) : first ? () => onOpen(first.id) : undefined}
         onLongPress={ios ? undefined : () => menu.current?.show()}
         accessibilityRole="button"
         accessibilityLabel={[item.urgent ? t("Urgent") : categoryTitle(item), item.title, item.next_action].join(". ")}
