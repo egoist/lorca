@@ -11,9 +11,9 @@ use serde::de::DeserializeOwned;
 use crate::app::{OutboxItem, SentJob, Slot, State};
 use crate::model::{Author, Body, LiveTurn, Message};
 
-/// The most envelopes held for a sender to land; what a relay delivers beyond it pushes the
+/// The most blobs held for a sender or a key to land; what a relay delivers beyond it pushes the
 /// oldest out.
-const MAX_HELD_ENVELOPES: i64 = 256;
+const MAX_HELD_BLOBS: i64 = 1_000;
 /// How many opened envelopes and cancelled jobs are remembered past their expiry, newest first:
 /// the record of what a Device did does not hang on its clock alone.
 const KEPT_RECORDS: i64 = 20_000;
@@ -132,7 +132,7 @@ impl LocalStore {
              CREATE TABLE IF NOT EXISTS unpaired_machines (
                  id TEXT PRIMARY KEY NOT NULL
              );
-             CREATE TABLE IF NOT EXISTS held_envelopes (
+             CREATE TABLE IF NOT EXISTS held_blobs (
                  id         TEXT PRIMARY KEY NOT NULL,
                  kind       TEXT NOT NULL,
                  ciphertext BLOB NOT NULL,
@@ -1239,33 +1239,33 @@ impl LocalStore {
         Ok(added == 1)
     }
 
-    /// Keeps an envelope from a Device this one has no record of yet, by its blob id, to open
-    /// again when one lands. The oldest go past `MAX_HELD_ENVELOPES`.
-    pub fn hold_envelope(&self, id: &str, kind: &str, ciphertext: &[u8]) -> anyhow::Result<()> {
+    /// Keeps a blob this Device cannot take yet, by its blob id, to apply when it can: an
+    /// envelope from a Device it has no record of, or a record under an account key it does not
+    /// hold yet. One held already stays as it was; the oldest go past `MAX_HELD_BLOBS`.
+    pub fn hold_blob(&self, id: &str, kind: &str, ciphertext: &[u8]) -> anyhow::Result<()> {
         let connection = self.connection.lock().unwrap();
         connection.execute(
-            "INSERT OR IGNORE INTO held_envelopes (id, kind, ciphertext, held_at) VALUES (?1, ?2, ?3, ?4)",
+            "INSERT OR IGNORE INTO held_blobs (id, kind, ciphertext, held_at) VALUES (?1, ?2, ?3, ?4)",
             params![id, kind, ciphertext, crate::config::now_unix()],
         )?;
         connection.execute(
-            "DELETE FROM held_envelopes WHERE id NOT IN (SELECT id FROM held_envelopes ORDER BY held_at DESC, rowid DESC LIMIT ?1)",
-            [MAX_HELD_ENVELOPES],
+            "DELETE FROM held_blobs WHERE id NOT IN (SELECT id FROM held_blobs ORDER BY held_at DESC, rowid DESC LIMIT ?1)",
+            [MAX_HELD_BLOBS],
         )?;
         Ok(())
     }
 
-    /// The envelopes held for a sender to land, oldest first, without those held longer than any
-    /// envelope stays good.
-    pub fn held_envelopes(&self, max_age: i64) -> anyhow::Result<Vec<(String, String, Vec<u8>)>> {
+    /// The blobs held, oldest first, without those held longer than `max_age`.
+    pub fn held_blobs(&self, max_age: i64) -> anyhow::Result<Vec<(String, String, Vec<u8>)>> {
         let connection = self.connection.lock().unwrap();
-        connection.execute("DELETE FROM held_envelopes WHERE held_at < ?1", [crate::config::now_unix() - max_age])?;
-        let mut statement = connection.prepare("SELECT id, kind, ciphertext FROM held_envelopes ORDER BY held_at, rowid")?;
+        connection.execute("DELETE FROM held_blobs WHERE held_at < ?1", [crate::config::now_unix() - max_age])?;
+        let mut statement = connection.prepare("SELECT id, kind, ciphertext FROM held_blobs ORDER BY held_at, rowid")?;
         let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
         rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
     }
 
-    pub fn release_envelope(&self, id: &str) -> anyhow::Result<()> {
-        self.connection.lock().unwrap().execute("DELETE FROM held_envelopes WHERE id = ?1", [id])?;
+    pub fn release_blob(&self, id: &str) -> anyhow::Result<()> {
+        self.connection.lock().unwrap().execute("DELETE FROM held_blobs WHERE id = ?1", [id])?;
         Ok(())
     }
 
@@ -1287,6 +1287,12 @@ impl LocalStore {
     pub fn job_cancelled(&self, job_id: &str) -> anyhow::Result<bool> {
         let connection = self.connection.lock().unwrap();
         Ok(connection.query_row("SELECT 1 FROM cancelled_jobs WHERE id = ?1", [job_id], |_| Ok(())).optional()?.is_some())
+    }
+
+    /// Whether a version of `slot` waits in the outbox.
+    pub fn outbox_has_slot(&self, slot: &str) -> anyhow::Result<bool> {
+        let connection = self.connection.lock().unwrap();
+        Ok(connection.query_row("SELECT 1 FROM outbox WHERE slot_name = ?1", [slot], |_| Ok(())).optional()?.is_some())
     }
 
     pub fn clear(&self) -> anyhow::Result<()> {
@@ -1312,7 +1318,7 @@ impl LocalStore {
             "device_names",
             "unpaired_machines",
             "opened_envelopes",
-            "held_envelopes",
+            "held_blobs",
             "cancelled_jobs",
             "applied_blobs",
             "messages",
@@ -1396,6 +1402,20 @@ pub(crate) fn queue_outbox_tx(tx: &Transaction<'_>, item: &OutboxItem) -> anyhow
     };
     let slot_name = item.slot.as_ref().map(|slot| slot.name.as_str());
     let keep_first = item.slot.as_ref().is_some_and(|slot| slot.keep_first);
+    // The account's keyrings go ahead of everything waiting, so another Device reads one before
+    // what its newest key encrypts.
+    if item.kind == "key" {
+        if waiting.is_some() {
+            tx.execute("DELETE FROM outbox WHERE slot_name = ?1", [slot_name])?;
+        }
+        let front: i64 = tx.query_row("SELECT COALESCE(MIN(position), 1) - 1 FROM outbox", [], |row| row.get(0))?;
+        tx.execute(
+            "INSERT INTO outbox (position, id, kind, recipient, ciphertext, slot_name, slot_keep_first, group_name)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![front, item.id, item.kind, item.recipient, item.ciphertext, slot_name, keep_first, item.group],
+        )?;
+        return Ok(());
+    }
     match waiting {
         Some(position) => {
             tx.execute(

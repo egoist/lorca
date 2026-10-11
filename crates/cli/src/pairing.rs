@@ -165,11 +165,16 @@ async fn wait_for_request(app: &Arc<App>, url: &str, nonce: &str) -> Result<Valu
             None => app.relay.attest(url, &token, &request.machine_pubkey, &request.box_pubkey).await,
         }
         .map_err(|e| e.to_string())?;
+        // An identity device signs a keyring that covers what it holds; any other passes on what
+        // reached it.
+        crate::identity::signed_keyring(app);
+        let keyrings = app.machine_file().map(|file| file.keyrings).unwrap_or_default();
         let reply = PairReply {
             identity_pubkey: machine_file.identity_pubkey.clone(),
             content_pubkey: machine_file.content_pubkey.clone(),
             account_dek: machine_file.account_dek.clone(),
             relay_url: url.to_string(),
+            keyrings,
         };
         let reply_key = keys::unb64_32(&request.reply_key).map_err(|_| "joining Device sent a bad reply key".to_string())?;
         let encrypted_reply = crate::crypto::encrypt_json(&reply_key, REPLY_KIND, &reply).map_err(|e| e.to_string())?;
@@ -189,6 +194,8 @@ async fn wait_for_request(app: &Arc<App>, url: &str, nonce: &str) -> Result<Valu
         }
         app.push_machine_blob_if_changed();
         app.roster_changed(true);
+        // A newer key than the reply carried may have landed meanwhile.
+        crate::identity::forward_keyrings(app);
         let out = json!({ "id": device.id, "name": device.name, "os": device.os, "model": device.model });
         app.emit(Event::PairCompleted { nonce: nonce.to_string(), device: out.clone() });
         return Ok(out);
@@ -297,7 +304,7 @@ async fn join(app: &Arc<App>, pairing_string: &str, device_name: Option<String>)
     }
     let dek = keys::unb64_32(&reply.account_dek)?;
 
-    let machine_file = MachineFile {
+    let mut machine_file = MachineFile {
         machine_secret: keys::b64(&machine.secret),
         identity_pubkey: reply.identity_pubkey.clone(),
         content_pubkey: reply.content_pubkey.clone(),
@@ -309,7 +316,12 @@ async fn join(app: &Arc<App>, pairing_string: &str, device_name: Option<String>)
         registered: true,
         relay_url: Some(reply.relay_url.clone()),
         created_at: now_unix(),
+        keyrings: Vec::new(),
     };
+    // Each keyring is checked against the identity the pairing string named.
+    for keyring in reply.keyrings {
+        machine_file.add_keyring(keyring)?;
+    }
     *app.machine.lock().unwrap() = Some(machine_file);
     app.save_machine()?;
     app.set_relay_url(Some(reply.relay_url.clone()))?;

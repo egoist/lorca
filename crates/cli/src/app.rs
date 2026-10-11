@@ -54,6 +54,19 @@ impl Slot {
     }
 }
 
+/// How long a Device remembers what it uploaded, and how many blobs at most: the time a newer
+/// account key takes to reach it after another Device made it.
+pub const RECENT_UPLOADS: i64 = 2 * 60;
+const MAX_RECENT_UPLOADS: usize = 500;
+
+/// A blob this Device uploaded: when, and where the relay put it in the log.
+#[derive(Debug, Clone)]
+pub struct RecentUpload {
+    pub at: i64,
+    pub seq: i64,
+    pub item: OutboxItem,
+}
+
 /// The longest name the account can give a Device.
 pub const MAX_DEVICE_NAME_CHARS: usize = 64;
 
@@ -212,6 +225,16 @@ pub struct App {
     /// This process has checked the encrypted attention and project context records after an
     /// upgrade from a build that advanced last_seq without recognizing those blob kinds.
     pub attention_backfilled: AtomicBool,
+    /// A Device was unpaired: an identity device makes a new generation of the account key once
+    /// its pull has caught up (`identity::rotate_if_due`).
+    pub rotation_due: AtomicBool,
+    /// A Device this one had no record of landed, or a newer account key did: the blobs held
+    /// for them are tried again after the page being applied (`sync::release_held`).
+    pub held_due: AtomicBool,
+    /// What this Device uploaded for the account in the last `RECENT_UPLOADS`, with when: a blob
+    /// that went up under an older key just before a newer one reached it goes up again under
+    /// that one (`sync::account_key_changed`).
+    pub recent_uploads: Mutex<std::collections::VecDeque<RecentUpload>>,
     /// The machine key of the account the sync loop has pulled from the relay since this
     /// process started: its roster, Devices, and credentials. `sync.account` waits on it.
     pub account_pulled: watch::Sender<Option<String>>,
@@ -355,6 +378,10 @@ impl App {
             presence_stale: AtomicBool::new(false),
             bulk_sync: AtomicBool::new(false),
             attention_backfilled: AtomicBool::new(false),
+            rotation_due: AtomicBool::new(false),
+            // Blobs held when the last run ended are tried once this one has its keys.
+            held_due: AtomicBool::new(true),
+            recent_uploads: Mutex::new(std::collections::VecDeque::new()),
             account_pulled: watch::Sender::new(None),
             pairings: Mutex::new(HashMap::new()),
             accepting: Mutex::new(None),
@@ -562,7 +589,8 @@ impl App {
         self.machine_file().and_then(|m| m.machine().ok()).map(|m| m.pubkey())
     }
 
-    pub fn dek(&self) -> Option<[u8; 32]> {
+    /// The account keys: the newest encrypts, any opens (`keys::AccountKeys`).
+    pub fn dek(&self) -> Option<crate::keys::AccountKeys> {
         self.machine_file().and_then(|m| m.dek().ok())
     }
 
@@ -728,7 +756,7 @@ impl App {
         self.queue_blob(OutboxItem { id, kind: kind.to_string(), recipient: None, ciphertext, slot: Some(slot), group });
     }
 
-    fn queue_blob(&self, item: OutboxItem) {
+    pub fn queue_blob(&self, item: OutboxItem) {
         let snapshot = {
             let mut state = self.state.lock().unwrap();
             remember_applied(&mut state, &item.id);
@@ -802,7 +830,7 @@ impl App {
                 tracing::error!(%error, %chat_id, "dropping a chat's queued blobs to upload it again");
                 continue;
             }
-            if let Err(error) = crate::project_context::push_history(self, &chat_id) {
+            if let Err(error) = crate::project_context::push_history(self, &chat_id, true) {
                 tracing::warn!(%error, %chat_id, "queueing shared project context again");
             }
             let messages = match self.store.all(&chat_id) {
@@ -828,6 +856,16 @@ impl App {
             if read_mark == count {
                 self.push_chat_op(&ChatBlob::ClearUnread { chat_id });
             }
+        }
+    }
+
+    /// Notes a blob that went up, and its place in the relay's log, for `recent_uploads`.
+    pub fn remember_upload(&self, item: OutboxItem, seq: i64) {
+        let at = config::now_unix();
+        let mut recent = self.recent_uploads.lock().unwrap();
+        recent.push_back(RecentUpload { at, seq, item });
+        while recent.front().is_some_and(|upload| upload.at < at - RECENT_UPLOADS) || recent.len() > MAX_RECENT_UPLOADS {
+            recent.pop_front();
         }
     }
 
@@ -2601,7 +2639,7 @@ mod tests {
     fn a_dropped_avatar_is_queued_for_deletion_on_the_relay() {
         let scratch = scratch_app();
         let app = &scratch.0;
-        let avatar = |id: &str| crate::model::Attachment { id: id.into(), name: "a.png".into(), mime: "image/png".into(), size: 1, width: None, height: None };
+        let avatar = |id: &str| crate::model::Attachment { id: id.into(), name: "a.png".into(), mime: "image/png".into(), size: 1, width: None, height: None, sha256: None };
         let mut b1 = bot("b1");
         b1.avatar = Some(avatar("first"));
         app.state.lock().unwrap().bots.push(b1);

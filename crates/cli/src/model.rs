@@ -254,6 +254,10 @@ pub struct Attachment {
     pub width: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<u32>,
+    /// SHA-256 of the bytes, hex. The message carries it under the newest account key, so a
+    /// download that does not match it is refused (`files::ensure_local`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
 }
 
 impl Attachment {
@@ -1293,8 +1297,12 @@ pub struct PairRequest {
 pub struct PairReply {
     pub identity_pubkey: String,
     pub content_pubkey: String,
+    /// Generation 0 of the account key.
     pub account_dek: String,
     pub relay_url: String,
+    /// The account key's later generations, as the identity signed them.
+    #[serde(default)]
+    pub keyrings: Vec<crate::keys::SignedKeyring>,
 }
 
 /// Facts a host passes in when they cannot be probed: a phone names itself through the app.

@@ -166,7 +166,8 @@ fn tls() -> Arc<rustls::ClientConfig> {
 /// The relay protocol this client speaks, sent as `Lorca-Protocol` with every request. A
 /// relay may refuse one it no longer serves with `426`. 1: group paging, `DELETE /v1/identity`.
 /// 2: `POST /v1/machines`. 3: durable subject records (tasks, reviews, attention, shared project context) and sealed event envelopes.
-/// 4: signed envelopes between Devices, which a Device before them cannot open.
+/// 4: signed envelopes between Devices and generations of the account key, which a Device before
+/// them can neither open nor read.
 pub const PROTOCOL: u32 = 4;
 
 /// What a relay's auth challenge looks like: base64url, as long as a nonce is. Nothing else is

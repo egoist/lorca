@@ -185,18 +185,18 @@ pub struct EventTask {
     pub message_id: Option<String>,
 }
 
-fn dek(app: &App) -> anyhow::Result<[u8; 32]> {
+fn dek(app: &App) -> anyhow::Result<crate::keys::AccountKeys> {
     app.dek().context("Create or pair an identity first")
 }
 
-fn subscriptions(db: &Connection, key: &[u8; 32]) -> anyhow::Result<Vec<Subscription>> {
+fn subscriptions(db: &Connection, key: &crate::keys::AccountKeys) -> anyhow::Result<Vec<Subscription>> {
     let mut statement = db.prepare("SELECT ciphertext FROM event_subscriptions ORDER BY id")?;
     let rows = statement.query_map([], |r| r.get::<_, Vec<u8>>(0))?;
     rows.map(|r| crypto::decrypt_json(key, SUB_KIND, &r?))
         .collect()
 }
 
-fn subscription(db: &Connection, key: &[u8; 32], id: &str) -> anyhow::Result<Subscription> {
+fn subscription(db: &Connection, key: &crate::keys::AccountKeys, id: &str) -> anyhow::Result<Subscription> {
     let bytes: Vec<u8> = db
         .query_row(
             "SELECT ciphertext FROM event_subscriptions WHERE id = ?1",
@@ -208,7 +208,7 @@ fn subscription(db: &Connection, key: &[u8; 32], id: &str) -> anyhow::Result<Sub
     crypto::decrypt_json(key, SUB_KIND, &bytes)
 }
 
-fn save_subscription(db: &Connection, key: &[u8; 32], sub: &Subscription) -> anyhow::Result<()> {
+fn save_subscription(db: &Connection, key: &crate::keys::AccountKeys, sub: &Subscription) -> anyhow::Result<()> {
     db.execute(
         "INSERT OR REPLACE INTO event_subscriptions (id, ciphertext) VALUES (?1, ?2)",
         params![sub.id, crypto::encrypt_json(key, SUB_KIND, sub)?],
@@ -216,7 +216,7 @@ fn save_subscription(db: &Connection, key: &[u8; 32], sub: &Subscription) -> any
     Ok(())
 }
 
-fn deliveries(db: &Connection, key: &[u8; 32]) -> anyhow::Result<Vec<Delivery>> {
+fn deliveries(db: &Connection, key: &crate::keys::AccountKeys) -> anyhow::Result<Vec<Delivery>> {
     let mut statement = db.prepare("SELECT ciphertext FROM event_inbox ORDER BY position")?;
     let rows = statement.query_map([], |r| r.get::<_, Vec<u8>>(0))?;
     rows.map(|r| crypto::decrypt_json(key, INBOX_KIND, &r?))
@@ -225,7 +225,7 @@ fn deliveries(db: &Connection, key: &[u8; 32]) -> anyhow::Result<Vec<Delivery>> 
 
 fn deliveries_of(
     db: &Connection,
-    key: &[u8; 32],
+    key: &crate::keys::AccountKeys,
     subscription_id: &str,
 ) -> anyhow::Result<Vec<Delivery>> {
     let mut statement = db
@@ -235,7 +235,7 @@ fn deliveries_of(
         .collect()
 }
 
-fn delivery(db: &Connection, key: &[u8; 32], id: &str) -> anyhow::Result<Delivery> {
+fn delivery(db: &Connection, key: &crate::keys::AccountKeys, id: &str) -> anyhow::Result<Delivery> {
     let bytes: Vec<u8> = db
         .query_row(
             "SELECT ciphertext FROM event_inbox WHERE id = ?1",
@@ -247,7 +247,7 @@ fn delivery(db: &Connection, key: &[u8; 32], id: &str) -> anyhow::Result<Deliver
     crypto::decrypt_json(key, INBOX_KIND, &bytes)
 }
 
-fn save_delivery(db: &Connection, key: &[u8; 32], item: &Delivery) -> anyhow::Result<()> {
+fn save_delivery(db: &Connection, key: &crate::keys::AccountKeys, item: &Delivery) -> anyhow::Result<()> {
     db.execute("INSERT INTO event_inbox (id, subscription_id, ciphertext) VALUES (?1, ?2, ?3) ON CONFLICT(id) DO UPDATE SET ciphertext=excluded.ciphertext",
         params![item.id, item.envelope.subscription_id, crypto::encrypt_json(key, INBOX_KIND, item)?])?;
     Ok(())
@@ -1076,7 +1076,7 @@ fn purge(app: &App) -> anyhow::Result<()> {
 /// Records why a subscription's work is held, on the stored subscription, so a receipt or an
 /// edit that landed since this tick read it is kept.
 #[cfg(feature = "runner")]
-fn hold(app: &App, key: &[u8; 32], id: &str, problem: Option<&str>) -> anyhow::Result<()> {
+fn hold(app: &App, key: &crate::keys::AccountKeys, id: &str, problem: Option<&str>) -> anyhow::Result<()> {
     let changed = {
         let db = app.store.connection.lock().unwrap();
         let mut sub = subscription(&db, key, id)?;

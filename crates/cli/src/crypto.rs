@@ -11,9 +11,37 @@ const NONCE_LEN: usize = 24;
 /// XChaCha20-Poly1305's nonce and authentication tag around the plaintext.
 pub const ENVELOPE_OVERHEAD: usize = NONCE_LEN + 16;
 
-/// `nonce || ciphertext`, with the blob kind as associated data.
-pub fn encrypt(dek: &[u8; 32], kind: &str, plaintext: &[u8]) -> anyhow::Result<Vec<u8>> {
-    let cipher = XChaCha20Poly1305::new(dek.into());
+/// What encrypts and opens an envelope: one key, or the account's keys, of which the newest
+/// encrypts and any opens (`keys::AccountKeys`).
+pub trait Keys {
+    fn newest(&self) -> &[u8; 32];
+    /// Every key that may open, newest first.
+    fn each(&self) -> &[[u8; 32]];
+}
+
+impl Keys for [u8; 32] {
+    fn newest(&self) -> &[u8; 32] {
+        self
+    }
+
+    fn each(&self) -> &[[u8; 32]] {
+        std::slice::from_ref(self)
+    }
+}
+
+impl Keys for crate::keys::AccountKeys {
+    fn newest(&self) -> &[u8; 32] {
+        crate::keys::AccountKeys::newest(self)
+    }
+
+    fn each(&self) -> &[[u8; 32]] {
+        crate::keys::AccountKeys::each(self)
+    }
+}
+
+/// `nonce || ciphertext`, with the blob kind as associated data, under the newest key.
+pub fn encrypt(keys: &(impl Keys + ?Sized), kind: &str, plaintext: &[u8]) -> anyhow::Result<Vec<u8>> {
+    let cipher = XChaCha20Poly1305::new(keys.newest().into());
     let mut nonce = [0u8; NONCE_LEN];
     rand::rngs::OsRng.fill_bytes(&mut nonce);
     let ciphertext = cipher
@@ -25,23 +53,31 @@ pub fn encrypt(dek: &[u8; 32], kind: &str, plaintext: &[u8]) -> anyhow::Result<V
     Ok(out)
 }
 
-pub fn decrypt(dek: &[u8; 32], kind: &str, envelope: &[u8]) -> anyhow::Result<Vec<u8>> {
+/// Opens an envelope with whichever of the keys encrypted it.
+pub fn decrypt(keys: &(impl Keys + ?Sized), kind: &str, envelope: &[u8]) -> anyhow::Result<Vec<u8>> {
+    keys.each().iter().find_map(|key| open_with(key, kind, envelope)).ok_or_else(|| anyhow::anyhow!("decryption failed"))
+}
+
+/// Whether the newest of the keys encrypted the envelope.
+pub fn under_newest(keys: &(impl Keys + ?Sized), kind: &str, envelope: &[u8]) -> bool {
+    open_with(keys.newest(), kind, envelope).is_some()
+}
+
+fn open_with(key: &[u8; 32], kind: &str, envelope: &[u8]) -> Option<Vec<u8>> {
     if envelope.len() <= NONCE_LEN {
-        anyhow::bail!("envelope too short");
+        return None;
     }
-    let cipher = XChaCha20Poly1305::new(dek.into());
+    let cipher = XChaCha20Poly1305::new(key.into());
     let (nonce, ciphertext) = envelope.split_at(NONCE_LEN);
-    cipher
-        .decrypt(XNonce::from_slice(nonce), Payload { msg: ciphertext, aad: kind.as_bytes() })
-        .map_err(|_| anyhow::anyhow!("decryption failed"))
+    cipher.decrypt(XNonce::from_slice(nonce), Payload { msg: ciphertext, aad: kind.as_bytes() }).ok()
 }
 
-pub fn encrypt_json<T: serde::Serialize>(dek: &[u8; 32], kind: &str, value: &T) -> anyhow::Result<Vec<u8>> {
-    encrypt(dek, kind, &serde_json::to_vec(value)?)
+pub fn encrypt_json<T: serde::Serialize>(keys: &(impl Keys + ?Sized), kind: &str, value: &T) -> anyhow::Result<Vec<u8>> {
+    encrypt(keys, kind, &serde_json::to_vec(value)?)
 }
 
-pub fn decrypt_json<T: serde::de::DeserializeOwned>(dek: &[u8; 32], kind: &str, envelope: &[u8]) -> anyhow::Result<T> {
-    Ok(serde_json::from_slice(&decrypt(dek, kind, envelope)?)?)
+pub fn decrypt_json<T: serde::de::DeserializeOwned>(keys: &(impl Keys + ?Sized), kind: &str, envelope: &[u8]) -> anyhow::Result<T> {
+    Ok(serde_json::from_slice(&decrypt(keys, kind, envelope)?)?)
 }
 
 /// Seal to a base64url X25519 public key.

@@ -70,6 +70,10 @@ pub enum Event {
     PairCompleted { nonce: String, device: Value },
     #[serde(rename = "identity.changed")]
     IdentityChanged { has_identity: bool },
+    /// A newer generation of the account key: the phone shares its new push key with its
+    /// notification extension.
+    #[serde(rename = "account.key_changed")]
+    AccountKeyChanged,
 }
 
 /// Why this Device's last try to connect to the relay failed.

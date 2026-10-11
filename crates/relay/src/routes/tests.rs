@@ -454,6 +454,65 @@ async fn a_runner_answers_only_what_a_device_signed() {
     }
 }
 
+/// Through a relay: unpairing a Device makes a new account key. The other Devices get it, and
+/// so do a Device paired afterwards and one restored from the backup phrase. What the account
+/// writes from then on does not open with the keys the unpaired Device kept.
+#[tokio::test]
+async fn unpairing_a_device_makes_an_account_key_it_never_gets() {
+    let relay = Relay::start(0).await;
+    let app = |name: &str| lorca::app::App::load(lorca::config::Config { home: relay.home.join(name), port: 0 }).unwrap();
+    let (identity, phone, laptop) = (app("identity"), app("phone"), app("laptop"));
+    let phrase = lorca::identity::create(&identity, Some("Identity".into())).unwrap().join(" ");
+    identity.set_relay_url(Some(relay.url.clone())).unwrap();
+    for (device, name) in [(&phone, "Phone"), (&laptop, "Laptop")] {
+        let (_, code) = lorca::pairing::start(identity.clone()).await.unwrap();
+        lorca::pairing::accept(device.clone(), &code, Some(name.into())).await.unwrap();
+    }
+    let mut loops = vec![tokio::spawn(lorca::sync::run(identity.clone())), tokio::spawn(lorca::sync::run(phone.clone())), tokio::spawn(lorca::sync::run(laptop.clone()))];
+    async fn until(what: &str, done: impl Fn() -> bool) {
+        for _ in 0..200 {
+            if done() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        panic!("timed out waiting until {what}");
+    }
+    let laptop_id = laptop.this_device_id().unwrap();
+    until("the identity device knows the laptop", || identity.device(&laptop_id).is_some()).await;
+    let kept = laptop.dek().unwrap();
+
+    lorca::sync::unpair_device(&identity, &laptop_id).await.unwrap();
+    until("the identity device made a new key", || identity.dek().is_some_and(|held| held.newest() != kept.newest())).await;
+    let keys = identity.dek().unwrap();
+    until("the phone has the new key", || phone.dek().is_some_and(|held| held.newest() == keys.newest())).await;
+    assert!(phone.state.lock().unwrap().unpaired.contains(&laptop_id));
+
+    let mut scout = identity.state.lock().unwrap().bots[0].clone();
+    scout.id = String::new();
+    scout.name = "Scout".into();
+    identity.create_bot_with_dm(scout, None).unwrap();
+    until("the phone has the new bot", || phone.state.lock().unwrap().bots.iter().any(|bot| bot.name == "Scout")).await;
+    let (rosters, _) = relay.client.list_blobs(&relay.url, &identity.relay.token(&relay.url, &identity.machine_file().unwrap().machine().unwrap()).await.unwrap(), 0, "roster").await.unwrap();
+    let roster = lorca::keys::unb64(&rosters.last().unwrap().ciphertext).unwrap();
+    assert!(lorca::crypto::decrypt_json::<lorca::model::RosterBlob>(&kept, "roster", &roster).is_err(), "the laptop's keys open nothing new");
+
+    // A Device paired now, and one restored from the phrase, read the account as it is.
+    let tablet = app("tablet");
+    let (_, code) = lorca::pairing::start(identity.clone()).await.unwrap();
+    lorca::pairing::accept(tablet.clone(), &code, Some("Tablet".into())).await.unwrap();
+    assert_eq!(tablet.dek().unwrap().newest(), keys.newest());
+    loops.push(tokio::spawn(lorca::sync::run(tablet.clone())));
+    until("the tablet has the new bot", || tablet.state.lock().unwrap().bots.iter().any(|bot| bot.name == "Scout")).await;
+    let restored = app("restored");
+    restored.set_relay_url(Some(relay.url.clone())).unwrap();
+    lorca::identity::restore(&restored, &phrase, Some("Restored".into())).await.unwrap();
+    assert_eq!(restored.dek().unwrap(), keys);
+    for task in loops {
+        task.abort();
+    }
+}
+
 /// `POST /v1/machines` takes a paired machine's bearer and new keys, refuses a key paired with
 /// other keys, and answers `410` for a revoked one.
 #[tokio::test]

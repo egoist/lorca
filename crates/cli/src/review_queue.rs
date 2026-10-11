@@ -222,7 +222,7 @@ pub fn fingerprint(value: &impl Serialize) -> String {
     ))
 }
 
-fn key(app: &App) -> Result<[u8; 32], String> {
+fn key(app: &App) -> Result<crate::keys::AccountKeys, String> {
     app.dek()
         .ok_or_else(|| "Pair or create an identity first.".into())
 }

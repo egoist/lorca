@@ -336,7 +336,7 @@ pub struct Library {
 }
 
 impl Library {
-    pub fn load(home: &Path, dek: Option<[u8; 32]>) -> anyhow::Result<Self> {
+    pub fn load(home: &Path, dek: Option<crate::keys::AccountKeys>) -> anyhow::Result<Self> {
         let path = home.join("playbooks.enc");
         if !path.exists() {
             return Ok(Self::default());
@@ -456,9 +456,17 @@ fn publish(app: &App, record: &Playbook) {
     }
 }
 
+/// Queues every skill again, under the newest account key.
+pub fn push_all(app: &App) {
+    let records: Vec<Playbook> = app.playbooks.lock().unwrap().records.values().cloned().collect();
+    for record in &records {
+        publish(app, record);
+    }
+}
+
 /// Merges a skill another Device sent, keeping every revision either side has. When this
 /// Device has revisions the blob lacks, it sends the merged record back.
-pub fn apply_remote(app: &App, dek: &[u8; 32], ciphertext: &[u8]) -> Result<(), String> {
+pub fn apply_remote(app: &App, dek: &crate::keys::AccountKeys, ciphertext: &[u8]) -> Result<(), String> {
     let record: Playbook = crate::crypto::decrypt_json(dek, BLOB_KIND, ciphertext).map_err(|e| e.to_string())?;
     let incoming = Library { records: BTreeMap::from([(record.id.clone(), record)]) };
     let merged = {

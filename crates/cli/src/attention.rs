@@ -323,8 +323,12 @@ pub fn receive(app: &App, ciphertext: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+/// Queues every attention record again, under the newest account key.
 pub fn push_history(app: &App) -> Result<(), String> {
+    let Some(keys) = app.dek() else { return Ok(()) };
     for (id, ciphertext) in app.store.attention_rows().map_err(|e| e.to_string())? {
+        let plaintext = crate::crypto::decrypt(&keys, KIND, &ciphertext).map_err(|e| e.to_string())?;
+        let ciphertext = crate::crypto::encrypt(&keys, KIND, &plaintext).map_err(|e| e.to_string())?;
         app.push_slot_blob(KIND, Slot::latest(id), None, ciphertext);
     }
     Ok(())

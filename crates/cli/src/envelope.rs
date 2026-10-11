@@ -142,6 +142,15 @@ pub fn open<T: DeserializeOwned>(app: &App, machine_file: &MachineFile, kind: &s
     Ok(Opened { from: envelope.from, body: serde_json::from_value(envelope.body)? })
 }
 
+/// Who an envelope sealed to this Device names as its sender, unchecked: for telling whether a
+/// held one can be opened yet.
+pub fn sender(machine_file: &MachineFile, ciphertext: &[u8]) -> Option<String> {
+    let machine = machine_file.machine().ok()?;
+    let signed: Signed = crate::crypto::unseal_json(&machine.box_secret, ciphertext).ok()?;
+    let envelope: Envelope<serde_json::Value> = serde_json::from_slice(&unb64(&signed.envelope).ok()?).ok()?;
+    Some(envelope.from)
+}
+
 /// The body of an envelope sealed to `box_secret`, unchecked: for tests that look at what a
 /// Device queued.
 #[cfg(test)]
@@ -424,6 +433,7 @@ mod tests {
         let dek = pair.runner.dek().unwrap();
         let blob = crate::model::MachineBlob { device: device(&pair.phone), turns: Vec::new(), budgets: Vec::new(), watching: None };
         deliver(&pair.runner, "machine", &crate::crypto::encrypt_json(&dek, "machine", &blob).unwrap());
+        crate::sync::release_held(&pair.runner, &pair.runner.machine_file().unwrap());
         for _ in 0..100 {
             if responses(&pair.runner) == 1 {
                 break;
@@ -431,7 +441,7 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
         assert_eq!(responses(&pair.runner), 1, "answered once the phone is known");
-        assert!(pair.runner.store.held_envelopes(60).unwrap().is_empty());
+        assert!(pair.runner.store.held_blobs(60).unwrap().is_empty());
     }
 
     /// A job stopped on another Device before the Runner got it does not start, in whatever order

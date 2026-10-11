@@ -179,6 +179,10 @@ pub struct MachineFile {
     #[serde(default)]
     pub relay_url: Option<String>,
     pub created_at: i64,
+    /// The account key's generations as the identity signed them and they reached this Device,
+    /// each checked when it came. `account_dek` is generation 0.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keyrings: Vec<SignedKeyring>,
 }
 
 impl MachineFile {
@@ -186,8 +190,145 @@ impl MachineFile {
         Ok(Machine::from_secret(unb64_32(&self.machine_secret)?))
     }
 
-    pub fn dek(&self) -> anyhow::Result<[u8; 32]> {
-        unb64_32(&self.account_dek)
+    /// The account keys this Device holds: the newest encrypts, any opens.
+    pub fn dek(&self) -> anyhow::Result<AccountKeys> {
+        let keyring = self.keyring()?;
+        let mut keys = keyring.keys.iter().map(|key| unb64_32(&key.key)).collect::<anyhow::Result<Vec<_>>>()?;
+        keys.reverse();
+        Ok(AccountKeys(keys))
+    }
+
+    /// Every generation of the account key this Device holds, oldest first.
+    pub fn keyring(&self) -> anyhow::Result<Keyring> {
+        let mut keys = vec![GenerationKey { generation: 0, key: self.account_dek.clone(), made_at: 0, unpaired: Default::default() }];
+        for signed in &self.keyrings {
+            let keyring = signed.read()?;
+            // Only this account's: one that begins with another generation 0 says nothing here.
+            if keyring.keys.iter().any(|key| key.generation == 0 && key.key == self.account_dek) {
+                keys.extend(keyring.keys);
+            }
+        }
+        keys.sort_by(|a, b| (a.generation, &a.key).cmp(&(b.generation, &b.key)));
+        keys.dedup_by(|a, b| a.key == b.key);
+        Ok(Keyring { identity: self.identity_pubkey.clone(), keys })
+    }
+
+    /// Keeps a keyring another Device sent, once the identity's signature checks and it begins
+    /// with this account's generation 0. Answers whether it brought a newer key.
+    pub fn add_keyring(&mut self, signed: SignedKeyring) -> anyhow::Result<bool> {
+        let incoming = signed.verify(&self.identity_pubkey)?;
+        if !incoming.keys.iter().any(|key| key.generation == 0 && key.key == self.account_dek) {
+            anyhow::bail!("these account keys belong to another account");
+        }
+        let held = self.keyring()?;
+        if incoming.keys.iter().all(|key| held.keys.iter().any(|kept| kept.key == key.key)) {
+            return Ok(false);
+        }
+        let newest = held.newest().clone();
+        // A keyring another one holds whole says nothing more.
+        self.keyrings.retain(|kept| kept.read().is_ok_and(|kept| !kept.is_within(&incoming)));
+        self.keyrings.push(signed);
+        Ok(self.keyring()?.newest() != &newest)
+    }
+}
+
+/// The account keys a Device holds, newest first. The newest encrypts what this Device writes,
+/// to the relay and to its own files; any of them opens what was written before. An account
+/// whose key never changed has one: the account DEK it was made with.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AccountKeys(Vec<[u8; 32]>);
+
+impl AccountKeys {
+    pub fn single(key: [u8; 32]) -> Self {
+        AccountKeys(vec![key])
+    }
+
+    pub fn newest(&self) -> &[u8; 32] {
+        &self.0[0]
+    }
+
+    pub fn each(&self) -> &[[u8; 32]] {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for AccountKeys {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "AccountKeys({} generations)", self.0.len())
+    }
+}
+
+/// Signed ahead of a keyring, so the identity's signature on one passes for nothing else.
+const KEYRING_DOMAIN: &[u8] = b"lorca/keyring/v1\0";
+
+/// One generation of the account key, base64url. Generation 0 is the account DEK the account was
+/// made with; each later one was made when a Device was unpaired.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GenerationKey {
+    pub generation: u32,
+    pub key: String,
+    /// When the identity device made it, in Unix seconds; 0 for generation 0.
+    #[serde(default)]
+    pub made_at: i64,
+    /// The Devices unpaired when it was made, by machine pubkey: they never get it.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub unpaired: std::collections::BTreeSet<String>,
+}
+
+/// The account key's generations, oldest first, by the order of `(generation, key)`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Keyring {
+    pub identity: String,
+    pub keys: Vec<GenerationKey>,
+}
+
+impl Keyring {
+    pub fn newest(&self) -> &GenerationKey {
+        self.keys.last().expect("a keyring holds generation 0")
+    }
+
+    /// Every Device unpaired when any generation was made.
+    pub fn unpaired(&self) -> std::collections::BTreeSet<String> {
+        self.keys.iter().flat_map(|key| key.unpaired.iter().cloned()).collect()
+    }
+
+    fn is_within(&self, other: &Keyring) -> bool {
+        self.keys.iter().all(|key| other.keys.iter().any(|kept| kept.key == key.key))
+    }
+}
+
+/// A keyring and the identity's signature over it. Only an identity device makes one; any
+/// Device passes one on, and every Device checks the signature against the identity it belongs
+/// to before it keeps one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignedKeyring {
+    pub keyring: String,
+    pub signature: String,
+}
+
+impl SignedKeyring {
+    pub fn sign(identity: &Identity, keyring: &Keyring) -> anyhow::Result<Self> {
+        let bytes = serde_json::to_vec(keyring)?;
+        Ok(SignedKeyring { keyring: b64(&bytes), signature: identity.sign(&[KEYRING_DOMAIN, &bytes].concat()) })
+    }
+
+    /// The keyring, when the identity `identity_pubkey` signed it as its own.
+    pub fn verify(&self, identity_pubkey: &str) -> anyhow::Result<Keyring> {
+        let bytes = unb64(&self.keyring)?;
+        let signature = ed25519_dalek::Signature::from_slice(&unb64(&self.signature)?)?;
+        verifying_key(identity_pubkey)?
+            .verify_strict(&[KEYRING_DOMAIN, &bytes].concat(), &signature)
+            .map_err(|_| anyhow::anyhow!("the account keys are not signed by this account's identity"))?;
+        let keyring: Keyring = serde_json::from_slice(&bytes)?;
+        if keyring.identity != identity_pubkey {
+            anyhow::bail!("the account keys name another identity");
+        }
+        Ok(keyring)
+    }
+
+    /// The keyring as kept in `machine.json`, checked when it came.
+    pub fn read(&self) -> anyhow::Result<Keyring> {
+        Ok(serde_json::from_slice(&unb64(&self.keyring)?)?)
     }
 }
 

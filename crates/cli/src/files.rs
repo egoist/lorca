@@ -79,7 +79,7 @@ pub fn store(app: &App, file: &OutgoingFile) -> anyhow::Result<Attachment> {
         _ if mime.starts_with("image/") => image_size(&bytes),
         _ => (None, None),
     };
-    Ok(Attachment { id, name, mime, size: bytes.len() as u64, width, height })
+    Ok(Attachment { id, name, mime, size: bytes.len() as u64, width, height, sha256: Some(sha256(&bytes)) })
 }
 
 fn write_local(app: &App, id: &str, bytes: &[u8]) -> anyhow::Result<()> {
@@ -123,8 +123,17 @@ pub async fn ensure_local(app: &Arc<App>, attachment: &Attachment) -> anyhow::Re
         .map_err(|e| anyhow::anyhow!(e.message))?
         .ok_or_else(|| anyhow::anyhow!("the relay no longer has {}", attachment.name))?;
     let bytes = crate::crypto::decrypt(&dek, "file", &ciphertext)?;
+    // A Device that kept an older account key could put other bytes up under the same id.
+    if attachment.sha256.as_ref().is_some_and(|expected| *expected != sha256(&bytes)) {
+        anyhow::bail!("{} on the relay is not the file that was sent", attachment.name);
+    }
     write_local(app, &attachment.id, &bytes)?;
     Ok(path)
+}
+
+fn sha256(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn valid_id(id: &str) -> bool {
@@ -348,7 +357,7 @@ mod tests {
         };
         let parts = |id: &str, name: &str, mime: &str, bytes: &[u8]| {
             write_local(&app, id, bytes).unwrap();
-            let attachment = Attachment { id: id.into(), name: name.into(), mime: mime.into(), size: bytes.len() as u64, width: None, height: None };
+            let attachment = Attachment { id: id.into(), name: name.into(), mime: mime.into(), size: bytes.len() as u64, width: None, height: None, sha256: None };
             content_parts(&app, &attachment, &workdir, true)
         };
         let labeled = parts("att-1", "shot.jpg", "image/jpeg", &picture(64, 48));
@@ -357,7 +366,7 @@ mod tests {
         assert_eq!(large[1], ContentPart::text("[Image: original 2600x100, displayed at 2000x77. Multiply coordinates by 1.30 to map to original image.]"));
         assert!(matches!(&large[2], ContentPart::Image { .. }), "{large:?}");
         assert!(app.config.files_dir().join("att-2.inline.json").is_file(), "made once, then kept");
-        let kept = Attachment { id: "att-2".into(), name: "pano.png".into(), mime: "image/png".into(), size: 0, width: None, height: None };
+        let kept = Attachment { id: "att-2".into(), name: "pano.png".into(), mime: "image/png".into(), size: 0, width: None, height: None, sha256: None };
         std::fs::remove_file(local_path(&app, "att-2")).unwrap();
         assert_eq!(content_parts_from_kept(&app, &kept), large[1..], "the next turn reads what was kept");
         let heic = parts("att-3", "IMG_0001.heic", "image/heic", b"\0\0\0\x18ftypheic\0\0\0\0mif1heic");

@@ -446,12 +446,14 @@ pub fn apply_remote(app: &App, chat_id: &str, entry: &Entry) -> Result<(), Strin
     Ok(())
 }
 
-pub fn push_history(app: &App, chat_id: &str) -> Result<(), String> {
+/// Queues every entry of a chat's project context again; with `files`, the assets this Device
+/// holds as well.
+pub fn push_history(app: &App, chat_id: &str, files: bool) -> Result<(), String> {
     if app.dek().is_none() {
         return Ok(());
     }
     for entry in load(app, chat_id)? {
-        if let Some(asset) = &entry.asset {
+        if let Some(asset) = entry.asset.as_ref().filter(|_| files) {
             if crate::files::is_local(app, &asset.id) {
                 crate::files::push_blob(app, Some(chat_id), asset).map_err(|e| e.to_string())?;
             }

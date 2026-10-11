@@ -48,6 +48,8 @@ A bot you [share as a link](/docs/templates) is encrypted with a key of its own,
 
 Unpairing a device makes the relay refuse its key for good, and your other devices remember the key as unpaired, so no relay can bring the device back. The device deletes its keys, credentials, and chats the next time it connects.
 
+Your account also gets a new key, made by the device that holds your backup phrase's secret once it is online, and sent to every device but the unpaired one. Whatever you write from then on is encrypted with it, so a device that was unpaired but kept its copy of the old key can't read it, and what it writes is ignored. It can still read what it could before, so if it held API keys you connected, change them at the provider.
+
 ## Deleting your account
 
 **Settings › Advanced › Delete Account** in the desktop app removes everything the relay holds for the account (chats, attachments, bots, provider credentials) and unpairs every device, which then deletes its own copy.

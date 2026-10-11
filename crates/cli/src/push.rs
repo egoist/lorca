@@ -39,8 +39,9 @@ pub struct Notice {
     pub chat_id: String,
 }
 
-pub fn seal(dek: &[u8; 32], notice: &Notice) -> anyhow::Result<Vec<u8>> {
-    let cipher = ChaCha20Poly1305::new((&crate::keys::push_key(dek)).into());
+/// Seals a notice under the push key of the newest account key.
+pub fn seal(keys: &(impl crate::crypto::Keys + ?Sized), notice: &Notice) -> anyhow::Result<Vec<u8>> {
+    let cipher = ChaCha20Poly1305::new((&crate::keys::push_key(keys.newest())).into());
     let mut nonce = [0u8; NONCE_LEN];
     rand::rngs::OsRng.fill_bytes(&mut nonce);
     let ciphertext = cipher
@@ -49,13 +50,20 @@ pub fn seal(dek: &[u8; 32], notice: &Notice) -> anyhow::Result<Vec<u8>> {
     Ok([nonce.as_slice(), &ciphertext].concat())
 }
 
-pub fn open(dek: &[u8; 32], envelope: &[u8]) -> anyhow::Result<Notice> {
+/// Opens a notice under the push key of whichever account key sealed it.
+pub fn open(keys: &(impl crate::crypto::Keys + ?Sized), envelope: &[u8]) -> anyhow::Result<Notice> {
     if envelope.len() <= NONCE_LEN {
         anyhow::bail!("envelope too short");
     }
-    let cipher = ChaCha20Poly1305::new((&crate::keys::push_key(dek)).into());
     let (nonce, ciphertext) = envelope.split_at(NONCE_LEN);
-    let plaintext = cipher.decrypt(Nonce::from_slice(nonce), Payload { msg: ciphertext, aad: AAD }).map_err(|_| anyhow::anyhow!("decryption failed"))?;
+    let plaintext = keys
+        .each()
+        .iter()
+        .find_map(|key| {
+            let cipher = ChaCha20Poly1305::new((&crate::keys::push_key(key)).into());
+            cipher.decrypt(Nonce::from_slice(nonce), Payload { msg: ciphertext, aad: AAD }).ok()
+        })
+        .ok_or_else(|| anyhow::anyhow!("decryption failed"))?;
     Ok(serde_json::from_slice(&plaintext)?)
 }
 
@@ -132,6 +140,9 @@ fn send_inner(app: &Arc<App>, chat: &Chat, bot: &Bot, text: &str, permission_id:
     }
     let app = app.clone();
     let chat_id = chat.meta.id.clone();
+    // The account the push belongs to: its first key, whichever is newest by then.
+    let account = |app: &App| app.machine_file().map(|machine| machine.account_dek);
+    let sealed_for = account(&app);
     tokio::spawn(async move {
         let eligible = |app: &App| should_notify(app, &chat_id, permission_id.as_deref()) && attention_id.as_deref().is_none_or(|id| {
             app.message(&chat_id, id).and_then(|message| message.notification).is_some_and(|kind| crate::attention::allows(app, kind))
@@ -142,13 +153,13 @@ fn send_inner(app: &Arc<App>, chat: &Chat, bot: &Bot, text: &str, permission_id:
         loop {
             // A read mark is about a reply that arrived, so a phone left open or disconnected
             // before the reply finished cannot suppress future notifications.
-            if app.dek() != Some(dek) || !eligible(&app) {
+            if account(&app) != sealed_for || !eligible(&app) {
                 return;
             }
             let result = match crate::sync::token_or_register(&app, &url, &machine).await {
                 Ok(token) => {
                     // Authentication may have taken longer than the read mark.
-                    if app.dek() != Some(dek) || !eligible(&app) {
+                    if account(&app) != sealed_for || !eligible(&app) {
                         return;
                     }
                     app.relay.push(&url, &token, &crate::keys::b64(&sealed)).await
@@ -271,7 +282,7 @@ mod tests {
             machine_secret: crate::keys::b64(&crate::keys::random_32()), identity_pubkey: "identity".into(),
             content_pubkey: "content".into(), account_dek: crate::keys::b64(dek), name: "Runner".into(),
             os: "macos".into(), os_version: String::new(), model: String::new(), registered: true,
-            relay_url: Some(url.into()), created_at: 1,
+            relay_url: Some(url.into()), created_at: 1, keyrings: Vec::new(),
         });
         app.settings.lock().unwrap().relay_url = Some(url.into());
         let bot = Bot {

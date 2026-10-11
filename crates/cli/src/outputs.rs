@@ -621,7 +621,7 @@ mod tests {
                     let ciphertext = ciphertext.clone();
                     let expected_id = expected_id.clone();
                     async move {
-                        if id == expected_id {
+                        if id == expected_id || id == "att-swapped" {
                             (StatusCode::OK, [("content-type", "application/octet-stream")], ciphertext)
                         } else {
                             (StatusCode::NOT_FOUND, [("content-type", "application/octet-stream")], Vec::new())
@@ -663,6 +663,13 @@ mod tests {
         assert_eq!(std::fs::read(path).unwrap(), b"private downloadable report");
         let named = crate::api::dispatch(&paired, "files.path", json!({"attachment":attachment(&output),"named":true})).await.unwrap();
         assert_eq!(std::path::Path::new(named["path"].as_str().unwrap()).file_name().unwrap(), "Report.txt");
+        // Other bytes under an attachment's id do not pass for it.
+        assert!(attachment(&output).sha256.is_some());
+        let mut swapped = attachment(&output).clone();
+        swapped.id = "att-swapped".into();
+        swapped.sha256 = Some("0".repeat(64));
+        assert!(crate::files::ensure_local(&paired, &swapped).await.unwrap_err().to_string().contains("not the file that was sent"));
+        assert!(!crate::files::is_local(&paired, "att-swapped"));
         let mut missing = attachment(&output).clone();
         missing.id = "att-missing".into();
         assert!(crate::files::ensure_local(&paired, &missing).await.unwrap_err().to_string().contains("no longer has"));

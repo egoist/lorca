@@ -30,7 +30,7 @@ const KIND: &str = "task";
 #[cfg(any(feature = "runner", test))]
 const CONTEXT_MARKER: &str = "[Durable tasks (current records;";
 
-fn key(app: &App) -> Result<[u8; 32], String> {
+fn key(app: &App) -> Result<crate::keys::AccountKeys, String> {
     app.dek()
         .ok_or_else(|| "Create or pair an identity first.".into())
 }
@@ -616,7 +616,7 @@ fn run(app: &App, task: &mut Task, params: &Value) -> Result<Job, String> {
     })
 }
 
-fn task_blob(task: &Task, dek: &[u8; 32]) -> Result<OutboxItem, String> {
+fn task_blob(task: &Task, dek: &crate::keys::AccountKeys) -> Result<OutboxItem, String> {
     Ok(OutboxItem {
         id: uuid::Uuid::new_v4().to_string(),
         kind: KIND.into(),

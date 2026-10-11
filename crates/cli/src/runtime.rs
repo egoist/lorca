@@ -884,7 +884,7 @@ mod tests {
             Author::You,
             Body::Text {
                 text: String::new(),
-                attachments: vec![Attachment { id: "f".into(), name: "plan.pdf".into(), mime: "application/pdf".into(), size: 1, width: None, height: None }],
+                attachments: vec![Attachment { id: "f".into(), name: "plan.pdf".into(), mime: "application/pdf".into(), size: 1, width: None, height: None, sha256: None }],
                 mentions: Vec::new(),
                 reply_to: None,
             },

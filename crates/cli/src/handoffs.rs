@@ -248,7 +248,7 @@ impl HandoffUpdate {
     }
 }
 
-fn key(app: &App) -> Result<[u8; 32], String> {
+fn key(app: &App) -> Result<crate::keys::AccountKeys, String> {
     app.dek().ok_or_else(|| "No account key".into())
 }
 

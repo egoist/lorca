@@ -73,7 +73,7 @@ One doc per subject under `docs/architecture/`, each short enough to read in one
 | --- | --- |
 | [Identity](docs/architecture/identity.md) | Key pairs and the identity device, pairing and unpairing, Devices and Runners, what the relay sees, the account's provider credentials |
 | [Relay](docs/architecture/relay.md) | `crates/relay`: storage on SQLite or Postgres, files, housekeeping, quotas, metrics, rate limits, auth, tables and migrations, the blob, sync socket, and push APIs, deploys |
-| [Relay trust](docs/architecture/relay-trust.md) | What a Device takes from the relay and how it checks it: Device records and unpaired keys, signed envelopes, the challenge nonce, the pairing reply key, the signed account key |
+| [Relay trust](docs/architecture/relay-trust.md) | What a Device takes from the relay and how it checks it: Device records and unpaired keys, signed envelopes, the challenge nonce, the pairing reply key, the account key's generations and their rotation on unpair |
 | [Protocols](docs/architecture/protocols.md) | The app ↔ CLI websocket and the CLI ↔ relay requests and blobs |
 | [CLI (runtime)](docs/architecture/runtime.md) | The `lorca` binary and its data directory, installing it, its signed self-updates and `lorca service`, the agent loop and a turn on a Runner |
 | [Notifications](docs/architecture/notifications.md) | Phone pushes for replies, failures, and questions, the macOS app's own notifications, reads on another Device, the chat on screen |

@@ -20,8 +20,8 @@ public class LorcaCoreModule: Module {
   private final class Listener: EventListener, @unchecked Sendable {
     weak var module: LorcaCoreModule?
     func onEvent(json: String) {
-      // Pairing and forgetting change the account key, and with it the push key.
-      if json.hasPrefix("{\"event\":\"identity.changed\"") { module?.sharePushKey() }
+      // Pairing, forgetting, and a new generation of the account key change the push key.
+      if json.hasPrefix("{\"event\":\"identity.changed\"") || json.hasPrefix("{\"event\":\"account.key_changed\"") { module?.sharePushKey() }
       module?.sendEvent("event", ["json": json])
     }
   }
