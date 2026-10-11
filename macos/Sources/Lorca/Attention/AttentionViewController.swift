@@ -64,7 +64,7 @@ extension AttentionItem {
 
 /// The account's attention, in a popover under the toolbar's Attention button: each
 /// coordinator's latest brief, then what waits on the user, urgent first. A row opens its
-/// chat; its menu opens another source chat or marks it resolved. The options menu holds the
+/// chat, and an item waiting on a review the inspector lists opens that review's sheet over it; its menu opens another source chat or marks it resolved. The options menu holds the
 /// notification switches and the coordinator. Bots keep the list; the CLI sends it whole
 /// (`attention.changed`), and the popover follows it while it shows.
 final class AttentionViewController: NSViewController, NSMenuDelegate {
@@ -82,8 +82,8 @@ final class AttentionViewController: NSViewController, NSMenuDelegate {
     /// highlight, alone.
     private var rendered: (attention: AttentionView, names: [String])?
 
-    /// A row was clicked: show its chat.
-    var onOpen: ((Chat.ID) -> Void)?
+    /// A row was clicked: show its chat, and the review it waits on when there is one.
+    var onOpen: ((Chat.ID, ReviewItem?) -> Void)?
 
     override func loadView() {
         let root = NSView()
@@ -210,7 +210,7 @@ final class AttentionViewController: NSViewController, NSMenuDelegate {
 
         let row = AttentionRowView(content: stack)
         row.setAccessibilityLabel(([L("%@’s brief", bot?.name ?? L("Coordinator"))] + lines.map { "\($0): \($1)" }).joined(separator: "\n"))
-        row.onClick = { [weak self] in self?.onOpen?(brief.chatId) }
+        row.onClick = { [weak self] in self?.onOpen?(brief.chatId, nil) }
         return row
     }
 
@@ -257,7 +257,12 @@ final class AttentionViewController: NSViewController, NSMenuDelegate {
         let row = AttentionRowView(content: content)
         row.toolTip = item.summary
         row.setAccessibilityLabel([item.urgent ? L("Urgent") : item.categoryTitle, item.title, item.nextAction, item.summary].joined(separator: ". "))
-        if let first = chats.first { row.onClick = { [weak self] in self?.onOpen?(first.id) } }
+        if let first = chats.first {
+            row.onClick = { [weak self] in
+                guard let self else { return }
+                if let review = openReview(item) { onOpen?(review.origin.chatId, review) } else { onOpen?(first.id, nil) }
+            }
+        }
         row.contextMenu = { [weak self] in self?.menu(for: item) }
         row.setAccessibilityCustomActions([
             NSAccessibilityCustomAction(name: L("Mark as Resolved")) { [weak self] in
@@ -271,6 +276,13 @@ final class AttentionViewController: NSViewController, NSMenuDelegate {
     private func sourceChats(_ item: AttentionItem) -> [Chat] {
         var seen = Set<Chat.ID>()
         return item.sources.compactMap { store.chat($0.chatId) }.filter { seen.insert($0.id).inserted }
+    }
+
+    /// The review the item waits on while it is open and approved in a sheet, not a draft card
+    /// in the transcript.
+    private func openReview(_ item: AttentionItem) -> ReviewItem? {
+        item.sources.lazy.compactMap { $0.reviewId.flatMap(self.store.review) }
+            .first { $0.isOpen && $0.isMessage != true && self.store.chat($0.origin.chatId) != nil }
     }
 
     /// Open each chat the item came from, then Mark as Resolved.
@@ -292,7 +304,7 @@ final class AttentionViewController: NSViewController, NSMenuDelegate {
 
     @objc private func openFromMenu(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? Chat.ID else { return }
-        onOpen?(id)
+        onOpen?(id, nil)
     }
 
     @objc private func resolveFromMenu(_ sender: NSMenuItem) {

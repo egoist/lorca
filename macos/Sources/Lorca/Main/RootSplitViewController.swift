@@ -514,6 +514,12 @@ final class RootSplitViewController: NSSplitViewController {
         chatController?.focusComposer()
     }
 
+    /// A review's sheet, to approve or reject it, unless one is already up.
+    func presentReview(_ item: ReviewItem) {
+        guard presentedViewControllers?.isEmpty != false else { return }
+        presentAsSheet(ReviewViewController(item: item))
+    }
+
     /// The marketplace, as a sheet sized to the window: Grok Bot's is 800 by 700. From a bot's
     /// inspector it opens on that bot's Runner, from Settings on the picked Device; a bot added
     /// there lands in its chat.

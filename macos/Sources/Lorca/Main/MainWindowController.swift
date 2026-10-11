@@ -333,10 +333,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         // The click that closed the popover.
         guard Date().timeIntervalSince(attentionClosedAt) > 0.3, root.selection?.isSettings != true else { return }
         let content = AttentionViewController()
-        content.onOpen = { [weak self] chatID in
+        content.onOpen = { [weak self] chatID, review in
             guard let self else { return }
             attentionPopover?.close()
             root.open(chatID)
+            if let review { root.presentReview(review) }
         }
         let popover = NSPopover()
         popover.behavior = .transient
