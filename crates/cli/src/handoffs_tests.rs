@@ -184,7 +184,7 @@ async fn offline_admission_persists_contract_and_encrypted_job_atomically() {
     assert_eq!(update.request(), &request);
     let job_blob = outbox.iter().find(|b| b.kind == "job").unwrap();
     let machine = f.target.machine_file().unwrap().machine().unwrap();
-    let job: Job = crate::crypto::unseal_json(&machine.box_secret, &job_blob.ciphertext).unwrap();
+    let job: Job = crate::envelope::body_of(&machine.box_secret, &job_blob.ciphertext);
     assert_eq!(job.id, request.job_id);
     assert_eq!(job.task_id, request.task_id);
     assert_eq!(
@@ -463,7 +463,7 @@ async fn cancellation_reaches_an_offline_target_before_delayed_admission() {
     assert_eq!(cancels.len(), 1);
     let machine = f.target.machine_file().unwrap().machine().unwrap();
     let control: JobCancel =
-        crate::crypto::unseal_json(&machine.box_secret, &cancels[0].ciphertext).unwrap();
+        crate::envelope::body_of(&machine.box_secret, &cancels[0].ciphertext);
     assert_eq!(control.job_id, request.job_id);
     assert!(f
         .target
@@ -701,7 +701,7 @@ async fn stopping_a_turn_stops_the_work_it_handed_off() {
         if remote {
             let cancels: Vec<_> = f.source.store.outbox().unwrap().into_iter().filter(|item| item.kind == "job_cancel").collect();
             let machine = f.target.machine_file().unwrap().machine().unwrap();
-            let control: JobCancel = crate::crypto::unseal_json(&machine.box_secret, &cancels[0].ciphertext).unwrap();
+            let control: JobCancel = crate::envelope::body_of(&machine.box_secret, &cancels[0].ciphertext);
             assert_eq!((cancels.len(), control.job_id.as_str()), (1, request.job_id.as_str()));
             // The Runner that had not started it never does.
             transfer(&f.source, &f.target, "handoff");

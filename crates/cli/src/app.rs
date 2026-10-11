@@ -71,6 +71,9 @@ pub struct State {
     pub shared_links: Vec<crate::templates::links::SharedLink>,
     /// The names the account gives its Devices, by machine pubkey, from the roster.
     pub device_names: std::collections::BTreeMap<String, String>,
+    /// The machine pubkeys of Devices unpaired from this account, from the roster and kept for
+    /// good: no `machine` blob makes one a Device again and no envelope from one is opened.
+    pub unpaired: std::collections::BTreeSet<String>,
     pub last_seq: i64,
     /// Chats deleted here whose blobs the relay still has to drop.
     pub group_deletes: Vec<String>,
@@ -239,7 +242,9 @@ pub struct App {
     /// Jobs sent to other Runners, waiting for their `job_result`.
     pub pending_results: Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>,
     /// Requests sent to other Runners, waiting for their `response`.
-    pub pending_responses: Mutex<HashMap<String, tokio::sync::oneshot::Sender<Response>>>,
+    /// The questions this Device asked, by request id: the Runner asked, which alone answers, and
+    /// where its answer goes.
+    pub pending_responses: Mutex<HashMap<String, (String, tokio::sync::oneshot::Sender<Response>)>>,
     /// Questions waiting for the user's answer, by the id of the row that asks: its chat, and
     /// where the answer goes.
     #[cfg(feature = "runner")]
@@ -750,6 +755,7 @@ impl App {
                 auto_review: state.auto_review.clone(),
                 shared_links: state.shared_links.clone(),
                 device_names: state.device_names.clone(),
+                unpaired: state.unpaired.clone(),
                 updated_at: config::now_secs(),
             }
         };

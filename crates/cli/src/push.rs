@@ -201,7 +201,7 @@ mod tests {
         use crate::attention::Notification;
         let (sent, mut pushes) = tokio::sync::mpsc::unbounded_channel();
         let server = Router::new()
-            .route("/v1/auth/challenge", post(|| async { Json(serde_json::json!({"nonce":"test"})) }))
+            .route("/v1/auth/challenge", post(|| async { Json(serde_json::json!({"nonce":"a-challenge-nonce-from-the-test-relay"})) }))
             .route("/v1/auth/verify", post(|| async { Json(serde_json::json!({"token":"test"})) }))
             .route("/v1/push", post(move |Json(body): Json<serde_json::Value>| {
                 let sent = sent.clone();
@@ -306,7 +306,7 @@ mod tests {
 
         let (sent, mut pushes) = tokio::sync::mpsc::unbounded_channel();
         let server = Router::new()
-            .route("/v1/auth/challenge", post(|| async { Json(serde_json::json!({ "nonce": "test" })) }))
+            .route("/v1/auth/challenge", post(|| async { Json(serde_json::json!({ "nonce": "a-challenge-nonce-from-the-test-relay" })) }))
             .route("/v1/auth/verify", post(|| async { Json(serde_json::json!({ "token": "test" })) }))
             .route("/v1/push", post(move |Json(body): Json<serde_json::Value>| {
                 let sent = sent.clone();
@@ -406,7 +406,7 @@ mod tests {
 
         let (sent, mut pushes) = tokio::sync::mpsc::unbounded_channel();
         let server = Router::new()
-            .route("/v1/auth/challenge", post(|| async { Json(serde_json::json!({ "nonce": "test" })) }))
+            .route("/v1/auth/challenge", post(|| async { Json(serde_json::json!({ "nonce": "a-challenge-nonce-from-the-test-relay" })) }))
             .route("/v1/auth/verify", post(|| async { Json(serde_json::json!({ "token": "test" })) }))
             .route("/v1/push", post(move |Json(body): Json<serde_json::Value>| {
                 let sent = sent.clone();
@@ -489,7 +489,7 @@ mod tests {
         let issued = Arc::new(AtomicUsize::new(0));
         let (sent, mut pushes) = tokio::sync::mpsc::unbounded_channel::<Push>();
         let server = Router::new()
-            .route("/v1/auth/challenge", post(|| async { Json(serde_json::json!({ "nonce": "test" })) }))
+            .route("/v1/auth/challenge", post(|| async { Json(serde_json::json!({ "nonce": "a-challenge-nonce-from-the-test-relay" })) }))
             .route("/v1/auth/verify", post(move || {
                 let token = format!("token-{}", issued.fetch_add(1, Ordering::Relaxed));
                 async move { Json(serde_json::json!({ "token": token })) }

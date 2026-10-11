@@ -81,7 +81,6 @@ pub struct BlobIn {
 #[allow(dead_code)]
 pub struct MachineIn {
     pub machine_pubkey: String,
-    pub box_pubkey: String,
     pub last_seen: i64,
     pub created_at: i64,
     /// The machine has a sync socket open on the relay.
@@ -167,7 +166,15 @@ fn tls() -> Arc<rustls::ClientConfig> {
 /// The relay protocol this client speaks, sent as `Lorca-Protocol` with every request. A
 /// relay may refuse one it no longer serves with `426`. 1: group paging, `DELETE /v1/identity`.
 /// 2: `POST /v1/machines`. 3: durable subject records (tasks, reviews, attention, shared project context) and sealed event envelopes.
-pub const PROTOCOL: u32 = 3;
+/// 4: signed envelopes between Devices, which a Device before them cannot open.
+pub const PROTOCOL: u32 = 4;
+
+/// What a relay's auth challenge looks like: base64url, as long as a nonce is. Nothing else is
+/// signed in answer, so the challenge cannot get the machine key to sign an envelope or anything
+/// else that begins with a `/` or a NUL.
+pub fn is_challenge_nonce(nonce: &str) -> bool {
+    (16..=128).contains(&nonce.len()) && nonce.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+}
 
 const FILE_TRANSFER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 
@@ -264,6 +271,10 @@ impl RelayClient {
         )
         .await?;
         let nonce = challenge["nonce"].as_str().ok_or_else(|| RelayError { status: None, message: "no nonce".into() })?;
+        // The relay picks what the machine key signs here, and that key signs envelopes too.
+        if !is_challenge_nonce(nonce) {
+            return Err(RelayError { status: None, message: "the relay's challenge is not a nonce".into() });
+        }
         let verified = Self::check(
             self.http()
                 .post(format!("{url}/v1/auth/verify"))

@@ -672,8 +672,8 @@ fn commit(
             outbox.push(OutboxItem {
                 id: uuid::Uuid::new_v4().to_string(),
                 kind: "job".into(),
-                recipient: Some(runner.id),
-                ciphertext: crypto::seal_json(&runner.box_pubkey, job).map_err(err)?,
+                recipient: Some(runner.id.clone()),
+                ciphertext: crate::envelope::seal(app, "job", &runner, job).map_err(err)?,
                 slot: None,
                 group: None,
             });

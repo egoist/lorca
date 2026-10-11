@@ -392,6 +392,68 @@ async fn a_paired_computer_pairs_another() {
     assert!(error.to_string().contains("unpaired"), "{error}");
 }
 
+/// Through a relay: what a phone signs reaches its Runner and the answer comes back. What the
+/// relay plants for the Runner, sealed with nothing but its public key, changes nothing, and
+/// neither does a request the phone signed once, delivered again under a new blob id.
+#[tokio::test]
+async fn a_runner_answers_only_what_a_device_signed() {
+    let relay = Relay::start(0).await;
+    let app = |name: &str| lorca::app::App::load(lorca::config::Config { home: relay.home.join(name), port: 0 }).unwrap();
+    let (runner, phone) = (app("runner"), app("phone"));
+    lorca::identity::create(&runner, Some("Runner".into())).unwrap();
+    runner.set_relay_url(Some(relay.url.clone())).unwrap();
+    let (_, code) = lorca::pairing::start(runner.clone()).await.unwrap();
+    lorca::pairing::accept(phone.clone(), &code, Some("Phone".into())).await.unwrap();
+    let loops = [tokio::spawn(lorca::sync::run(runner.clone())), tokio::spawn(lorca::sync::run(phone.clone()))];
+    let (runner_id, phone_id) = (runner.this_device_id().unwrap(), phone.this_device_id().unwrap());
+    // Each knows the other from the account's records, and the phone sees the Runner online.
+    for _ in 0..200 {
+        if phone.device_is_online(&runner_id) && runner.device(&phone_id).is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let chef = runner.state.lock().unwrap().bots[0].id.clone();
+    lorca::requests::ask(&phone, &runner_id, "memory.read", serde_json::json!({ "bot_id": chef })).await.unwrap();
+
+    let mcp = runner.config.mcp_path();
+    let servers = || std::fs::read_to_string(&mcp).unwrap_or_default();
+    let token = phone.relay.token(&relay.url, &phone.machine_file().unwrap().machine().unwrap()).await.unwrap();
+    let upload = |id: &str, ciphertext: Vec<u8>| {
+        let item = OutboxItem { id: id.into(), kind: "request".into(), recipient: Some(runner_id.clone()), ciphertext, slot: None, group: None };
+        relay.client.put_blob(&relay.url, &token, item)
+    };
+    let runner_device = phone.device(&runner_id).unwrap();
+    let save = |name: &str| lorca::model::Request {
+        id: format!("req-{name}"),
+        verb: "mcp.save".into(),
+        body: serde_json::json!({ "name": name, "config": { "command": "true" } }),
+    };
+    let signed = lorca::envelope::seal(&phone, "request", &runner_device, &save("docs")).unwrap();
+    upload("signed", signed.clone()).await.unwrap();
+    for _ in 0..200 {
+        if servers().contains("docs") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(servers().contains("docs"), "the signed request");
+    lorca::requests::ask(&phone, &runner_id, "mcp.remove", serde_json::json!({ "name": "docs" })).await.unwrap();
+    assert!(!servers().contains("docs"));
+
+    upload("delivered-again", signed).await.unwrap();
+    let unsigned = lorca::crypto::seal_json(&runner_device.box_pubkey, &save("planted")).unwrap();
+    upload("planted", unsigned).await.unwrap();
+    // The Runner reads its envelopes in the order the relay took them, so once it answers a
+    // question asked after these, it has read them.
+    lorca::requests::ask(&phone, &runner_id, "memory.read", serde_json::json!({ "bot_id": chef })).await.unwrap();
+    assert!(!servers().contains("docs"), "the request again");
+    assert!(!servers().contains("planted"));
+    for task in loops {
+        task.abort();
+    }
+}
+
 /// `POST /v1/machines` takes a paired machine's bearer and new keys, refuses a key paired with
 /// other keys, and answers `410` for a revoked one.
 #[tokio::test]
@@ -505,7 +567,7 @@ async fn handoff_request_report_and_cancellation_round_trip_in_independent_slots
         assert_eq!(lorca::crypto::decrypt(&key, "handoff", &ciphertext).unwrap(), expected.as_bytes());
     }
     let health: Value = relay.http.get(format!("{}/v1/health", relay.url)).send().await.unwrap().json().await.unwrap();
-    assert_eq!(health["protocol"], 3);
+    assert_eq!(health["protocol"], 4);
     assert!(!db::SEALED_KINDS.contains(&"handoff"));
 }
 

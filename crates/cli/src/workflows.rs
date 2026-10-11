@@ -453,7 +453,7 @@ pub async fn handle(app: &Arc<App>, method: &str, params: &Value) -> Result<Valu
                 app.cancel_job(&sample.job_id);
                 if setup.runner_id != app.this_device_id().unwrap_or_default() {
                     if let Some(runner) = app.device(&setup.runner_id) {
-                        let ciphertext = crate::crypto::seal_json(&runner.box_pubkey, &JobCancel { job_id: sample.job_id.clone() }).map_err(|e| e.to_string())?;
+                        let ciphertext = crate::envelope::seal(app, "job_cancel", &runner, &JobCancel { job_id: sample.job_id.clone() }).map_err(|e| e.to_string())?;
                         app.push_blob("job_cancel", Some(runner.id), ciphertext);
                     }
                 }

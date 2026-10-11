@@ -1046,6 +1046,10 @@ pub struct RosterBlob {
     /// without one shows the name its own `machine` blob carries.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub device_names: std::collections::BTreeMap<String, String>,
+    /// The machine pubkeys of the Devices unpaired from the account. A Device keeps every key it
+    /// reads here, and puts the ones a roster left out back in its own.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub unpaired: std::collections::BTreeSet<String>,
     pub updated_at: f64,
 }
 
@@ -1251,21 +1255,19 @@ pub struct JobCancel {
     pub job_id: String,
 }
 
-/// `kind = request`: a question for one Runner from another Device, sealed to the Runner's box
-/// key. The verbs read and write a bot's memory, which lives on its Runner.
+/// `kind = request`: a question for one Runner from another Device, in an envelope the asking
+/// Device signs (`envelope.rs`); the answer goes back to the signer.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Request {
     pub id: String,
-    /// `memory.read` or `memory.write`.
+    /// `memory.read`, `mcp.save`, and the rest that `requests::answer` takes.
     pub verb: String,
-    /// The Device asking; the answer is sealed to it.
-    pub requested_by: String,
     #[serde(default)]
     pub body: serde_json::Value,
-    pub created_at: f64,
 }
 
-/// `kind = response`: the Runner's answer to a `Request`, sealed to the Device that asked.
+/// `kind = response`: the Runner's answer to a `Request`, signed by it and sealed to the Device
+/// that asked.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Response {
     pub request_id: String,
@@ -1275,12 +1277,16 @@ pub struct Response {
     pub error: Option<String>,
 }
 
-/// Pairing handshake payloads (sealed boxes).
+/// Pairing handshake payloads. The request is sealed to the pairing string's `ek`, which the
+/// relay never sees; the reply is encrypted with the request's `reply_key`, so only the Device
+/// that holds the pairing string could have written it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PairRequest {
     pub machine_pubkey: String,
     pub box_pubkey: String,
     pub device: Device,
+    /// A random key, base64url, that the reply is encrypted with.
+    pub reply_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

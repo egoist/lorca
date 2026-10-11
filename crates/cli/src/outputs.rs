@@ -613,7 +613,7 @@ mod tests {
         let ciphertext = f.app.store.outbox().unwrap().into_iter().find(|blob| blob.id == attachment(&output).id).unwrap().ciphertext;
         let expected_id = attachment(&output).id.clone();
         let router = Router::new()
-            .route("/v1/auth/challenge", post(|| async { Json(json!({"nonce":"challenge"})) }))
+            .route("/v1/auth/challenge", post(|| async { Json(json!({"nonce":"a-challenge-nonce-from-the-test-relay"})) }))
             .route("/v1/auth/verify", post(|| async { Json(json!({"token":"paired-test-token","expires_at":crate::config::now_unix()+600})) }))
             .route(
                 "/v1/files/{id}",

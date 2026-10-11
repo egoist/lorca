@@ -51,16 +51,53 @@ pub fn create(app: &Arc<App>, device_name: Option<String>) -> anyhow::Result<Vec
     }
     app.save_state();
 
-    // The DEK wrapped to the content key, so a restore can unwrap it. Uploaded when a relay is
-    // reachable; harmless to keep queued until then.
-    let sealed = crate::crypto::seal(&identity.content_pubkey(), &dek)?;
-    app.push_blob("key", None, sealed);
+    // Uploaded when a relay is reachable; harmless to keep queued until then.
+    push_account_key(app);
     app.push_machine_blob_if_changed();
     create_lead_bot(app);
 
     app.emit(Event::IdentityChanged { has_identity: true });
     app.emit(Event::Snapshot(app.snapshot()));
     Ok(identity.phrase())
+}
+
+/// Signed ahead of the account key, so the signature passes for nothing else the identity key
+/// signs.
+const ACCOUNT_KEY_DOMAIN: &[u8] = b"lorca/account-key/v1\0";
+
+/// The account key as the relay keeps it for a restore: signed by the identity and sealed to
+/// the content key. Anyone can seal to the content key, the relay included; only the identity
+/// signs, so a restore takes no key but the identity's.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct AccountKey {
+    dek: String,
+    signature: String,
+}
+
+pub fn seal_account_key(identity: &Identity, dek: &[u8; 32]) -> anyhow::Result<Vec<u8>> {
+    let signature = identity.sign(&[ACCOUNT_KEY_DOMAIN, dek].concat());
+    crate::crypto::seal_json(&identity.content_pubkey(), &AccountKey { dek: keys::b64(dek), signature })
+}
+
+/// The account key in a `key` blob, when the identity sealed and signed it.
+pub fn open_account_key(identity: &Identity, ciphertext: &[u8]) -> Option<[u8; 32]> {
+    let key: AccountKey = crate::crypto::unseal_json(&identity.content_secret, ciphertext).ok()?;
+    let dek = keys::unb64_32(&key.dek).ok()?;
+    let signature = ed25519_dalek::Signature::from_slice(&keys::unb64(&key.signature).ok()?).ok()?;
+    identity.signing.verifying_key().verify_strict(&[ACCOUNT_KEY_DOMAIN, &dek].concat(), &signature).ok()?;
+    Some(dek)
+}
+
+/// Puts the account key on the relay, in one slot, when this Device holds the identity: after
+/// creating it, for a relay that lost the account, and each time the CLI starts, so the relay
+/// always holds one a restore can open.
+pub fn push_account_key(app: &App) {
+    let Some(identity) = app.identity.lock().unwrap().clone().and_then(|file| file.identity().ok()) else { return };
+    let Some(dek) = app.dek() else { return };
+    match seal_account_key(&identity, &dek) {
+        Ok(sealed) => app.push_slot_blob("key", crate::app::Slot::latest("key"), None, sealed),
+        Err(error) => tracing::error!(%error, "sealing the account key"),
+    }
 }
 
 pub const LEAD_BOT_NAME: &str = "Chef";
@@ -125,4 +162,28 @@ pub async fn restore(app: &Arc<App>, phrase: &str, device_name: Option<String>) 
     app.emit(Event::IdentityChanged { has_identity: true });
     app.emit(Event::Snapshot(app.snapshot()));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Anyone can seal to the content key; a restore takes only the key the identity signed.
+    #[test]
+    fn a_restore_takes_only_the_account_key_the_identity_signed() {
+        let identity = Identity::generate();
+        let dek = keys::generate_dek();
+        assert_eq!(open_account_key(&identity, &seal_account_key(&identity, &dek).unwrap()), Some(dek));
+
+        let planted = keys::generate_dek();
+        let unsigned = crate::crypto::seal(&identity.content_pubkey(), &planted).unwrap();
+        assert_eq!(open_account_key(&identity, &unsigned), None);
+        let other = Identity::generate();
+        let signed_by_another = crate::crypto::seal_json(
+            &identity.content_pubkey(),
+            &AccountKey { dek: keys::b64(&planted), signature: other.sign(&[ACCOUNT_KEY_DOMAIN, &planted].concat()) },
+        )
+        .unwrap();
+        assert_eq!(open_account_key(&identity, &signed_by_another), None);
+    }
 }

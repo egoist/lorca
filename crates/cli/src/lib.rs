@@ -20,6 +20,7 @@ pub mod crypto;
 #[cfg(feature = "runner")]
 pub mod decisions;
 pub mod drafts;
+pub mod envelope;
 pub mod events;
 pub mod event_triggers;
 pub mod routine_events;

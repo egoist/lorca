@@ -589,7 +589,7 @@ fn admit(app: &Arc<App>, request: HandoffRequest, replaces: Option<&str>) -> Res
             id: request.job_id.clone(),
             kind: "job".into(),
             recipient: Some(runner.id.clone()),
-            ciphertext: crate::crypto::seal_json(&runner.box_pubkey, &job)
+            ciphertext: crate::envelope::seal(app, "job", &runner, &job)
                 .map_err(|e| e.to_string())?,
             slot: None,
             group: None,
@@ -1241,9 +1241,11 @@ fn record_cancellation(app: &Arc<App>, request: &HandoffRequest, report: Handoff
         outbox.push(OutboxItem {
             id: uuid::Uuid::new_v4().to_string(),
             kind: "job_cancel".into(),
-            recipient: Some(runner.id),
-            ciphertext: crate::crypto::seal_json(
-                &runner.box_pubkey,
+            recipient: Some(runner.id.clone()),
+            ciphertext: crate::envelope::seal(
+                app,
+                "job_cancel",
+                &runner,
                 &JobCancel {
                     job_id: request.job_id.clone(),
                 },

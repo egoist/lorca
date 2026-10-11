@@ -22,8 +22,10 @@ pub(super) fn cancel_run(app: &App, run: &TaskRun) {
     if app.this_device_id().as_deref() == Some(run.runner_id.as_str()) {
         app.cancel_job(&run.id);
     } else if let Some(runner) = app.device(&run.runner_id) {
-        if let Ok(bytes) = crypto::seal_json(
-            &runner.box_pubkey,
+        if let Ok(bytes) = crate::envelope::seal(
+            app,
+            "job_cancel",
+            &runner,
             &crate::model::JobCancel {
                 job_id: run.id.clone(),
             },

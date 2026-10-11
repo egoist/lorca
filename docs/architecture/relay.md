@@ -33,7 +33,7 @@ The image (`crates/relay/Dockerfile`) builds from the repo root, since the relay
 Auth is per machine:
 
 1. `POST /v1/auth/challenge { machine_pubkey }` → nonce.
-2. Client signs the nonce with the machine signing key: `POST /v1/auth/verify`.
+2. Client checks that the nonce is one, 16 to 128 base64url characters, and signs it with the machine signing key: `POST /v1/auth/verify` ([Relay trust](relay-trust.md#what-the-machine-key-signs)).
 3. Relay issues a one-hour HMAC bearer bound to the identity and machine.
 
 Identity-level writes are signed requests: `{ payload: base64url(json), signature }` where the payload carries `identity_pubkey` and `ts` and the identity key signed the bytes. `POST /v1/identities` registers the identity (idempotent) and attests one machine; it is used at create, restore, and for each Device an identity device pairs. A Device without the identity key pairs one with `POST /v1/machines { machine_pubkey, box_pubkey }` behind its own bearer (protocol 2): the relay adds the machine to the caller's identity and keeps `{ by, at }`, the machine that vouched and when, as its attestation. Under the identity's write lock it refuses a caller that is no longer one of the identity's machines (`404`, or `410` once unpaired), a revoked key (`410`), and a key already paired with other keys or to another identity (`409`); the same keys again change nothing.

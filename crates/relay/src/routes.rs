@@ -103,8 +103,10 @@ pub type ApiResult<T> = Result<T, ApiError>;
 
 /// The protocol this relay speaks, in `/v1/health`. A client sends the one it speaks as
 /// `Lorca-Protocol`. 1: group paging, `DELETE /v1/identity`. 2: `POST /v1/machines`.
-/// 3: durable subject records and sealed event envelopes.
-pub const PROTOCOL: u32 = 3;
+/// 3: durable subject records and sealed event envelopes. 4: signed envelopes between
+/// Devices, which the relay stores as it does any sealed envelope; `--min-protocol 4` sends the
+/// Devices that cannot open them to update.
+pub const PROTOCOL: u32 = 4;
 
 /// Turns away a client older than `--min-protocol` before anything else looks at it. The
 /// answer is the same on every route, the sync socket's upgrade included, so a client learns

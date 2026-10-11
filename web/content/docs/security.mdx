@@ -12,10 +12,13 @@ Creating an identity makes a 32-byte secret on your first Device. Everything els
 
 - The secret stays on the device that created or restored it.
 - Whoever holds the phrase holds the account. Lorca cannot recover it for you.
+- The account key the relay keeps for a restore is signed by your identity, so the phrase restores only the key you made.
 
 ## What is encrypted
 
 Everything with meaning: bot names and descriptions, chat titles, messages, attachments, device names, provider credentials, skills, tasks, group projects, items waiting for review, the Attention list, and the contents of push notifications. Each is encrypted on your device with your account key (XChaCha20-Poly1305) before upload. Work sent to a bot on another computer, an answer to a secret's card, and an event that starts a bot's work are sealed to that computer's public key, so only it can open them.
+
+What one of your devices sends another (a bot's turn, a change to a computer's plugins, MCP servers, or secrets, and the answer) is also signed with the sending device's key. A device acts on it only when a device in your list signed it for that device, and only once, so the relay can't make up work for your computers or send the same work again.
 
 ## What the relay sees
 
@@ -33,7 +36,7 @@ Devices prove who they are by signing a challenge with their key. There is nothi
 
 ## Pairing
 
-A pairing code carries a one-time public key. The new device sends its keys sealed to that one-time key; the existing device answers with the account key sealed to the new device. The relay passes both messages without being able to open either. A code expires after ten minutes or when you cancel it.
+A pairing code carries a one-time public key. The new device sends its keys, and a one-time reply key, sealed to that one-time key; the existing device answers with the account key encrypted under the reply key. The relay passes both messages without being able to open either, and can't write a reply the new device would accept. A code expires after ten minutes or when you cancel it.
 
 Any paired computer can pair a new device. Every paired device shows in your device list, one that never says what it is as **Unknown Device**, so you can unpair a device you don't recognize.
 
@@ -43,7 +46,7 @@ A bot you [share as a link](/docs/templates) is encrypted with a key of its own,
 
 ## Unpairing
 
-Unpairing a device makes the relay refuse its key for good. The device deletes its keys, credentials, and chats the next time it connects.
+Unpairing a device makes the relay refuse its key for good, and your other devices remember the key as unpaired, so no relay can bring the device back. The device deletes its keys, credentials, and chats the next time it connects.
 
 ## Deleting your account
 

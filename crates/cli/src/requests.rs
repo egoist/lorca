@@ -1,8 +1,9 @@
-//! Questions one Device asks a Runner through the relay: a `request` blob sealed to the Runner's
-//! box key, answered with a `response` blob sealed back to the Device that asked. The verbs read
-//! and write a bot's memory, which lives on the bot's Runner, so the desktop app and phone show and
-//! edit it for a bot that runs on another machine. A turn's `job` / `job_result` pair works the
-//! same way; this is the same idea for questions with an answer.
+//! Questions one Device asks a Runner through the relay: a `request` envelope the asking Device
+//! signs and seals to the Runner, answered with a `response` envelope the Runner signs and seals
+//! back (`envelope.rs`). The verbs read and change what lives on the Runner (a bot's memory, its
+//! plugins and MCP servers, its secrets, a command it runs), so the desktop app and phone manage
+//! a bot that runs on another machine. A turn's `job` / `job_result` pair works the same way; this
+//! is the same idea for questions with an answer.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,7 +11,6 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::app::App;
-use crate::config::now_secs;
 use crate::memory::MemoryStore;
 use crate::model::{Request, Response};
 
@@ -36,16 +36,10 @@ pub async fn ask_within(app: &Arc<App>, runner_id: &str, verb: &str, body: Value
     if !app.device_is_online(runner_id) {
         return Err(format!("{} is offline.", runner.name));
     }
-    let request = Request {
-        id: format!("req-{}", uuid::Uuid::new_v4()),
-        verb: verb.to_string(),
-        requested_by: app.this_device_id().unwrap_or_default(),
-        body,
-        created_at: now_secs(),
-    };
-    let ciphertext = crate::crypto::seal_json(&runner.box_pubkey, &request).map_err(|e| e.to_string())?;
+    let request = Request { id: format!("req-{}", uuid::Uuid::new_v4()), verb: verb.to_string(), body };
+    let ciphertext = crate::envelope::seal(app, "request", &runner, &request).map_err(|e| e.to_string())?;
     let (tx, rx) = tokio::sync::oneshot::channel();
-    app.pending_responses.lock().unwrap().insert(request.id.clone(), tx);
+    app.pending_responses.lock().unwrap().insert(request.id.clone(), (runner.id.clone(), tx));
     app.push_blob("request", Some(runner.id.clone()), ciphertext);
     let answer = tokio::time::timeout(timeout, rx).await;
     app.pending_responses.lock().unwrap().remove(&request.id);
@@ -56,32 +50,43 @@ pub async fn ask_within(app: &Arc<App>, runner_id: &str, verb: &str, body: Value
     }
 }
 
-/// A `response` reached this Device: hands it to the waiting `ask`, then drops the blob from
-/// the relay.
-pub fn deliver(app: Arc<App>, response: Response, blob_id: String) {
-    if let Some(tx) = app.pending_responses.lock().unwrap().remove(&response.request_id) {
+/// A `response` from `from` reached this Device: hands it to the waiting `ask` when `from` is the
+/// Runner it asked, then drops the blob from the relay.
+pub fn deliver(app: Arc<App>, from: &str, response: Response, blob_id: String) {
+    let waiting = {
+        let mut pending = app.pending_responses.lock().unwrap();
+        match pending.get(&response.request_id) {
+            Some((runner, _)) if runner == from => pending.remove(&response.request_id).map(|(_, tx)| tx),
+            Some(_) => {
+                tracing::warn!(request_id = %response.request_id, "a response from a Device that was not asked");
+                None
+            }
+            None => None,
+        }
+    };
+    if let Some(tx) = waiting {
         let _ = tx.send(response);
     }
     tokio::spawn(async move { crate::sync::delete_remote_blob(&app, &blob_id).await });
 }
 
-/// A `request` reached this Runner: answers it, seals the answer to the Device that asked, and
-/// drops the request from the relay.
-pub fn serve(app: Arc<App>, request: Request, blob_id: String) {
+/// A `request` that Device `from` signed reached this Runner: answers it as asked by `from`,
+/// seals the answer to it, and drops the request from the relay.
+pub fn serve(app: Arc<App>, from: String, request: Request, blob_id: String) {
     tokio::spawn(async move {
-        let (body, error) = match answer(&app, &request).await {
+        let (body, error) = match answer(&app, &from, &request).await {
             Ok(body) => (body, None),
             Err(error) => (Value::Null, Some(error)),
         };
         let response = Response { request_id: request.id.clone(), body, error };
-        match app.device(&request.requested_by).filter(|d| !d.box_pubkey.is_empty()) {
-            Some(requester) => match crate::crypto::seal_json(&requester.box_pubkey, &response) {
+        match app.device(&from) {
+            Some(requester) => match crate::envelope::seal(&app, "response", &requester, &response) {
                 Ok(ciphertext) => {
                     app.push_blob("response", Some(requester.id.clone()), ciphertext);
                 }
                 Err(error) => tracing::warn!(%error, "sealing a response"),
             },
-            None => tracing::warn!(verb = %request.verb, "a request from a Device this Runner does not know"),
+            None => tracing::warn!(verb = %request.verb, "the Device that asked is gone"),
         }
         crate::sync::delete_remote_blob(&app, &blob_id).await;
     });
@@ -95,7 +100,7 @@ pub fn serve(app: Arc<App>, request: Request, blob_id: String) {
 /// Send now has a turn here read a message it holds. The update verbs install the latest release
 /// of this CLI, or turn its automatic updates on or off. A request names no release and no
 /// download: the Runner installs only what its own signed manifest offers.
-async fn answer(app: &Arc<App>, request: &Request) -> Result<Value, String> {
+async fn answer(app: &Arc<App>, from: &str, request: &Request) -> Result<Value, String> {
     let body = &request.body;
     match request.verb.as_str() {
         "templates.memories" => Ok(json!(crate::templates::local_memories(app, body["bot_id"].as_str().ok_or("missing bot_id")?)?)),
@@ -108,19 +113,16 @@ async fn answer(app: &Arc<App>, request: &Request) -> Result<Value, String> {
         verb if verb.starts_with("budgets.") => crate::budgets::serve(app, verb, body),
         #[cfg(feature = "runner")]
         verb if verb.starts_with("connector_limits.") => crate::connector_limits::serve(app, verb, body),
-        verb if verb.starts_with("reviews.") => crate::review_queue::serve(app, verb, body, &request.requested_by).await,
-        verb if verb.starts_with("tasks.") => crate::tasks::serve(app, verb, body, &request.requested_by),
+        verb if verb.starts_with("reviews.") => crate::review_queue::serve(app, verb, body, from).await,
+        verb if verb.starts_with("tasks.") => crate::tasks::serve(app, verb, body, from),
         "memory.read" => memory_read(app, body["bot_id"].as_str().ok_or("missing bot_id")?),
         "memory.write" => {
             let text = body["text"].as_str().ok_or("missing text")?;
             memory_write(app, body["bot_id"].as_str().ok_or("missing bot_id")?, text, body["expected_hash"].as_str())
         }
-        verb if verb.starts_with("feedback.") => {
-            app.device(&request.requested_by).ok_or("Unknown requesting Device")?;
-            crate::feedback::serve(app, verb, body, &request.requested_by).await
-        }
+        verb if verb.starts_with("feedback.") => crate::feedback::serve(app, verb, body, from).await,
         #[cfg(feature = "runner")]
-        verb if verb.starts_with("plugins.") || verb == "permission.answer" || verb == "permissions.catalog" => crate::plugins::serve_request(app, verb, body, Some(&request.requested_by)).await,
+        verb if verb.starts_with("plugins.") || verb == "permission.answer" || verb == "permissions.catalog" => crate::plugins::serve_request(app, verb, body, Some(from)).await,
         #[cfg(feature = "runner")]
         verb if verb.starts_with("mcp.") => crate::plugins::mcp_json::serve_request(app, verb, body).await,
         #[cfg(feature = "runner")]

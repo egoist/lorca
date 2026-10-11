@@ -122,7 +122,7 @@ pub fn cancel_chat(app: &Arc<App>, chat_id: &str) {
     }
     for (job_id, runner_id) in app.cancel_chat(chat_id) {
         let Some(runner) = app.device(&runner_id).filter(|runner| !runner.box_pubkey.is_empty()) else { continue };
-        match crate::crypto::seal_json(&runner.box_pubkey, &JobCancel { job_id: job_id.clone() }) {
+        match crate::envelope::seal(app, "job_cancel", &runner, &JobCancel { job_id: job_id.clone() }) {
             Ok(ciphertext) => {
                 app.push_blob("job_cancel", Some(runner.id), ciphertext);
             }
@@ -533,7 +533,13 @@ pub fn resume_sent_jobs(app: &Arc<App>) {
 }
 
 /// A `job_result` from another Runner reached this Device.
-pub fn deliver_job_result(app: &Arc<App>, result: JobResult) {
+pub fn deliver_job_result(app: &Arc<App>, from: &str, result: JobResult) {
+    // Only the Runner the job went to says how it ended.
+    let sent_there = app.running_jobs.lock().unwrap().get(&result.job_id).is_some_and(|job| job.runner_id.as_deref() == Some(from));
+    if !sent_there {
+        tracing::warn!(job_id = %result.job_id, "a job result from a Device the job was not sent to");
+        return;
+    }
     if let Some(tx) = app.pending_results.lock().unwrap().remove(&result.job_id) {
         let _ = tx.send(result.outcome);
     }
@@ -582,7 +588,7 @@ pub fn dispatch_job(app: &Arc<App>, job: Job) -> Dispatch {
         return Dispatch::Ran;
     }
     match app.device(&bot.runner_id) {
-        Some(runner) if !runner.box_pubkey.is_empty() => match crate::crypto::seal_json(&runner.box_pubkey, &job) {
+        Some(runner) if !runner.box_pubkey.is_empty() => match crate::envelope::seal(app, "job", &runner, &job) {
             Ok(ciphertext) => {
                 app.push_blob("job", Some(runner.id.clone()), ciphertext);
                 if app.relay_url().is_none() {
@@ -745,7 +751,7 @@ async fn run_job_started(app: &Arc<App>, job: Job, cancel: CancellationToken) ->
 fn report_outcome(app: &Arc<App>, job: &Job, outcome: TurnOutcome) {
     let Some(requester) = app.device(&job.requested_by).filter(|d| !d.box_pubkey.is_empty()) else { return };
     let result = JobResult { job_id: job.id.clone(), chat_id: job.chat_id.clone(), bot_id: job.bot_id.clone(), outcome: outcome.as_str().into() };
-    match crate::crypto::seal_json(&requester.box_pubkey, &result) {
+    match crate::envelope::seal(app, "job_result", &requester, &result) {
         Ok(ciphertext) => {
             app.push_blob("job_result", Some(requester.id.clone()), ciphertext);
         }
@@ -931,6 +937,8 @@ mod tests {
     fn cancellation_is_sealed_to_the_remote_runner() {
         let scratch = scratch_app();
         let app = &scratch.0;
+        // The cancellation is signed as this Device.
+        crate::identity::create(app, None).unwrap();
         let runner_keys = crate::keys::Machine::generate();
         app.state.lock().unwrap().devices.push(Device {
             id: "runner".into(),
@@ -965,7 +973,7 @@ mod tests {
         assert_eq!(queued.recipient.as_deref(), Some("runner"));
         let ciphertext = queued.ciphertext;
         let payload: JobCancel =
-            crate::crypto::unseal_json(&runner_keys.box_secret, &ciphertext).unwrap();
+            crate::envelope::body_of(&runner_keys.box_secret, &ciphertext);
         assert_eq!(payload.job_id, "remote-job");
     }
 
@@ -1046,6 +1054,8 @@ mod tests {
     fn stop_is_sealed_to_the_device_that_lists_the_turn() {
         let scratch = scratch_app();
         let app = &scratch.0;
+        // The cancellation is signed as this Device.
+        crate::identity::create(app, None).unwrap();
         let mac_keys = crate::keys::Machine::generate();
         app.state.lock().unwrap().devices.push(Device {
             id: "mac".into(),
@@ -1067,7 +1077,7 @@ mod tests {
         let cancels: Vec<_> = app.store.outbox().unwrap().into_iter().filter(|item| item.kind == "job_cancel").collect();
         let [cancel] = cancels.try_into().unwrap();
         assert_eq!(cancel.recipient.as_deref(), Some("mac"));
-        let payload: JobCancel = crate::crypto::unseal_json(&mac_keys.box_secret, &cancel.ciphertext).unwrap();
+        let payload: JobCancel = crate::envelope::body_of(&mac_keys.box_secret, &cancel.ciphertext);
         assert_eq!(payload.job_id, "mac-job");
     }
 
@@ -1165,7 +1175,7 @@ mod tests {
 
         // The result that lands later ends it there, and nothing is left to resume.
         let mut events = restarted.events.subscribe();
-        deliver_job_result(&restarted, JobResult { job_id: "remote-job".into(), chat_id: "chat".into(), bot_id: "bot".into(), outcome: "sent".into() });
+        deliver_job_result(&restarted, "runner", JobResult { job_id: "remote-job".into(), chat_id: "chat".into(), bot_id: "bot".into(), outcome: "sent".into() });
         let finished = tokio::time::timeout(std::time::Duration::from_secs(5), events.recv()).await.unwrap().unwrap();
         assert!(matches!(finished, Event::JobFinished { job_id, .. } if job_id == "remote-job"));
         assert!(restarted.running_turns().is_empty());
