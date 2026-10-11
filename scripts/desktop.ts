@@ -1,4 +1,4 @@
-// The Windows and Linux app in desktop/, built with MyGo.
+// The app in desktop/, built with MyGo, for Windows, Linux, and macOS.
 //
 //   bun run desktop                       Lorca Dev with live reload: builds the CLI for this
 //                                         computer and runs `go tool mygo dev`, whose app launches it
@@ -7,13 +7,18 @@
 //                                         desktop/resources/<goos>-<goarch>/bin, then
 //                                         `go tool mygo build -platform`. Platforms are MyGo's, comma
 //                                         separated (linux/amd64,windows/amd64); the default is
-//                                         this computer's, or Linux and Windows on x86-64 from a
-//                                         Mac. The Linux CLIs are static (musl) and, like other
-//                                         computers' CLIs, build with cargo-zigbuild.
+//                                         this computer's, or macOS on Apple silicon with Linux and
+//                                         Windows on x86-64 from a Mac. The Linux CLIs are static
+//                                         (musl) and, like other computers' CLIs, build with
+//                                         cargo-zigbuild; the macOS CLI builds with cargo on a Mac,
+//                                         which alone signs the app and makes its disk image.
 //   bun run release-desktop [platforms]   desktop:build signed with the update key and uploaded to
 //                                         the draft release desktop-v<version> of egoist/lorca
 //                                         (`mygo build -upload`), which the apps see once it is
-//                                         published: docs/releasing-desktop.md.
+//                                         published. The macOS app is signed with the Developer ID
+//                                         (SIGN_IDENTITY) and notarized with the notarytool profile
+//                                         NOTARY_PROFILE, as `bun run release-mac` is:
+//                                         docs/releasing-desktop.md.
 
 import { copyFileSync, chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
@@ -31,6 +36,7 @@ const TAG_PREFIX = "desktop-v"
 
 /** The Rust target of the CLI each MyGo platform ships, static builds for Linux. */
 const RUST_TARGETS: Record<string, string> = {
+  "darwin/arm64": "aarch64-apple-darwin",
   "linux/amd64": "x86_64-unknown-linux-musl",
   "linux/arm64": "aarch64-unknown-linux-musl",
   "windows/amd64": "x86_64-pc-windows-gnu",
@@ -75,12 +81,21 @@ async function placeCLI(platform: string): Promise<boolean> {
   const [goos, goarch] = platform.split("/")
   const exe = goos === "windows" ? `${CLI_NAME}.exe` : CLI_NAME
   let built: string
-  if (goos === "windows" && platform === hostPlatform()) {
-    // Windows builds its own CLI with its own toolchain.
+  if (goos !== "linux" && platform === hostPlatform()) {
+    // Windows and macOS build their own CLI with their own toolchain.
     log(`${color.bold("building")} ${color.dim("the CLI (release)")}`)
     const cli = await buildCLI("release")
     if (!cli.ok) return false
-    built = `${cli.path}.exe`
+    built = goos === "windows" ? `${cli.path}.exe` : cli.path
+  } else if (goos === "darwin") {
+    // Linking for macOS needs its SDK, which only a Mac has.
+    if (process.platform !== "darwin") {
+      log(color.red(`${platform} builds on a Mac`))
+      return false
+    }
+    log(`${color.bold("building")} ${color.dim(`the CLI for ${target}`)}`)
+    if ((await run(["cargo", "build", "--release", "--locked", "-p", CLI_NAME, "--target", target])) !== 0) return false
+    built = join(ROOT, "target", target, "release", exe)
   } else {
     log(`${color.bold("building")} ${color.dim(`the CLI for ${target}`)}`)
     if ((await run(["cargo", "zigbuild", "--release", "--locked", "-p", CLI_NAME, "--target", target])) !== 0) return false
@@ -107,11 +122,27 @@ function keygenDirectory(): string {
   return join(config, "mygo", "update-keys")
 }
 
+/** The Developer ID that signs the macOS app, as `bun run release-mac` signs the Mac app: a partial
+ * name matches while the keychain holds one Developer ID Application certificate. */
+const SIGN_IDENTITY = process.env.SIGN_IDENTITY ?? "Developer ID Application"
+/** The notarytool profile (`xcrun notarytool store-credentials`) that notarizes the macOS app. */
+const NOTARY_PROFILE = process.env.NOTARY_PROFILE ?? "NOTARY"
+
 /** What an upload needs besides the build: the update signing key, from MYGO_UPDATER_PRIVATE_KEY or
- * where `mygo keygen` put it, and the GitHub CLI with access to the releases repository (its
- * login, or GH_TOKEN). Null when something is missing. */
-function releaseEnv(): Record<string, string> | null {
+ * where `mygo keygen` put it, the GitHub CLI with access to the releases repository (its login, or
+ * GH_TOKEN), and for macOS the Developer ID in a keychain, which mygo.config.ts reads with the
+ * notarytool profile from SIGN_IDENTITY and NOTARY_PROFILE. Null when something is missing. */
+function releaseEnv(platforms: string[]): Record<string, string> | null {
   const missing: string[] = []
+  const env: Record<string, string> = {}
+  if (platforms.some((platform) => platform.startsWith("darwin/"))) {
+    if (process.platform !== "darwin") missing.push("a Mac, which signs and notarizes the macOS app")
+    else if (!Bun.spawnSync(["security", "find-identity", "-v", "-p", "codesigning"]).stdout.toString().includes(SIGN_IDENTITY)) {
+      missing.push(`the signing identity "${SIGN_IDENTITY}" in a keychain, or SIGN_IDENTITY naming yours`)
+    }
+    env.SIGN_IDENTITY = SIGN_IDENTITY
+    env.NOTARY_PROFILE = NOTARY_PROFILE
+  }
   let key = process.env.MYGO_UPDATER_PRIVATE_KEY ?? ""
   if (key === "") {
     const file = join(keygenDirectory(), "mygo-update.key")
@@ -123,7 +154,7 @@ function releaseEnv(): Record<string, string> | null {
     missing.push(`access to ${RELEASES_REPO}: gh auth login, or GH_TOKEN`)
   }
   for (const thing of missing) log(color.red(`missing ${thing}`))
-  return missing.length === 0 ? { MYGO_UPDATER_PRIVATE_KEY: key } : null
+  return missing.length === 0 ? { ...env, MYGO_UPDATER_PRIVATE_KEY: key } : null
 }
 
 /** Whether the release `tag` of the releases repository is a draft, published, or not there. */
@@ -144,7 +175,7 @@ async function build(platforms: string[], options: { upload?: boolean } = {}): P
   // The desktop app's own version, apart from the Mac app's.
   const version = await desktopVersion()
   if (options.upload) {
-    const release = releaseEnv()
+    const release = releaseEnv(platforms)
     if (!release) return 1
     env = release
     // mygo build reads the notes too, but only once the apps are built.
@@ -174,7 +205,7 @@ async function build(platforms: string[], options: { upload?: boolean } = {}): P
 const [mode, list] = process.argv.slice(2)
 if (mode === "build" || mode === "release") {
   const host = hostPlatform()
-  const platforms = list?.split(",").filter((platform) => platform !== "") ?? (host.startsWith("darwin") ? ["linux/amd64", "windows/amd64"] : [host])
+  const platforms = list?.split(",").filter((platform) => platform !== "") ?? (host.startsWith("darwin") ? ["darwin/arm64", "linux/amd64", "windows/amd64"] : [host])
   process.exit(await build(platforms, { upload: mode === "release" }))
 }
 process.exit(await dev())

@@ -1,15 +1,15 @@
-# Releasing the Windows and Linux app
+# Releasing the desktop app
 
-The app in `desktop/` updates itself through MyGo's updater plugin. Its releases are releases of
+The app in `desktop/`, for Windows, Linux, and macOS, updates itself through MyGo's updater plugin. Its releases are releases of
 this repository tagged `desktop-v<version>`. The repository's latest release stays the CLI's, which
 `install-cli.sh` and `install-cli.ps1` download, and the app finds the newest `desktop-v` release
 that is neither a draft nor a prerelease through the GitHub API (`updates.tagPrefix`). Each release
-holds, for each platform, the installer (`Lorca Setup <version>.exe`, the Debian package), the app
-as an archive (`lorca-<version>-windows-amd64.tar.gz`), delta updates from the last three versions,
+holds, for each platform, the installer (`Lorca Setup <version>.exe`, the Debian package, the
+macOS disk image `Lorca <version>.dmg`), the app as an archive (`lorca-<version>-windows-amd64.tar.gz`), delta updates from the last three versions,
 the Linux `install.sh`, and `update-<platform>.json`, the manifest the app checks. Installed apps
 accept only archives and deltas signed with the update key, whose public half is
 `updates.publicKey` in [`desktop/mygo.config.ts`](../desktop/mygo.config.ts). A tag builds Windows
-x64, Linux x64, and Linux arm64 on GitHub Actions into a draft release:
+x64, Linux x64, Linux arm64, and macOS on Apple silicon on GitHub Actions into a draft release:
 
 ```sh
 git tag desktop-v0.1.0 && git push origin desktop-v0.1.0
@@ -42,6 +42,18 @@ variables ▸ Actions), the contents of `mygo-update.key`, and uploads with the 
 token. On a computer, `release-desktop` uses the GitHub CLI's login (or `GH_TOKEN`) and the key in
 MyGo's folder (or `MYGO_UPDATER_PRIVATE_KEY`). It stops before building when either is missing.
 
+### 3. macOS signing and notarization
+
+The macOS app is signed and notarized as the Mac app is, with the same secrets
+([Releasing the Mac app](releasing-mac.md)): the workflow's macOS job puts the Developer ID
+Application certificate (`MAC_SIGNING_IDENTITY`, `MAC_SIGNING_IDENTITY_PASSWORD`) in a keychain of
+its own and stores the notarytool profile `NOTARY` there, signed in with the App Store Connect API
+key (`ASC_KEY`, `ASC_KEY_ID`, `ASC_ISSUER_ID`). On a Mac, `release-desktop` signs with
+`SIGN_IDENTITY` (default `Developer ID Application`, which has to match one identity in the
+keychains) and notarizes with the profile `NOTARY_PROFILE` (default `NOTARY`), which
+`xcrun notarytool store-credentials NOTARY` stores in the login keychain once. It stops before
+building when the identity is missing.
+
 ## Cutting a release
 
 The version is `version` in [`desktop/mygo.config.ts`](../desktop/mygo.config.ts), apart from the
@@ -66,14 +78,15 @@ Mac app's in the root `package.json`.
 
 The **Release desktop** workflow checks that the tag names the version in `desktop/mygo.config.ts`,
 drafts the release with the changelog's section as its notes (not as the latest release), then
-builds `windows/amd64`, `linux/amd64`, and `linux/arm64` side by side on Ubuntu, one
-`bun run release-desktop <platform>` each: cargo-zigbuild builds the CLIs, and NSIS the Windows
-installer. A platform that fails leaves the others to finish; re-run its job, which uploads into
+builds `windows/amd64`, `linux/amd64`, and `linux/arm64` side by side on Ubuntu and `darwin/arm64`
+on a macOS runner, one `bun run release-desktop <platform>` each: cargo-zigbuild builds the Linux
+and Windows CLIs, cargo the macOS one, NSIS the Windows installer, and MyGo signs the macOS app,
+makes its disk image, and notarizes it. A platform that fails leaves the others to finish; re-run its job, which uploads into
 the same draft. A version already published is refused.
 
 `bun run release-desktop [platforms]` releases from this computer too, into the same draft.
-Platforms are MyGo's, comma separated; the default is this computer's, or `linux/amd64` and
-`windows/amd64` from a Mac. The script:
+Platforms are MyGo's, comma separated; the default is this computer's, or `darwin/arm64`,
+`linux/amd64`, and `windows/amd64` from a Mac. `darwin/arm64` builds only on a Mac. The script:
 
 1. refuses a version whose release is already published, unless `FORCE=1`, which replaces its
    files;
@@ -88,8 +101,9 @@ To test an update, install an older release with its installer and choose **Chec
 
 ## Notes
 
-- **Where apps update.** On Windows, the per-user install of the installer, in
-  `%LOCALAPPDATA%\Programs`. On Linux, the install of a release's `install.sh`
+- **Where apps update.** On macOS, `Lorca.app` wherever it was dragged from the disk image. On
+  Windows, the per-user install of the installer, in `%LOCALAPPDATA%\Programs`. On Linux, the
+  install of a release's `install.sh`
   (`curl -fsSL https://github.com/egoist/lorca/releases/download/desktop-v0.1.0/install.sh | sh`),
   which installs the newest release in `~/.local/lorca.app`. The Debian package installs in
   `/opt`, where the app cannot write: it leaves the menu item and the Settings rows out, and the
