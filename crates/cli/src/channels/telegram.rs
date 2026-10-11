@@ -9,7 +9,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
-use super::{clean, ingest, load_account, mentions, pause, save_account, set_identity, set_problem, Identity, Incoming, TELEGRAM};
+use super::{clean, ingest, load_account, mentions, pause, save_account, set_identity, set_problem, Identity, Incoming, IncomingFile, TELEGRAM};
 use crate::app::App;
 use crate::plugins::builtin::{structured_result, text_result};
 
@@ -19,6 +19,8 @@ pub const TOKEN: &str = "TELEGRAM_BOT_TOKEN";
 const MAX_TEXT: usize = 4096;
 /// How long a long poll waits for a message on Telegram's side.
 const POLL_SECS: u64 = 25;
+/// The largest file the Bot API lets a bot download.
+const MAX_DOWNLOAD: u64 = 20 * 1024 * 1024;
 
 const REFUSED: &str = "Telegram refused the bot’s token. Copy it again from BotFather.";
 const CONFLICT: &str = "Something else reads this bot’s messages: another program, or a webhook. Stop it, then Lorca reads them again.";
@@ -110,7 +112,7 @@ pub async fn read(app: Arc<App>, account_id: String, token: String, cancel: Canc
             polled = call(&app, &token, "getUpdates", body, Duration::from_secs(POLL_SECS + 15)) => polled,
             _ = cancel.cancelled() => return,
         };
-        let updates = match polled {
+        let mut updates = match polled {
             Ok(updates) => updates,
             Err(failure) => {
                 let wait = trouble(&app, &account_id, failure, &mut failures);
@@ -123,13 +125,24 @@ pub async fn read(app: Arc<App>, account_id: String, token: String, cancel: Canc
         // A poll that went through clears whatever the last one ran into.
         failures = 0;
         set_problem(&app, &account_id, None);
-        let mut stuck = false;
-        for update in updates.as_array().into_iter().flatten() {
-            let Some(update_id) = update["update_id"].as_i64() else { continue };
-            if let Some(message) = incoming(&account_id, &me, update) {
+        // An album's photos arrive a moment apart: the rest of one the poll ends in is read with it.
+        let ends_in_album = updates.as_array().and_then(|updates| updates.last()).is_some_and(|update| update["message"]["media_group_id"].is_string());
+        if ends_in_album && pause(&cancel, 1.0).await {
+            let again = json!({ "offset": offset, "timeout": 0, "allowed_updates": ["message"] });
+            if let Ok(more) = call(&app, &token, "getUpdates", again, Duration::from_secs(15)).await {
+                updates = more;
+            }
+        }
+        let mut stuck = None;
+        for (update_id, message) in gathered(&account_id, &me, updates.as_array().map(Vec::as_slice).unwrap_or_default()) {
+            if let Some(mut message) = message {
+                if let Err(failure) = fetch_images(&app, &token, &mut message).await {
+                    stuck = Some(if let Failure::Slow(seconds) = failure { seconds.max(1.0) } else { 5.0 });
+                    break;
+                }
                 if let Err(error) = ingest(&app, &message) {
                     tracing::error!(%error, "keeping a Telegram message");
-                    stuck = true;
+                    stuck = Some(5.0);
                     break;
                 }
             }
@@ -137,13 +150,15 @@ pub async fn read(app: Arc<App>, account_id: String, token: String, cancel: Canc
             state.offset = Some(update_id + 1);
             if let Err(error) = save_account(&app, &account_id, &state) {
                 tracing::error!(%error, "saving a Telegram account's place");
-                stuck = true;
+                stuck = Some(5.0);
                 break;
             }
         }
         // The update stays unconfirmed, and is read again after a pause.
-        if stuck && !pause(&cancel, 5.0).await {
-            return;
+        if let Some(wait) = stuck {
+            if !pause(&cancel, wait).await {
+                return;
+            }
         }
     }
 }
@@ -182,14 +197,37 @@ fn id_text(value: &Value) -> Option<String> {
     value.as_i64().map(|id| id.to_string()).or_else(|| value.as_str().map(str::to_string))
 }
 
-/// A Telegram update as the channels take it: a text message (or a caption) from a person.
+/// The images a message carries: a photo at its largest size, or an image sent as a file, when
+/// the Bot API lets a bot download it.
+fn images(message: &Value) -> Vec<IncomingFile> {
+    let size = |file: &Value| file["file_size"].as_u64();
+    let fits = |file: &Value| size(file).is_none_or(|bytes| bytes <= MAX_DOWNLOAD);
+    let mut files = Vec::new();
+    if let Some(photo) = message["photo"].as_array().and_then(|sizes| sizes.iter().filter(|file| fits(file)).max_by_key(|file| file["width"].as_u64().unwrap_or(0) * file["height"].as_u64().unwrap_or(0))) {
+        files.push(IncomingFile { id: photo["file_id"].as_str().unwrap_or_default().into(), unique_id: photo["file_unique_id"].as_str().unwrap_or_default().into(), name: "photo.jpg".into(), mime: "image/jpeg".into(), size: size(photo) });
+    }
+    let document = &message["document"];
+    if let Some(mime) = document["mime_type"].as_str().filter(|mime| mime.starts_with("image/") && fits(document)) {
+        let name = document["file_name"].as_str().map(|name| clean(name, 80)).unwrap_or_else(|| "image".into());
+        files.push(IncomingFile { id: document["file_id"].as_str().unwrap_or_default().into(), unique_id: document["file_unique_id"].as_str().unwrap_or_default().into(), name, mime: mime.into(), size: size(document) });
+    }
+    files.retain(|file| !file.id.is_empty() && !file.unique_id.is_empty());
+    files
+}
+
+/// A Telegram update as the channels take it: a person's text message, or a photo or image with
+/// its caption or without one.
 pub fn incoming(account_id: &str, me: &Identity, update: &Value) -> Option<Incoming> {
     let message = update.get("message")?;
     let from = &message["from"];
     if from["is_bot"] == true {
         return None;
     }
-    let text = message["text"].as_str().or_else(|| message["caption"].as_str())?.to_string();
+    let files = images(message);
+    let text = message["text"].as_str().or_else(|| message["caption"].as_str()).unwrap_or_default().to_string();
+    if text.trim().is_empty() && files.is_empty() {
+        return None;
+    }
     let chat = &message["chat"];
     let private = chat["type"] == "private";
     let sender = clean(&person(from), 64);
@@ -218,7 +256,86 @@ pub fn incoming(account_id: &str, me: &Identity, update: &Value) -> Option<Incom
         date: message["date"].as_i64().unwrap_or(0),
         mentions_bot,
         replies_to_bot,
+        files,
+        attachments: Vec::new(),
     })
+}
+
+/// The updates of one poll as messages, each with the last update it takes in: the photos of an
+/// album, which Telegram sends as one message each, are one message, which their caption
+/// describes.
+pub(crate) fn gathered(account_id: &str, me: &Identity, updates: &[Value]) -> Vec<(i64, Option<Incoming>)> {
+    let mut out: Vec<(i64, Option<Incoming>, Option<String>)> = Vec::new();
+    for update in updates {
+        let Some(update_id) = update["update_id"].as_i64() else { continue };
+        let message = incoming(account_id, me, update);
+        let album = update["message"]["media_group_id"].as_str().map(|group| format!("{}:{group}", update["message"]["chat"]["id"]));
+        if let (Some(album), Some(next)) = (&album, &message) {
+            if let Some((last, Some(first), _)) = out.last_mut().filter(|(_, _, group)| group.as_ref() == Some(album)) {
+                *last = update_id;
+                if first.text.trim().is_empty() {
+                    first.text = next.text.clone();
+                }
+                first.files.extend(next.files.iter().cloned());
+                first.mentions_bot |= next.mentions_bot;
+                first.replies_to_bot |= next.replies_to_bot;
+                first.reply_to = first.reply_to.take().or_else(|| next.reply_to.clone());
+                continue;
+            }
+        }
+        out.push((update_id, message, album));
+    }
+    out.into_iter().map(|(update_id, message, _)| (update_id, message)).collect()
+}
+
+/// Fetches the images of a message a channel takes and keeps them on this Runner, each under an
+/// id made from the account and Telegram's id for the file, so a message read again uses the copy
+/// already here. An image Telegram will not hand over is left out; a network failure is an error,
+/// so the message is read again.
+async fn fetch_images(app: &Arc<App>, token: &str, incoming: &mut Incoming) -> Result<(), Failure> {
+    if incoming.files.is_empty() || !super::taken(app, incoming) {
+        return Ok(());
+    }
+    for file in std::mem::take(&mut incoming.files) {
+        let digest = <sha2::Sha256 as sha2::Digest>::digest(format!("{}\n{}", incoming.account_id, file.unique_id).as_bytes());
+        let id = format!("att-tg-{}", digest.iter().take(12).map(|byte| format!("{byte:02x}")).collect::<String>());
+        let bytes = match std::fs::read(crate::files::local_path(app, &id)) {
+            Ok(bytes) => bytes,
+            Err(_) => match download(app, token, &file.id).await {
+                Ok(bytes) => bytes,
+                Err(Failure::Network) => return Err(Failure::Network),
+                Err(Failure::Slow(seconds)) => return Err(Failure::Slow(seconds)),
+                Err(failure) => {
+                    tracing::warn!(?failure, "fetching a Telegram image");
+                    continue;
+                }
+            },
+        };
+        match crate::files::keep(app, &id, &file.name, &file.mime, &bytes) {
+            Ok(attachment) => incoming.attachments.push(attachment),
+            Err(error) => tracing::warn!(%error, "keeping a Telegram image"),
+        }
+    }
+    Ok(())
+}
+
+/// A file's bytes: where Telegram keeps it (`getFile`), then the file itself. The token is in both
+/// URLs, so errors never carry them.
+async fn download(app: &App, token: &str, file_id: &str) -> Result<Vec<u8>, Failure> {
+    let found = call(app, token, "getFile", json!({ "file_id": file_id }), Duration::from_secs(30)).await?;
+    let path = found["file_path"].as_str().ok_or_else(|| Failure::Other("Telegram did not say where the file is.".into()))?;
+    let response = app.http.get(format!("{}/file/bot{token}/{path}", base())).timeout(Duration::from_secs(60)).send().await.map_err(|error| {
+        tracing::debug!(error = %error.without_url(), "downloading a Telegram file");
+        Failure::Network
+    })?;
+    if !response.status().is_success() {
+        return Err(Failure::Other(format!("Telegram answered {} for the file.", response.status().as_u16())));
+    }
+    let bytes = response.bytes().await.map_err(|_| Failure::Network)?;
+    if bytes.len() as u64 > MAX_DOWNLOAD {
+        return Err(Failure::Other("The file is larger than Telegram lets a bot download.".into()));
+    }
+    Ok(bytes.to_vec())
 }
 
 /// The account's builtin server: what the bot sends to Telegram.

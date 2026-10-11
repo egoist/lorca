@@ -6,6 +6,9 @@ and the update window shows it.
 
 ## [Unreleased]
 
+- A bot listening on Telegram sees the photos people send it, with a caption or without one, and an
+  album's photos together as one message. The photo shows in the conversation on every Device.
+
 ## [0.1.7]
 
 - Update Lorca on every Device: the Windows and Linux app, the Mac app, the phone app, and each

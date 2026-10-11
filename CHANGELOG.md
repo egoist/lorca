@@ -6,6 +6,8 @@ Sparkle shows it in the update window. The Windows and Linux app's are in
 
 ## [Unreleased]
 
+- A bot listening on Telegram sees the photos people send it, with a caption or without one, and an album's photos together as one message. The photo shows in the conversation on every Device.
+
 ## [1.0.12]
 
 - Update Lorca on every Device: the Mac app, the phone app, the Windows and Linux app, and each computer that runs the command line. Devices now sign what they send each other through the relay, so a relay can no longer send work to your Runners in another Device's name, and unpairing a Device gives your account a new key, so the Device you unpaired cannot read what your account writes after that. An older Lorca cannot read what an updated Device sends, and once your Devices have updated, Lorca's relay asks older versions to update before they sync.

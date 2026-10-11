@@ -157,11 +157,30 @@ pub struct Incoming {
     /// The service id of the message it answers.
     pub reply_to: Option<String>,
     pub sender: String,
+    /// The person's words: the message's text, or a photo's caption, or nothing.
     pub text: String,
     /// When it was written, in Unix seconds; 0 when the service did not say.
     pub date: i64,
     pub mentions_bot: bool,
     pub replies_to_bot: bool,
+    /// The images that came with it, as the service names them. The reader fetches them once a
+    /// channel takes the message.
+    pub files: Vec<IncomingFile>,
+    /// Those images kept on this Runner, which the message carries as its attachments.
+    pub attachments: Vec<crate::model::Attachment>,
+}
+
+/// An image that came with a message, on the service.
+#[derive(Debug, Clone, Default)]
+pub struct IncomingFile {
+    /// The service's id to fetch it by: Telegram's `file_id`.
+    pub id: String,
+    /// The same file's id across bots and time: Telegram's `file_unique_id`.
+    pub unique_id: String,
+    pub name: String,
+    pub mime: String,
+    /// Its size when the service said.
+    pub size: Option<u64>,
 }
 
 /// A name or title someone outside Lorca chose, as it may appear around their words: one line,
@@ -507,15 +526,10 @@ mod runner {
         format!("ext-{}", &crate::keys::b64(&digest)[..22])
     }
 
-    /// Hands a service's message to every channel of its account that takes it: the message goes
-    /// into that channel's conversation and its inbox. An error leaves the message for the reader
-    /// to hand over again, which keeps one copy of each.
-    pub fn ingest(app: &Arc<App>, incoming: &Incoming) -> anyhow::Result<usize> {
-        if incoming.text.trim().is_empty() {
-            return Ok(0);
-        }
-        let incoming = &Incoming { text: outside_text(app, &incoming.text), ..incoming.clone() };
-        let mut taken = 0;
+    /// The channels of the message's account that take it, each with the message as that channel
+    /// sees it.
+    fn takers(app: &App, incoming: &Incoming) -> anyhow::Result<Vec<(String, SubscriptionConfig, Incoming)>> {
+        let mut takers = Vec::new();
         for (channel_id, config, listening_since) in event_triggers::channel_configs(app, &incoming.account_id)? {
             let Some(spec) = &config.channel else { continue };
             // A message from before the channel listened, which Telegram held for a day, is old news.
@@ -534,15 +548,41 @@ mod runner {
             if incoming.service == SLACK && incoming.thread_id.is_some() && has_conversation(app, &channel_id, &incoming) {
                 incoming.replies_to_bot = true;
             }
-            let incoming = &incoming;
-            if !spec.listen.takes(incoming) {
-                continue;
+            if spec.listen.takes(&incoming) {
+                takers.push((channel_id, config, incoming));
             }
+        }
+        Ok(takers)
+    }
+
+    /// Whether any channel takes the message, so its images are worth fetching.
+    pub(crate) fn taken(app: &App, incoming: &Incoming) -> bool {
+        takers(app, incoming).is_ok_and(|takers| !takers.is_empty())
+    }
+
+    /// Hands a service's message to every channel of its account that takes it: the message goes
+    /// into that channel's conversation and its inbox, with the images the reader fetched for it.
+    /// An error leaves the message for the reader to hand over again, which keeps one copy of each.
+    pub fn ingest(app: &Arc<App>, incoming: &Incoming) -> anyhow::Result<usize> {
+        if incoming.text.trim().is_empty() && incoming.attachments.is_empty() {
+            return Ok(0);
+        }
+        let incoming = &Incoming { text: outside_text(app, &incoming.text), ..incoming.clone() };
+        let mut taken = 0;
+        for (channel_id, config, incoming) in takers(app, incoming)? {
+            let Some(spec) = &config.channel else { continue };
+            let incoming = &incoming;
             let chat = conversation(app, &channel_id, &config, spec, incoming)?;
             let id = contact_message_id(&channel_id, incoming);
             if app.store.message(&chat.meta.id, &id)?.is_none() {
+                // The bytes go out ahead of the message that names them, for the other Devices.
+                for attachment in &incoming.attachments {
+                    if let Err(error) = crate::files::push_blob(app, Some(&chat.meta.id), attachment) {
+                        tracing::warn!(%error, name = %attachment.name, "uploading a channel message's image");
+                    }
+                }
                 let reply_to = incoming.reply_to.as_deref().and_then(|external| by_external_id(app, &chat.meta.id, external)).and_then(|quoted| ReplyTo::quoting(&quoted));
-                let mut message = Message::new(&chat.meta.id, Author::Contact { name: incoming.sender.clone() }, Body::Text { text: incoming.text.clone(), attachments: Vec::new(), mentions: Vec::new(), reply_to });
+                let mut message = Message::new(&chat.meta.id, Author::Contact { name: incoming.sender.clone() }, Body::Text { text: incoming.text.clone(), attachments: incoming.attachments.clone(), mentions: Vec::new(), reply_to });
                 message.id = id.clone();
                 message.external_id = Some(incoming.message_id.clone());
                 app.upsert_message(message, true);

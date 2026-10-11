@@ -82,6 +82,20 @@ pub fn store(app: &App, file: &OutgoingFile) -> anyhow::Result<Attachment> {
     Ok(Attachment { id, name, mime, size: bytes.len() as u64, width, height, sha256: Some(sha256(&bytes)) })
 }
 
+/// Keeps bytes that came from elsewhere, such as a photo someone sent a channel, under `id`, and
+/// returns their attachment record. Like `store`, it uploads nothing.
+pub fn keep(app: &App, id: &str, name: &str, mime: &str, bytes: &[u8]) -> anyhow::Result<Attachment> {
+    if !valid_id(id) {
+        anyhow::bail!("Invalid attachment id");
+    }
+    if bytes.len() as u64 > MAX_ATTACHMENT_BYTES {
+        anyhow::bail!("{name} is larger than {} MB", MAX_ATTACHMENT_BYTES / 1024 / 1024);
+    }
+    write_local(app, id, bytes)?;
+    let (width, height) = if mime.starts_with("image/") { image_size(bytes) } else { (None, None) };
+    Ok(Attachment { id: id.to_string(), name: name.to_string(), mime: mime.to_string(), size: bytes.len() as u64, width, height, sha256: Some(sha256(bytes)) })
+}
+
 fn write_local(app: &App, id: &str, bytes: &[u8]) -> anyhow::Result<()> {
     let dir = app.config.files_dir();
     std::fs::create_dir_all(&dir)?;
