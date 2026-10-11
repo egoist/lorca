@@ -105,19 +105,36 @@ final class AvatarView: NSView {
         if isWorking { AvatarView.clearPresenceRing(in: box) }
     }
 
-    /// Where the working dot sits: over the bottom-right edge of the avatar.
-    static func presenceRect(in box: NSRect) -> NSRect {
+    /// Where the working dot sits: over the bottom-right edge of the avatar, or the top-right
+    /// one when a service's mark holds the bottom.
+    static func presenceRect(in box: NSRect, top: Bool = false) -> NSRect {
         let size = max(7, (box.width * 0.28).rounded())
-        return NSRect(x: box.maxX - size + 1, y: box.minY - 1, width: size, height: size)
+        return NSRect(x: box.maxX - size + 1, y: top ? box.maxY - size + 1 : box.minY - 1, width: size, height: size)
     }
 
     /// Clears a ring under the dot so it reads as sitting on top whatever the background is.
-    static func clearPresenceRing(in box: NSRect) {
+    static func clearPresenceRing(in box: NSRect, top: Bool = false) {
         guard let context = NSGraphicsContext.current else { return }
         context.compositingOperation = .clear
         NSColor.black.setFill()
-        NSBezierPath(ovalIn: presenceRect(in: box).insetBy(dx: -2, dy: -2)).fill()
+        NSBezierPath(ovalIn: presenceRect(in: box, top: top).insetBy(dx: -2, dy: -2)).fill()
         context.compositingOperation = .sourceOver
+    }
+
+    /// A channel conversation's service mark over the bottom-right edge of the avatar: Telegram's
+    /// disc as it is, any other mark on a white disc, ringed clear like the working dot.
+    static func renderServiceMark(_ service: String, in box: NSRect) {
+        guard let mark = PluginLogo.mark(for: service), let context = NSGraphicsContext.current else { return }
+        let size = (box.width * 0.42).rounded()
+        let rect = NSRect(x: box.maxX - size + 1, y: box.minY - 1, width: size, height: size)
+        context.compositingOperation = .clear
+        NSColor.black.setFill()
+        NSBezierPath(ovalIn: rect.insetBy(dx: -1.5, dy: -1.5)).fill()
+        context.compositingOperation = .sourceOver
+        NSColor.white.setFill()
+        NSBezierPath(ovalIn: rect).fill()
+        let inset = service == "telegram" ? 0 : (size * 0.22).rounded()
+        mark.draw(in: rect.insetBy(dx: inset, dy: inset))
     }
 
     /// Draws one avatar into the current context. Shared with `AvatarClusterView`,
@@ -218,9 +235,20 @@ final class AvatarClusterView: NSView {
 
     private let presence = PresenceLayer()
 
+    /// The service of a channel conversation (`telegram`, `slack`), whose mark sits on the
+    /// avatar's bottom-right edge and sends the working dot to the top-right.
+    var service: String? {
+        didSet {
+            if service != oldValue {
+                needsDisplay = true
+                syncPresence()
+            }
+        }
+    }
+
     private func syncPresence() {
         guard let box = boxes().last else { return }
-        presence.sync(isWorking: isWorking, in: box, on: layer, flipped: isFlipped)
+        presence.sync(isWorking: isWorking, in: box, top: service != nil, on: layer, flipped: isFlipped)
     }
 
     override func layout() {
@@ -300,7 +328,8 @@ final class AvatarClusterView: NSView {
             }
             AvatarView.render(contents[index], in: box)
         }
-        if isWorking, let last = boxes.last { AvatarView.clearPresenceRing(in: last) }
+        if let service, let last = boxes.last { AvatarView.renderServiceMark(service, in: last) }
+        if isWorking, let last = boxes.last { AvatarView.clearPresenceRing(in: last, top: service != nil) }
     }
 }
 
@@ -320,12 +349,12 @@ final class PresenceLayer: CALayer {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func sync(isWorking: Bool, in box: NSRect, on host: CALayer?, flipped: Bool) {
+    func sync(isWorking: Bool, in box: NSRect, top: Bool = false, on host: CALayer?, flipped: Bool) {
         guard let host else { return }
         if superlayer !== host { host.addSublayer(self) }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        var rect = AvatarView.presenceRect(in: box)
+        var rect = AvatarView.presenceRect(in: box, top: top)
         if flipped { rect.origin.y = box.maxY - rect.maxY + box.minY }
         bounds = CGRect(origin: .zero, size: rect.size)
         position = CGPoint(x: rect.midX, y: rect.midY)

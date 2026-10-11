@@ -858,6 +858,7 @@ export default function ChatScreen() {
         id={id}
         title={title}
         members={members}
+        service={chat?.channel?.service}
         working={isWorking}
         hasTasks={hasTasks}
         wide={wide}
@@ -1011,7 +1012,7 @@ export default function ChatScreen() {
 /// The chat's bar: the members and title (a tap opens Details), Running tasks while there are any,
 /// and the menu. Memoized, and its options held: the screen renders again with every event in the
 /// chat, and new header options re-apply the native bar.
-const ChatHeader = memo(function ChatHeader({ id, title, members, working, hasTasks, wide, top }: { id: string; title: string; members: Bot[]; working: boolean; hasTasks: boolean; wide: boolean; top: number }) {
+const ChatHeader = memo(function ChatHeader({ id, title, members, service, working, hasTasks, wide, top }: { id: string; title: string; members: Bot[]; service?: string; working: boolean; hasTasks: boolean; wide: boolean; top: number }) {
   useLanguage();
   const router = useRouter();
   const p = usePalette();
@@ -1035,7 +1036,7 @@ const ChatHeader = memo(function ChatHeader({ id, title, members, working, hasTa
               style={styles.titleView}
               accessibilityLabel={t("{title}, info", { title })}
             >
-              <AvatarCluster bots={members} size={30} working={working} />
+              <AvatarCluster bots={members} size={30} working={working} service={service} />
               <Text style={[styles.titleText, { color: p.label }]} numberOfLines={1}>
                 {title}
               </Text>
@@ -1071,7 +1072,7 @@ const ChatHeader = memo(function ChatHeader({ id, title, members, working, hasTa
               accessibilityRole="button"
               accessibilityLabel={t("{title}, info", { title })}
             >
-              <AvatarCluster bots={members} size={30} working={working} />
+              <AvatarCluster bots={members} size={30} working={working} service={service} />
               <Text style={[styles.titleText, { color: p.label }]} numberOfLines={1}>
                 {title}
               </Text>

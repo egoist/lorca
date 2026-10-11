@@ -587,7 +587,7 @@ func (s *paletteState) view(c *ui.Context, m *mainWindow) {
 									for _, bot := range item.bots[:min(4, len(item.bots))] {
 										avatars = append(avatars, botAvatar(bot))
 									}
-									avatarCluster(c, avatars, 22, false, p.Popover)
+									avatarCluster(c, avatars, 22, false, "", p.Popover)
 								} else {
 									symbol(c, item.symbol, 16, 1.8)
 								}

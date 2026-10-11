@@ -23,7 +23,7 @@ export const ChatRow = memo(function ChatRow({ chat, bots, title, working, respo
   const unread = chat.unread_count;
   return (
     <Pressable onPress={onPress} onLongPress={onLongPress} style={({ pressed }) => [styles.row, { backgroundColor: pressed || selected ? p.fill : "transparent" }]}>
-      <AvatarCluster bots={members} size={50} working={working} />
+      <AvatarCluster bots={members} size={50} working={working} service={chat.channel?.service} />
       <View style={styles.text}>
         <View style={styles.titleLine}>
           <View style={styles.titleGroup}>

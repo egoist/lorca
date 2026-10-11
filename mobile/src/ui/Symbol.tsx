@@ -138,6 +138,10 @@ const ANDROID: Record<string, string> = {
   "exclamationmark.triangle": "warning",
   // Workflows.
   envelope: "mail",
+  // Channels' services.
+  "paperplane.fill": "send",
+  paperplane: "send",
+  number: "tag",
   "arrow.triangle.branch": "call_split",
   "point.3.connected.trianglepath.dotted": "account_tree",
 };
