@@ -1017,4 +1017,5 @@ export const zh: Record<string, string> = {
   "Downloading {latest}… {percent}%": "正在下载 {latest}… {percent}%",
   "Installing {latest}… Lorca restarts when it is done.": "正在安装 {latest}… 完成后 Lorca 会重新启动。",
   "Couldn’t install the update": "无法安装更新",
+  "Privacy mode on": "隐私模式开启",
 };

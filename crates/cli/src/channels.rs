@@ -86,6 +86,23 @@ impl Listen {
         self.every || self.mentions || !self.tags.is_empty()
     }
 
+    /// What a Telegram bot with its privacy mode on misses in groups for this filter, and how to
+    /// change that; empty when the filter needs nothing more than replies.
+    pub fn privacy_note(&self) -> String {
+        if !self.needs_every_message() {
+            return String::new();
+        }
+        let missed = if self.every {
+            "every other message".to_string()
+        } else {
+            [self.mentions.then_some("mentions of it"), (!self.tags.is_empty()).then_some("hashtags")].into_iter().flatten().collect::<Vec<_>>().join(" and ")
+        };
+        format!(
+            "Telegram’s privacy mode is on for this bot, so in groups it gets only replies to it and commands, and misses {missed}. \
+             Turn it off with BotFather’s /setprivacy, then remove the bot from the group and add it again, or make the bot a group admin."
+        )
+    }
+
     pub fn takes(&self, message: &Incoming) -> bool {
         if self.every || (message.private && (self.mentions || self.replies)) {
             return true;
@@ -400,11 +417,9 @@ mod runner {
                 } else if let Some(waiting) = view.waiting {
                     ("held", waiting.to_string())
                 } else {
-                    let privacy = service == TELEGRAM
-                        && spec.listen.needs_every_message()
-                        && app.channels.identity(&spec.account_id).is_some_and(|identity| !identity.reads_all);
-                    let detail = if privacy { "In groups, Telegram sends this bot only replies and commands. To hear the rest, turn off its privacy mode with BotFather’s /setprivacy and add it to the group again, or make it an admin." } else { "" };
-                    ("listening", detail.to_string())
+                    // The only detail a listening channel has: what Telegram's privacy mode keeps from it.
+                    let privacy = service == TELEGRAM && app.channels.identity(&spec.account_id).is_some_and(|identity| !identity.reads_all);
+                    ("listening", if privacy { spec.listen.privacy_note() } else { String::new() })
                 };
                 Some(ChannelStatus {
                     id: view.id,
@@ -892,7 +907,7 @@ mod runner {
             let config = config_for(&self.bot.id, service, &name, task, ChannelSpec { account_id, chats, listen });
             let created = event_triggers::serve(&self.app, "events.create", &json!({ "config": config })).map_err(|e| e.to_string())?;
             let status = self.find(created["id"].as_str().unwrap_or_default())?;
-            Ok(format!("Listening: {} · {}.{}", status.name, status.listen.describe(), if status.detail.is_empty() { String::new() } else { format!(" {}", status.detail) }))
+            Ok(format!("Listening: {} · {}.{}", status.name, status.listen.describe(), if status.detail.is_empty() { String::new() } else { format!(" {} Tell the user.", status.detail) }))
         }
 
         fn edit(&self, args: &Value) -> Result<String, String> {
@@ -913,7 +928,7 @@ mod runner {
             }
             event_triggers::serve(&self.app, "events.update", &json!({ "id": current.id, "config": config })).map_err(|e| e.to_string())?;
             let status = self.find(&current.id)?;
-            Ok(format!("Saved: {} · {}.", status.name, status.listen.describe()))
+            Ok(format!("Saved: {} · {}.{}", status.name, status.listen.describe(), if status.detail.is_empty() { String::new() } else { format!(" {} Tell the user.", status.detail) }))
         }
 
         fn change(&self, args: &Value, action: &str) -> Result<String, String> {

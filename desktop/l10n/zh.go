@@ -1457,4 +1457,5 @@ var zh = map[string]string{
 	"Request failed": "请求失败",
 	"Rename Device":  "重命名设备",
 	"Every paired Device shows this name. Leave it blank to use the name the machine goes by.": "所有已配对的设备都显示这个名称。留空则使用这台机器自己的名称。",
+	"Privacy mode on": "隐私模式开启",
 }

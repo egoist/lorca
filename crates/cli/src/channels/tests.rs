@@ -72,6 +72,8 @@ fn filters_take_what_they_name() {
     assert_eq!(hashtags("Slack <#C123|feedback> and #bug_report"), ["feedback", "bug_report"]);
     assert!(Listen::default().is_empty());
     assert!(Listen { replies: true, ..Listen::default() }.needs_every_message() == false);
+    assert!(listen.privacy_note().contains("misses mentions of it and hashtags"), "{}", listen.privacy_note());
+    assert!(Listen { replies: true, ..Listen::default() }.privacy_note().is_empty(), "replies reach a bot in privacy mode");
     assert!(mentions("hey @Acme_Feedback_Bot, look", "@acme_feedback_bot"));
     assert!(!mentions("@acme_feedback_bot2 is another bot", "@acme_feedback_bot"), "a longer handle is someone else");
     assert!(!mentions("anything", ""));
@@ -286,7 +288,9 @@ async fn a_telegram_group_reaches_the_bot_and_its_reply_lands_in_the_thread() {
     let contact = app.messages(&chat.meta.id).remove(0);
     assert_eq!(contact.author, Author::Contact { name: "Alice".into() });
     assert_eq!(app.messages(&chat.meta.id).len(), 1, "only the tagged message is kept");
-    eventually("the bot's privacy mode noted", || app.channels.statuses()[0].detail.contains("privacy mode")).await;
+    eventually("the bot's privacy mode noted", || app.channels.statuses()[0].detail.contains("privacy mode is on")).await;
+    let edited = run_tool(&tool(app, false), json!({ "action": "edit", "channel": app.channels.statuses()[0].id, "task": "File feedback" })).await.unwrap();
+    assert!(edited.contains("misses mentions of it and hashtags") && edited.contains("Tell the user"), "an edit says what the channel misses: {edited}");
     assert_eq!(app.channels.identity(&account_id).unwrap().username, "@acme_feedback_bot");
 
     // The bot's reply goes through the account's own server, as every plugin call does.

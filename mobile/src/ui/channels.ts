@@ -22,10 +22,12 @@ export function serviceSymbol(service: string): string {
   return service === "slack" ? "number" : "paperplane";
 }
 
-/// A state the user has something to do about, in a word or two; none while it listens or rests.
+/// A state the user has something to do about, in a word or two; none while it listens fully or rests.
 export function channelProblem(channel: ChannelStatus): string | undefined {
   if (channel.state === "held") return t("On hold");
   if (channel.state === "offline") return t("Can’t connect");
+  // A listening channel's only detail is the Telegram privacy-mode note.
+  if (channel.state === "listening" && channel.detail) return t("Privacy mode on");
   return undefined;
 }
 
