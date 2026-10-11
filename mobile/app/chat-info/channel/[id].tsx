@@ -11,7 +11,7 @@ import { chatTitle, engine } from "../../../src/core/engine";
 import type { ChatRequest } from "../../../src/core/model";
 import { useStore } from "../../../src/core/store";
 import { t, useLanguage } from "../../../src/i18n";
-import { alert } from "../../../src/ui/alert";
+import { alert, prompt } from "../../../src/ui/alert";
 import { channelChats, listenSummary, requestKind, serviceName } from "../../../src/ui/channels";
 import { Row, Section, ToggleRow } from "../../../src/ui/forms";
 import { stamp } from "../../../src/ui/format";
@@ -50,6 +50,23 @@ export default function ChannelScreen() {
     ]);
   }
 
+  // For a chat that can't ask itself: one where the bot hears nothing it would answer.
+  function askChatId() {
+    prompt(t("Add a Chat"), {
+      message:
+        channel!.service === "slack"
+          ? t("Paste the channel’s id, such as C0123456789. Or message the bot there, and the chat asks here.")
+          : t("Paste the chat’s id, such as -1001234567890 for a group. Or message the bot there, and the chat asks here."),
+      placeholder: t("Chat ID"),
+      confirm: t("Add"),
+      done: (text) => {
+        const chatId = text.trim();
+        if (!chatId) return;
+        engine.addChat(channel!.id, chatId).catch((error) => alert(t("Couldn’t add the chat"), error instanceof Error ? error.message : String(error)));
+      },
+    });
+  }
+
   function confirmRemove() {
     alert(t("Remove “{name}”?", { name: channel!.name }), t("{name} stops listening there. Its conversations stay.", { name: bot?.name ?? t("The bot") }), [
       { text: t("Cancel"), style: "cancel" },
@@ -78,6 +95,7 @@ export default function ChannelScreen() {
         <Section footer={!channel.chats?.length && !channel.requests?.length ? hint : undefined}>
           <Row title={t("Account")} detail={account?.name ?? serviceName(channel.service)} />
           <Row title={t("Chats")} subtitle={channelChats(channel)} subtitleLines={3} />
+          <Row title={t("Add Chat…")} action onPress={askChatId} />
           <Row title={t("Messages")} subtitle={listenSummary(channel.listen)} subtitleLines={2} />
         </Section>
         {!!channel.requests?.length && (

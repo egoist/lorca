@@ -186,7 +186,20 @@ pub fn incoming(account_id: &str, me: &Identity, event: &Value) -> Option<Incomi
         mentions_bot: kind == "app_mention" || (!me.user_id.is_empty() && text.contains(&mention)),
         replies_to_bot: thread_ts.is_some() && event["parent_user_id"].as_str() == Some(me.user_id.as_str()),
         text,
+        held: false,
     })
+}
+
+/// Tells a chat that asks that the bot answers once its owner allows it, in the thread of the
+/// message that asked. Best effort: nothing else waits on it.
+pub async fn notice(app: &App, bot_token: &str, channel: &str, thread_ts: Option<&str>) {
+    let mut body = json!({ "channel": channel, "text": super::PENDING });
+    if let Some(thread_ts) = thread_ts {
+        body["thread_ts"] = json!(thread_ts);
+    }
+    if let Err(error) = call(app, bot_token, "chat.postMessage", body).await {
+        tracing::debug!(?error, "telling a Slack chat it waits");
+    }
 }
 
 /// People's and channels' names, looked up once per reader. A lookup that fails or is slow

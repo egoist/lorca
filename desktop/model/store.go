@@ -2104,6 +2104,31 @@ func (s *Store) AnswerChatRequest(id, chatID string, allow bool) {
 	s.perform(method, map[string]any{"runner_id": runner, "id": id, "chat_id": chatID})
 }
 
+// AddChat lets a chat in by its id, typed by the user: the channel listens there from now on. The
+// Runner refuses an id that isn't one of the service's, and `done` gets why.
+func (s *Store) AddChat(id, chatID string, done func(error)) {
+	channel, runner := s.Channel(id), s.channelRunner(id)
+	if channel == nil {
+		return
+	}
+	before := *channel
+	before.Chats, before.Requests = slices.Clone(channel.Chats), slices.Clone(channel.Requests)
+	channel.Requests = slices.DeleteFunc(channel.Requests, func(request ChatRequest) bool { return request.ID == chatID })
+	if !slices.ContainsFunc(channel.Chats, func(chat ChannelChat) bool { return chat.ID == chatID }) {
+		channel.Chats = append(channel.Chats, ChannelChat{ID: chatID})
+	}
+	s.emit(Event{Kind: EventRosterChanged})
+	s.simple(func(err error) {
+		if err != nil {
+			if channel := s.Channel(id); channel != nil {
+				*channel = before
+				s.emit(Event{Kind: EventRosterChanged})
+			}
+		}
+		done(err)
+	}, "events.allow_chat", map[string]any{"runner_id": runner, "id": id, "chat_id": chatID})
+}
+
 // RemoveChannel removes a channel from its Runner; its conversations stay.
 func (s *Store) RemoveChannel(id string) {
 	runner := s.channelRunner(id)
