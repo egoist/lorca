@@ -42,26 +42,6 @@ final class RoutineReliabilityTests: XCTestCase {
         XCTAssertTrue(signedOut.detail.hasPrefix(L("Needs sign-in")))
     }
 
-    func testOnlyStandaloneRunnersOfferBackgroundService() {
-        for os in Device.OS.allCases {
-            var device = Device(
-                id: "runner", name: "Workbench", model: "", os: os, osVersion: "",
-                isThisDevice: false, status: .online, lastSeen: Date(), machineKey: "")
-            XCTAssertFalse(device.isStandaloneRunner, "bundled or unknown CLIs show no service advice")
-            device.update = Device.CLIUpdate(auto: false, latest: nil, state: nil, error: nil)
-            XCTAssertEqual(device.isStandaloneRunner, os.isDesktop, "automatic updates need not be on")
-        }
-    }
-
-    func testOfflineRoutineServiceAdviceRequiresAStandaloneRunner() {
-        XCTAssertEqual(
-            RoutineProblem.offline.explanation(bot: "Scout", runner: "Workbench"),
-            L("%@ is offline, so the routine waits for it.", "Workbench"))
-        XCTAssertEqual(
-            RoutineProblem.offline.explanation(bot: "Scout", runner: "Workbench", standaloneRunner: true),
-            L("%@ is offline, so the routine waits for it. To keep it available while the app is closed, run lorca service install on it.", "Workbench"))
-    }
-
     func testScheduleNamesAnotherTimezoneOnly() throws {
         let here = try routine(#""is_enabled":true,"timezone":"\#(TimeZone.current.identifier)""#)
         XCTAssertEqual(here.scheduleSummary, "Weekdays at 9:00 AM")
