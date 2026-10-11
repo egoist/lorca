@@ -733,6 +733,10 @@ type DeviceUpdate struct {
 // IsRunner is derived from the OS alone: a desktop Device is a Runner and can be assigned bots.
 func (d *Device) IsRunner() bool { return d.OS.IsDesktop() }
 
+// IsStandaloneRunner identifies released standalone CLIs by their advertised updates.
+// Bundled and development CLIs show no `lorca service` status or installation advice.
+func (d *Device) IsStandaloneRunner() bool { return d.IsRunner() && d.Update != nil }
+
 func (d *Device) RoleLabel() string {
 	if d.IsRunner() {
 		return L("Runner")

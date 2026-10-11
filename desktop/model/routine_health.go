@@ -157,14 +157,17 @@ func (p RoutineProblem) NeedsUser() bool {
 
 // Explanation is what happened and how to fix it, for the routine sheet; subject is what a
 // routine on events watches.
-func (p RoutineProblem) Explanation(bot, runner, subject string) string {
+func (p RoutineProblem) Explanation(bot, runner, subject string, standaloneRunner bool) string {
 	switch p {
 	case ProblemModelSignedOut:
 		return L("The model provider turned down three sign-ins in a row, so the routine is paused. Reconnect the provider in Settings, then resume it.")
 	case ProblemSignedOut:
 		return L("The check couldn’t sign in to a plugin three times in a row, so the routine is paused. Sign in to the plugin again on %@, then resume it.", runner)
 	case ProblemOffline:
-		return L("%@ is offline, so the routine waits for it. To keep it available while the app is closed, run lorca service install on it.", runner)
+		if standaloneRunner {
+			return L("%@ is offline, so the routine waits for it. To keep it available while the app is closed, run lorca service install on it.", runner)
+		}
+		return L("%@ is offline, so the routine waits for it.", runner)
 	case ProblemModelCantConnect:
 		return L("The last run couldn’t reach the model provider. It tries again at the next run, waiting longer after each failure.")
 	case ProblemCantConnect:

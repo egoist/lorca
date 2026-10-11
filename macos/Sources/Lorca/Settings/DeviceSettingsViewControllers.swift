@@ -479,7 +479,7 @@ final class AboutDeviceSettingsViewController: DevicePaneViewController {
                 key: L("Role"),
                 value: device.isRunner ? L("Runner · runs bots with its own credentials") : L("Device · never runs bots")))
         askService(device)
-        let service = device.isRunner && device.status == .online ? service : nil
+        let service = device.isStandaloneRunner && device.status == .online ? service : nil
         if let service {
             rows.append(
                 KeyValueRow(
@@ -554,7 +554,7 @@ final class AboutDeviceSettingsViewController: DevicePaneViewController {
     private func askService(_ device: Device) {
         guard serviceAsked != device.id else { return }
         service = nil
-        guard device.isRunner, device.status == .online else { return }
+        guard device.isStandaloneRunner, device.status == .online else { return }
         serviceAsked = device.id
         isAskingService = true
         Task { @MainActor [weak self] in

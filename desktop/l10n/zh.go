@@ -68,6 +68,7 @@ var zh = map[string]string{
 	"%@ is larger than %d MB.":          "“%1$@”超过了 %2$d MB。",
 	"%@ is not a file.":                 "“%@”不是文件。",
 	"%@ is not connected yet. The bot is created now and its first turn waits until you connect it in Settings.":                 "%@ 尚未接入。智能体会立即创建，它的第一轮会等到你在“设置”中接入后再开始。",
+	"%@ is offline, so the routine waits for it.":                                                                                "%@ 已离线，例行任务会等它上线。",
 	"%@ is offline, so the routine waits for it. To keep it available while the app is closed, run lorca service install on it.": "%@ 已离线，例行任务会等它上线。要在应用关闭时也让它保持可用，请在它上面运行 lorca service install。",
 	"%@ is ready to talk to. Pair another Device any time from the File menu.":                                                   "%@ 已准备好与你对话。你可以随时从“文件”菜单配对另一台设备。",
 	"%@ is working":                                    "%@ 正在工作",

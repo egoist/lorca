@@ -93,8 +93,10 @@ func (w *appWindow) routineView(c *ui.Context, s *sheet, st *routineSheet, title
 			state = L("Paused while you were away")
 		}
 		runner := L("its Runner")
+		standaloneRunner := false
 		if device := store.Device(bot.RunnerID); device != nil {
 			runner = device.Name
+			standaloneRunner = device.IsStandaloneRunner()
 		}
 		section(c, L("Schedule"), sectionCaption, nil, func(k *card) {
 			keyValueRow(c, k, L("State"), state, false, &tint)
@@ -105,7 +107,7 @@ func (w *appWindow) routineView(c *ui.Context, s *sheet, st *routineSheet, title
 				if routine.Events != nil {
 					subject = routine.Events.Subject
 				}
-				noteRow(c.Key("problem"), k, problem.Explanation(bot.Name, runner, subject), nil)
+				noteRow(c.Key("problem"), k, problem.Explanation(bot.Name, runner, subject, standaloneRunner), nil)
 			}
 			scheduleTooltip := routine.Schedule
 			if !strings.HasPrefix(routine.Schedule, "every ") {

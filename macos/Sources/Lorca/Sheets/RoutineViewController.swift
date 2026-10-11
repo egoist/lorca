@@ -147,7 +147,7 @@ final class RoutineViewController: SheetViewController {
         if let stopped {
             rows.append(NoteRow(text: stopped.stoppedDetail))
         } else if let problem {
-            rows.append(NoteRow(text: problem.explanation(bot: bot.name, runner: runnerName)))
+            rows.append(NoteRow(text: problem.explanation(bot: bot.name, runner: runnerName, standaloneRunner: runner?.isStandaloneRunner == true)))
         }
         let scheduleRow = KeyValueRow(key: L("Schedule"), value: routine.scheduleSummary)
         scheduleRow.toolTip = routine.schedule.hasPrefix("every ") ? routine.schedule : "\(routine.schedule) · \(routine.timezone)"

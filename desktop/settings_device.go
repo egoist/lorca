@@ -56,7 +56,7 @@ type settingsServiceState struct {
 
 // statusOf asks an online Runner how its service stands, and is what it answered, if it did.
 func (s *settingsServiceState) statusOf(device *model.Device) *model.ServiceStatus {
-	if !device.IsRunner() || device.Status != model.StatusOnline {
+	if !device.IsStandaloneRunner() || device.Status != model.StatusOnline {
 		return nil
 	}
 	if s.asked != device.ID {

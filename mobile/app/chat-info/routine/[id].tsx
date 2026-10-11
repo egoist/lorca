@@ -11,7 +11,7 @@ import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import { Platform, PlatformColor, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { engine } from "../../../src/core/engine";
-import { deviceName, type RoutineEvents } from "../../../src/core/model";
+import { deviceName, isStandaloneRunner, type RoutineEvents } from "../../../src/core/model";
 import { useBotMap, useBudget, useRoutines, useStore } from "../../../src/core/store";
 import { t, useLanguage } from "../../../src/i18n";
 import { alert } from "../../../src/ui/alert";
@@ -55,7 +55,7 @@ export default function RoutineScreen() {
     : routine.is_running
       ? { title: t("Running…"), note: undefined, symbol: "arrow.triangle.2.circlepath", color: p.tint }
       : problem
-        ? { title: problemWord(problem), note: problemExplanation(problem, bot.name, runnerName), symbol: problemNeedsUser(problem) ? "exclamationmark.circle.fill" : "clock", color: problemNeedsUser(problem) ? orange : p.secondaryLabel }
+        ? { title: problemWord(problem), note: problemExplanation(problem, bot.name, runnerName, isStandaloneRunner(runner)), symbol: problemNeedsUser(problem) ? "exclamationmark.circle.fill" : "clock", color: problemNeedsUser(problem) ? orange : p.secondaryLabel }
         : routine.is_enabled
           ? { title: t("On"), note: undefined, symbol: routineSymbol(routine), color: p.green }
           : { title: routine.paused_reason === "away" ? t("Paused while you were away") : t("Paused"), note: undefined, symbol: "pause.circle", color: p.secondaryLabel };

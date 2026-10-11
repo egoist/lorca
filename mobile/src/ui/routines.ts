@@ -70,14 +70,16 @@ export function problemWord(problem: RoutineProblem): string {
 export const problemNeedsUser = (problem: RoutineProblem) => problem.kind !== "cantConnect";
 
 /// What happened and how to fix it, for the routine screen.
-export function problemExplanation(problem: RoutineProblem, bot: string, runner: string): string {
+export function problemExplanation(problem: RoutineProblem, bot: string, runner: string, standaloneRunner = false): string {
   switch (problem.kind) {
     case "signedOut":
       return problem.model
         ? t("The model provider turned down three sign-ins in a row, so the routine is paused. Reconnect the provider in Settings, then resume it.")
         : t("The check couldn’t sign in to a plugin three times in a row, so the routine is paused. Sign in to the plugin again on {runner}, then resume it.", { runner });
     case "offline":
-      return t("{runner} is offline, so the routine waits for it. To keep it available while the app is closed, run lorca service install on it.", { runner });
+      return standaloneRunner
+        ? t("{runner} is offline, so the routine waits for it. To keep it available while the app is closed, run lorca service install on it.", { runner })
+        : t("{runner} is offline, so the routine waits for it.", { runner });
     case "cantConnect":
       return problem.model
         ? t("The last run couldn’t reach the model provider. It tries again at the next run, waiting longer after each failure.")

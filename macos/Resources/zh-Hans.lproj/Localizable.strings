@@ -830,6 +830,7 @@
 "Check failed" = "检查失败";
 "The model provider turned down three sign-ins in a row, so the routine is paused. Reconnect the provider in Settings, then resume it." = "服务商连续三次拒绝登录，例行任务已暂停。请在设置中重新接入服务商，然后恢复它。";
 "The check couldn’t sign in to a plugin three times in a row, so the routine is paused. Sign in to the plugin again on %@, then resume it." = "检查连续三次无法登录插件，例行任务已暂停。请在 %@ 上重新登录该插件，然后恢复它。";
+"%@ is offline, so the routine waits for it." = "%@ 已离线，例行任务会等它上线。";
 "%@ is offline, so the routine waits for it. To keep it available while the app is closed, run lorca service install on it." = "%@ 已离线，例行任务会等它上线。要在应用关闭时也让它保持可用，请在它上面运行 lorca service install。";
 "The last run couldn’t reach the model provider. It tries again at the next run, waiting longer after each failure." = "上次运行无法连接服务商。下次运行时会重试，每次失败后等待更久。";
 "The last check couldn’t connect. It tries again at the next check, waiting longer after each failure." = "上次检查无法连接。下次检查时会重试，每次失败后等待更久。";

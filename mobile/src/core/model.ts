@@ -139,6 +139,12 @@ export function isRunner(device: Device): boolean {
   return device.os === "macos" || device.os === "linux" || device.os === "windows";
 }
 
+/// Released standalone CLIs advertise updates; bundled and development CLIs do not.
+/// Only these Runners show `lorca service` status and installation advice.
+export function isStandaloneRunner(device: Device | undefined): boolean {
+  return !!device && isRunner(device) && !!device.update;
+}
+
 /// What a Device goes by: a machine that never said what it is has no name of its own.
 export function deviceName(device: Device): string {
   return device.unknown ? t("Unknown Device") : device.name;

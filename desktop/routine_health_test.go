@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -158,6 +159,8 @@ func TestRenderRoutineStatesInInspector(t *testing.T) {
 
 func TestRenderRunnerService(t *testing.T) {
 	m, tt := settingsWindowTester(t, 760)
+	// A standalone CLI advertises updates even when automatic updates are off.
+	store.Device("dev-workbench").Update = &model.DeviceUpdate{Auto: false}
 	m.showSettingsDevice("dev-workbench")
 	m.showSettings(model.PaneDevice)
 	settle(tt)
@@ -176,5 +179,53 @@ func TestRenderRunnerService(t *testing.T) {
 	settle(tt)
 	if tt.HasText(L("Background service")) {
 		t.Error("an offline Runner shows no service")
+	}
+}
+
+func TestDesktopRunnerHasNoServiceAdvice(t *testing.T) {
+	for _, os := range []model.DeviceOS{model.OSMacOS, model.OSLinux, model.OSWindows} {
+		for _, local := range []bool{true, false} {
+			t.Run(string(os)+map[bool]string{true: "/local", false: "/remote"}[local], func(t *testing.T) {
+				m, tt := settingsWindowTester(t, 760)
+				device := store.Device("dev-workbench")
+				device.OS, device.IsThisDevice, device.Update = os, local, nil
+				m.showSettingsDevice(device.ID)
+				m.showSettings(model.PaneDevice)
+				settle(tt)
+				if m.settings.service.asked != "" {
+					t.Error("a bundled CLI was asked for service status")
+				}
+				// A stale service answer must not make a desktop-app Runner show the advice.
+				m.settings.service.status = &model.ServiceStatus{}
+				settle(tt)
+				note := L("Run lorca service install in Terminal on %@ to keep its bots running while Lorca is closed.", device.Name)
+				if tt.HasText(L("Background service")) || tt.HasText(note) {
+					t.Errorf("a bundled CLI shows service advice: %q", tt.Texts())
+				}
+			})
+		}
+	}
+}
+
+func TestOfflineRoutineServiceAdvice(t *testing.T) {
+	for _, standalone := range []bool{false, true} {
+		t.Run(map[bool]string{false: "desktop", true: "standalone"}[standalone], func(t *testing.T) {
+			m, tt := sheetTester(t, func(m *mainWindow) {})
+			routineStates(t)
+			bot := store.Bot("bot-ember")
+			device := store.Device(bot.RunnerID)
+			device.Update = nil
+			if standalone {
+				device.Update = &model.DeviceUpdate{Auto: false}
+			}
+			m.presentRoutine("rt-backup", bot, nil)
+			settle(tt)
+			short := L("%@ is offline, so the routine waits for it.", device.Name)
+			advice := L("%@ is offline, so the routine waits for it. To keep it available while the app is closed, run lorca service install on it.", device.Name)
+			texts := tt.Texts()
+			if slices.Contains(texts, short) == standalone || slices.Contains(texts, advice) != standalone {
+				t.Errorf("standalone=%v: texts %q", standalone, tt.Texts())
+			}
+		})
 	}
 }

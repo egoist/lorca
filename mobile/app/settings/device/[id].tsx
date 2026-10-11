@@ -6,7 +6,7 @@ import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { engine } from "../../../src/core/engine";
-import { deviceName, isBotDM, isRunner, providerLabel, type Device, type SavedSecret, type UpdateStatus } from "../../../src/core/model";
+import { deviceName, isBotDM, isRunner, isStandaloneRunner, providerLabel, type Device, type SavedSecret, type UpdateStatus } from "../../../src/core/model";
 import { deviceIsOnline, useStore } from "../../../src/core/store";
 import { t, useLanguage } from "../../../src/i18n";
 import { BotAvatar } from "../../../src/ui/Avatar";
@@ -57,9 +57,10 @@ export default function DeviceScreen() {
   const [service, setService] = useState<{ id: string; installed: boolean; running: boolean }>();
   const isThis = device?.id === engine.deviceId;
   const runner = !!device && isRunner(device);
+  const standaloneRunner = isStandaloneRunner(device);
   const online = !!device && (isThis || deviceIsOnline(device.id));
   useEffect(() => {
-    if (!runner || !online || isThis) return;
+    if (!standaloneRunner || !online || isThis) return;
     let current = true;
     engine
       .serviceStatus(id)
@@ -68,10 +69,10 @@ export default function DeviceScreen() {
     return () => {
       current = false;
     };
-  }, [id, runner, online, isThis]);
+  }, [id, standaloneRunner, online, isThis]);
 
   if (!device) return null;
-  const shown = service?.id === device.id && online ? service : undefined;
+  const shown = standaloneRunner && service?.id === device.id && online ? service : undefined;
   const bots = allBots.filter((b) => b.runner_id === device.id);
   const osName = OS_NAMES[device.os] ?? device.os;
   const relay = relayUrl?.replace(/^https?:\/\//, "");

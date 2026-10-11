@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { routinesAwaitingSetup, type Routine } from "../core/model";
+import { isStandaloneRunner, routinesAwaitingSetup, type Device, type Routine } from "../core/model";
 import { aroundEvents, lastCheck, lastEvent, lastRun, looksFirst, missedRuns, nextRunText, onceText, problemExplanation, problemNeedsUser, problemWord, routineDetail, routineProblem, routineSchedule, routineSymbol, timezoneLabel } from "./routines";
 
 // A routine as the core sends it: its timezone, missed-run policy, state, and check health.
@@ -34,6 +34,21 @@ describe("routines", () => {
     expect(routineProblem(routine({ state: "blocked", check: "x", health: { status: "blocked" } }))).toEqual({ kind: "checkBlocked" });
     expect(routineProblem(routine({ state: "failed", is_running: true }))).toBeUndefined();
     expect(routineProblem(routine({}))).toBeUndefined();
+  });
+
+  test("service status and offline advice are only for released standalone Runners", () => {
+    expect(isStandaloneRunner(undefined)).toBe(false);
+    for (const os of ["macos", "linux", "windows", "ios", "ipados", "android", "unknown"]) {
+      const device: Device = { id: "runner", name: "Workbench", model: "", os, os_version: "", machine_key: "", is_this_device: false, status: "offline", last_seen: 0 };
+      const desktop = ["macos", "linux", "windows"].includes(os);
+      expect(isStandaloneRunner(device)).toBe(false);
+      expect(isStandaloneRunner({ ...device, update: null })).toBe(false);
+      expect(isStandaloneRunner({ ...device, update: { auto: false } })).toBe(desktop);
+      expect(problemExplanation({ kind: "offline" }, "Scout", device.name, isStandaloneRunner(device))).toBe("Workbench is offline, so the routine waits for it.");
+      const standalone = { ...device, update: { auto: false } };
+      expect(problemExplanation({ kind: "offline" }, "Scout", device.name, isStandaloneRunner(standalone)).includes("lorca service install")).toBe(desktop);
+    }
+    expect(problemExplanation({ kind: "offline" }, "Scout", "its Runner")).not.toContain("lorca service install");
   });
 
   test("a routine names another timezone only, and an interval none", () => {
