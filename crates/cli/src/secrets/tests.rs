@@ -38,10 +38,11 @@ fn tool(app: &Arc<App>, bot: &Bot, chat_id: &str) -> RequestSecret {
 async fn ask_and_answer(app: &Arc<App>, bot: &Bot, chat_id: &str, args: Value, answer: Value) -> (Result<ToolResult, ToolError>, Message) {
     let call = tool(app, bot, chat_id);
     let running = tokio::spawn(async move { call.execute("call", args, CancellationToken::new(), Arc::new(|_| {})).await });
+    // The question is registered before its card is stored, so wait for both.
     let card = loop {
         let waiting = app.pending_permissions.lock().unwrap().keys().next().cloned();
-        if let Some(id) = waiting {
-            break app.message(chat_id, &id).unwrap();
+        if let Some(card) = waiting.and_then(|id| app.message(chat_id, &id)) {
+            break card;
         }
         tokio::time::sleep(Duration::from_millis(5)).await;
     };
