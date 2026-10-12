@@ -8,9 +8,7 @@ use serde_json::{json, Value};
 /// (`playbook-…`) can take.
 pub const NAME: &str = "lorca";
 
-const DESCRIPTION: &str = "Lorca's own user docs: what Lorca can do and how to use it (bots, chats, routines, skills, \
-plugins, channels, Access and Auto-review, Devices and pairing, providers, the apps' settings, the lorca command). Read it \
-before you tell the user how Lorca works or how to set something up in it.";
+const DESCRIPTION: &str = "Lorca's user docs: what it can do and how to use it.";
 
 /// The skill's row in the turn's catalog, as `playbooks::catalog` writes the user's.
 pub fn catalog_row() -> Value {
@@ -52,11 +50,11 @@ mod tests {
     #[test]
     fn the_skill_points_at_the_website() {
         let skill = read("playbook://lorca/SKILL.md").unwrap().unwrap();
-        assert!(skill.starts_with("---\nname: lorca\ndescription: Lorca's own user docs"));
+        assert!(skill.starts_with("---\nname: lorca\ndescription: Lorca's user docs"));
         assert!(skill.contains("https://lorca.app/llms.txt") && skill.contains("https://lorca.app/docs/<page>.md"));
         assert!(read("playbook://lorca/references/routines.md").unwrap().is_err());
         assert!(read("playbook://playbook-123/SKILL.md").is_none());
-        assert!(matches("ROUTINES") && matches("") && !matches("zzqx"));
+        assert!(matches("DOCS") && matches("") && !matches("zzqx"));
         assert_eq!(catalog_row()["path"], "playbook://lorca/SKILL.md");
     }
 }
