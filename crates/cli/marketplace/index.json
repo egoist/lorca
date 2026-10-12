@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated": "2026-10-10T14:05:00Z",
+  "updated": "2026-10-12T04:11:00Z",
   "plugins": [
     {
       "id": "slack",
@@ -183,6 +183,7 @@
             ],
             "client_id_variable": "GOOGLE_CLIENT_ID",
             "client_secret_variable": "GOOGLE_CLIENT_SECRET",
+            "lorca_client": "google",
             "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
             "token_endpoint": "https://oauth2.googleapis.com/token",
             "authorization_params": {
@@ -195,7 +196,7 @@
       "variables": [
         {
           "name": "GOOGLE_CLIENT_ID",
-          "description": "The client ID of a Desktop OAuth client in a Google Cloud project enrolled in the Google Workspace MCP preview, with this service’s API turned on.",
+          "description": "To sign in with a Google client of your own: the client ID of a Desktop OAuth client in a Google Cloud project enrolled in the Google Workspace MCP preview, with this service’s API turned on. Optional where Lorca’s own Google client signs in.",
           "secret": false,
           "required": true
         },
@@ -265,6 +266,7 @@
             ],
             "client_id_variable": "GOOGLE_CLIENT_ID",
             "client_secret_variable": "GOOGLE_CLIENT_SECRET",
+            "lorca_client": "google",
             "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
             "token_endpoint": "https://oauth2.googleapis.com/token",
             "authorization_params": {
@@ -277,7 +279,7 @@
       "variables": [
         {
           "name": "GOOGLE_CLIENT_ID",
-          "description": "The client ID of a Desktop OAuth client in a Google Cloud project enrolled in the Google Workspace MCP preview, with this service’s API turned on.",
+          "description": "To sign in with a Google client of your own: the client ID of a Desktop OAuth client in a Google Cloud project enrolled in the Google Workspace MCP preview, with this service’s API turned on. Optional where Lorca’s own Google client signs in.",
           "secret": false,
           "required": true
         },
@@ -338,6 +340,7 @@
             ],
             "client_id_variable": "GOOGLE_CLIENT_ID",
             "client_secret_variable": "GOOGLE_CLIENT_SECRET",
+            "lorca_client": "google",
             "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
             "token_endpoint": "https://oauth2.googleapis.com/token",
             "authorization_params": {
@@ -350,7 +353,7 @@
       "variables": [
         {
           "name": "GOOGLE_CLIENT_ID",
-          "description": "The client ID of a Desktop OAuth client in a Google Cloud project enrolled in the Google Workspace MCP preview, with this service’s API turned on.",
+          "description": "To sign in with a Google client of your own: the client ID of a Desktop OAuth client in a Google Cloud project enrolled in the Google Workspace MCP preview, with this service’s API turned on. Optional where Lorca’s own Google client signs in.",
           "secret": false,
           "required": true
         },

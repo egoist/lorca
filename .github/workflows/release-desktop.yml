@@ -189,6 +189,9 @@ jobs:
           # gh uploads with it, and mygo build reads the GitHub API with it for delta updates.
           GH_TOKEN: ${{ github.token }}
           MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
+          # The bundled CLI signs Google accounts in with Lorca's Google client.
+          LORCA_GOOGLE_CLIENT_ID: ${{ secrets.LORCA_GOOGLE_CLIENT_ID }}
+          LORCA_GOOGLE_CLIENT_SECRET: ${{ secrets.LORCA_GOOGLE_CLIENT_SECRET }}
         run: bun run release-desktop "$PLATFORM"
       - name: Remove the keychain
         if: always() && runner.os == 'macOS'

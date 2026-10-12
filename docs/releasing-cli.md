@@ -48,6 +48,26 @@ gh secret set CLI_UPDATE_SIGNING_KEY < cli-update.key
 To move to a new key, add its public half to `KEYS` and release with the old key first, so the CLIs
 in the field trust the new one before it signs; then set the secret to the new key.
 
+## Google client
+
+Gmail, Google Calendar, and Google Drive sign in with Lorca's own Google OAuth client
+([Integrations](architecture/integrations.md#services-and-authorization)), which `lorca` takes
+from `LORCA_GOOGLE_CLIENT_ID` and `LORCA_GOOGLE_CLIENT_SECRET` when it is built. `release-cli.yml`,
+`release-mac.yml`, and `release-desktop.yml` pass the Actions secrets of those names to the build;
+a release on a computer reads them from its environment. A build without them asks each Google
+account for a client of the user's own.
+
+The client has to be a Desktop app OAuth client in a Google Cloud project of Lorca's that is
+enrolled in the Google Workspace developer preview, with the Gmail, Calendar, and Drive APIs and
+their MCP APIs turned on. Until Google verifies the project's consent screen for the integrations'
+scopes, only the test users listed on it can sign in. Google does not treat a Desktop client's
+secret as confidential.
+
+```sh
+gh secret set LORCA_GOOGLE_CLIENT_ID --body <id>.apps.googleusercontent.com
+gh secret set LORCA_GOOGLE_CLIENT_SECRET
+```
+
 ## Cutting a release
 
 The release is named after the crate's version, which `lorca --version` prints:

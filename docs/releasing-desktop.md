@@ -41,6 +41,9 @@ The workflow signs with the Actions secret `MYGO_UPDATER_PRIVATE_KEY` (Settings 
 variables ▸ Actions), the contents of `mygo-update.key`, and uploads with the workflow's own
 token. On a computer, `release-desktop` uses the GitHub CLI's login (or `GH_TOKEN`) and the key in
 MyGo's folder (or `MYGO_UPDATER_PRIVATE_KEY`). It stops before building when either is missing.
+The bundled CLI also takes Lorca's Google client from `LORCA_GOOGLE_CLIENT_ID` and
+`LORCA_GOOGLE_CLIENT_SECRET` ([releasing-cli.md](releasing-cli.md#google-client)), which the
+workflow passes from the Actions secrets of those names.
 
 ### 3. macOS signing and notarization
 

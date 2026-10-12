@@ -96,9 +96,12 @@ jobs:
         with:
           key: ${{ matrix.target }}
       - name: Build
-        # A release build replaces itself with later releases (`lorca update`).
+        # A release build replaces itself with later releases (`lorca update`), and signs Google
+        # accounts in with Lorca's Google client (`plugins::lorca_client`).
         env:
           LORCA_SELF_UPDATE: "1"
+          LORCA_GOOGLE_CLIENT_ID: ${{ secrets.LORCA_GOOGLE_CLIENT_ID }}
+          LORCA_GOOGLE_CLIENT_SECRET: ${{ secrets.LORCA_GOOGLE_CLIENT_SECRET }}
         run: cargo ${{ matrix.zig && 'zigbuild' || 'build' }} --release --locked -p lorca --target ${{ matrix.target }}
       - name: Pack
         env:

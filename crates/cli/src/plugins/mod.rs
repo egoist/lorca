@@ -149,6 +149,10 @@ pub enum AuthSpec {
         client_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         client_secret: Option<String>,
+        /// The client Lorca registered with the service and builds into the CLI
+        /// (`plugins::lorca_client`), which signs in when the user set no client of their own.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lorca_client: Option<String>,
         /// With a client id: sign in with the device flow (RFC 8628) instead of a browser
         /// callback. The card shows a code to enter at the link; nothing has to run on the
         /// Runner's screen, and no client secret ships.
@@ -343,6 +347,54 @@ impl Manifest {
             }
         }
         Ok(())
+    }
+
+    /// A setup variable Lorca's own client stands in for while it is empty: an OAuth server's
+    /// client id or secret variable, when this CLI has the client the server names.
+    pub fn filled_by_lorca(&self, variable: &str) -> bool {
+        self.servers.values().any(|server| {
+            matches!(server, ServerSpec::Http { auth: Some(AuthSpec::Oauth { client_id_variable, client_secret_variable, lorca_client: Some(client), .. }), .. }
+                if [client_id_variable, client_secret_variable].into_iter().flatten().any(|name| name == variable) && lorca_client(client).is_some())
+        })
+    }
+}
+
+/// A client Lorca registered with a service: the environment variables that name one, and the
+/// values `lorca` was built with from them.
+struct LorcaClient {
+    name: &'static str,
+    id_variable: &'static str,
+    secret_variable: &'static str,
+    built_id: Option<&'static str>,
+    built_secret: Option<&'static str>,
+}
+
+/// Lorca's clients, by the name a manifest's `lorca_client` gives. Google's is a Desktop OAuth
+/// client in a Google Cloud project enrolled in the Google Workspace MCP preview
+/// (docs/releasing-cli.md). An installed app cannot keep a secret, so Google does not treat a
+/// Desktop client's as one; PKCE and the loopback redirect protect the sign-in.
+const LORCA_CLIENTS: &[LorcaClient] = &[LorcaClient {
+    name: "google",
+    id_variable: "LORCA_GOOGLE_CLIENT_ID",
+    secret_variable: "LORCA_GOOGLE_CLIENT_SECRET",
+    built_id: option_env!("LORCA_GOOGLE_CLIENT_ID"),
+    built_secret: option_env!("LORCA_GOOGLE_CLIENT_SECRET"),
+}];
+
+/// Lorca's own client for a service, as an id and its secret: the one the CLI's environment
+/// names, else the one it was built with. A build without one (a dev build, `cargo build`) has
+/// none, and the plugin's setup asks for the user's own.
+pub fn lorca_client(name: &str) -> Option<(String, Option<String>)> {
+    let client = LORCA_CLIENTS.iter().find(|client| client.name == name)?;
+    pick_client(std::env::var(client.id_variable).ok(), std::env::var(client.secret_variable).ok(), client.built_id, client.built_secret)
+}
+
+/// An id and the secret that goes with it, from one place: the environment when it names an id.
+fn pick_client(id: Option<String>, secret: Option<String>, built_id: Option<&str>, built_secret: Option<&str>) -> Option<(String, Option<String>)> {
+    let given = |value: Option<String>| value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    match given(id) {
+        Some(id) => Some((id, given(secret))),
+        None => Some((given(built_id.map(str::to_string))?, given(built_secret.map(str::to_string)))),
     }
 }
 
@@ -609,7 +661,7 @@ impl Store {
         let missing: Vec<&str> = manifest
             .variables
             .iter()
-            .filter(|v| v.required && !values.contains_key(&v.name))
+            .filter(|v| v.required && !values.contains_key(&v.name) && !manifest.filled_by_lorca(&v.name))
             .map(|v| v.name.as_str())
             .collect();
         let (state, detail) = if let Some((state, detail)) = self.notes.get(&manifest.id) {
@@ -943,7 +995,7 @@ pub fn detail(app: &Arc<App>, id: &str) -> Result<Value, String> {
         "account_name": plugin.account_name,
         "status": status,
         "variables": plugin.manifest.variables.iter().map(|v| json!({
-            "name": v.name, "description": v.description, "secret": v.secret, "required": v.required,
+            "name": v.name, "description": v.description, "secret": v.secret, "required": v.required && !plugin.manifest.filled_by_lorca(&v.name),
             "is_set": values.contains_key(&v.name),
             "value": if v.secret { Value::Null } else { json!(values.get(&v.name)) },
         })).collect::<Vec<_>>(),
@@ -1158,6 +1210,18 @@ mod tests {
         assert!(pattern_matches("search_*", "search_issues") && !pattern_matches("search_*", "create_issue") && pattern_matches("get_me", "get_me"));
     }
 
+    #[test]
+    fn lorca_client_comes_whole_from_the_environment_or_the_build() {
+        assert_eq!(pick_client(None, None, None, None), None, "a build without one has none");
+        assert_eq!(pick_client(Some(" ".into()), Some("s".into()), None, Some("built-secret")), None);
+        assert_eq!(pick_client(None, None, Some("built"), Some("built-secret")), Some(("built".into(), Some("built-secret".into()))));
+        assert_eq!(pick_client(None, None, Some("built"), Some("")), Some(("built".into(), None)));
+        // The environment's id never takes the build's secret.
+        assert_eq!(pick_client(Some("env".into()), None, Some("built"), Some("built-secret")), Some(("env".into(), None)));
+        assert_eq!(pick_client(Some("env".into()), Some("env-secret".into()), Some("built"), None), Some(("env".into(), Some("env-secret".into()))));
+        assert_eq!(lorca_client("another-service"), None);
+    }
+
     struct ScratchApp(Arc<App>, std::path::PathBuf);
     impl Drop for ScratchApp {
         fn drop(&mut self) {
@@ -1206,13 +1270,67 @@ mod tests {
         assert!(uninstall(app, "acme").is_err());
     }
 
+    #[tokio::test]
+    async fn google_accounts_sign_in_with_lorcas_client_unless_the_user_set_their_own() {
+        // A release build's client; the environment stands in for what the build carries.
+        std::env::set_var("LORCA_GOOGLE_CLIENT_ID", "lorca.apps.googleusercontent.com");
+        std::env::set_var("LORCA_GOOGLE_CLIENT_SECRET", "lorca-secret");
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        let redirect = "http://127.0.0.1:53682/callback";
+        let consent = |started: Value| {
+            let page = reqwest::Url::parse(started["url"].as_str().unwrap()).unwrap();
+            let query: BTreeMap<String, String> = page.query_pairs().into_owned().collect();
+            (page.host_str().unwrap_or_default().to_string(), query)
+        };
+        for service in ["gmail", "google-calendar", "google-drive"] {
+            let manifest = crate::marketplace::bundled().plugins.into_iter().find(|m| m.id == service).unwrap();
+            let status = accounts::install(app, manifest, "marketplace", Some("Work")).unwrap();
+            assert_eq!((status.state.as_str(), status.detail.as_str()), ("needs_auth", "Sign in"), "{service} needs no setup");
+            let detail = detail(app, &status.id).unwrap();
+            assert!(detail["variables"].as_array().unwrap().iter().all(|v| v["required"] == false), "{service}: the user's own client is optional");
+            let started = serve_request(app, "plugins.connect", &json!({ "plugin_id": status.id, "redirect_uri": redirect }), None).await.unwrap();
+            let (host, query) = consent(started);
+            assert_eq!((host.as_str(), query["client_id"].as_str(), query["redirect_uri"].as_str()), ("accounts.google.com", "lorca.apps.googleusercontent.com", redirect));
+            assert!(!query.contains_key("client_secret"));
+        }
+
+        // The token exchange sends Lorca's secret with Lorca's id, and the user's own client
+        // goes out whole, never with Lorca's secret.
+        for own in [None, Some("mine.apps.googleusercontent.com")] {
+            let (token, request) = oauth::tests::token_server(json!({ "access_token": "a", "refresh_token": "r", "token_type": "Bearer", "expires_in": 3600 })).await;
+            let manifest = Manifest::parse(&json!({ "id": "google-test", "name": "Google Test", "named_accounts": true,
+                "servers": { "api": { "type": "http", "url": "http://127.0.0.1:9/mcp", "auth": { "type": "oauth", "scopes": ["drive"], "lorca_client": "google",
+                    "client_id_variable": "GOOGLE_CLIENT_ID", "client_secret_variable": "GOOGLE_CLIENT_SECRET",
+                    "authorization_endpoint": "https://accounts.google.test/auth", "token_endpoint": token } } },
+                "variables": [{ "name": "GOOGLE_CLIENT_ID", "required": true }, { "name": "GOOGLE_CLIENT_SECRET", "secret": true }] }))
+            .unwrap();
+            let status = accounts::install(app, manifest, "marketplace", None).unwrap();
+            if let Some(own) = own {
+                set_variables(app, &status.id, &BTreeMap::from([("GOOGLE_CLIENT_ID".to_string(), own.to_string())])).unwrap();
+            }
+            let started = serve_request(app, "plugins.connect", &json!({ "plugin_id": status.id, "redirect_uri": redirect }), None).await.unwrap();
+            let sign_in = started["sign_in"].as_str().unwrap().to_string();
+            let (_, query) = consent(started);
+            let callback = format!("{redirect}?state={}&code=code", query["state"]);
+            serve_request(app, "plugins.sign_in.finish", &json!({ "plugin_id": status.id, "sign_in": sign_in, "url": callback }), None).await.unwrap();
+            let request = request.await.unwrap();
+            let form = request.split_once("\r\n\r\n").unwrap().1;
+            let form: BTreeMap<String, String> = reqwest::Url::parse(&format!("http://localhost/?{form}")).unwrap().query_pairs().into_owned().collect();
+            assert_eq!(form["client_id"], own.unwrap_or("lorca.apps.googleusercontent.com"));
+            assert_eq!(form.get("client_secret").map(String::as_str), own.is_none().then_some("lorca-secret"));
+            let saved = app.plugins.lock().unwrap().sign_in_secret(&status.id, "oauth", "api").unwrap();
+            assert_eq!(saved["client_id"], form["client_id"], "refreshes use the client that signed in");
+        }
+    }
+
     #[test]
     fn installed_marketplace_plugins_follow_the_index() {
         let scratch = scratch_app();
         let app = &scratch.0;
         let mut old = crate::marketplace::bundled().plugins.into_iter().find(|m| m.id == "github").unwrap();
         // As installed before the device flow existed: a bare OAuth entry.
-        old.servers.insert("github".into(), ServerSpec::Http { url: "https://api.githubcopilot.com/mcp/".into(), headers: BTreeMap::new(), auth: Some(AuthSpec::Oauth { scopes: vec![], token_variable: Some("GITHUB_TOKEN".into()), client_id_variable: None, client_secret_variable: None, client_id: None, client_secret: None, device_authorization_endpoint: None, token_endpoint: None, authorization_endpoint: None, authorization_params: BTreeMap::new(), optional: false, client_name: None, callback_port: None, callback_url: None, auth_server_metadata_url: None }), timeout: None });
+        old.servers.insert("github".into(), ServerSpec::Http { url: "https://api.githubcopilot.com/mcp/".into(), headers: BTreeMap::new(), auth: Some(AuthSpec::Oauth { scopes: vec![], token_variable: Some("GITHUB_TOKEN".into()), client_id_variable: None, client_secret_variable: None, client_id: None, client_secret: None, lorca_client: None, device_authorization_endpoint: None, token_endpoint: None, authorization_endpoint: None, authorization_params: BTreeMap::new(), optional: false, client_name: None, callback_port: None, callback_url: None, auth_server_metadata_url: None }), timeout: None });
         install(app, old, "marketplace").unwrap();
         let mut vars = BTreeMap::new();
         vars.insert("GITHUB_TOKEN".to_string(), "ghp-secret".to_string());

@@ -1074,6 +1074,7 @@ pub async fn connect_oauth_for_card(app: &Arc<App>, plugin_id: &str, server: &st
                     client_secret_variable,
                     client_id,
                     client_secret,
+                    lorca_client,
                     device_authorization_endpoint,
                     token_endpoint,
                     authorization_endpoint,
@@ -1091,9 +1092,15 @@ pub async fn connect_oauth_for_card(app: &Arc<App>, plugin_id: &str, server: &st
             let set = |fixed: &Option<String>, variable: &Option<String>| {
                 fixed.as_deref().map(|value| fill(value, &values)).filter(|v| !v.trim().is_empty()).or_else(|| variable.as_ref().and_then(|v| values.get(v).cloned())).filter(|v| !v.trim().is_empty())
             };
+            // The user's own client, else the one Lorca registered with the service; an id and
+            // its secret always come from the same one.
+            let (id, secret) = match set(client_id, client_id_variable) {
+                Some(id) => (Some(id), set(client_secret, client_secret_variable)),
+                None => lorca_client.as_deref().and_then(super::lorca_client).map_or((None, None), |(id, secret)| (Some(id), secret)),
+            };
             let hint = ClientHint {
-                id: set(client_id, client_id_variable),
-                secret: set(client_secret, client_secret_variable),
+                id,
+                secret,
                 token_variable: token_variable.clone(),
                 client_id_variable: client_id_variable.clone(),
                 client_secret_variable: client_secret_variable.clone(),

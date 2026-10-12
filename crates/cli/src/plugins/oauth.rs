@@ -160,7 +160,7 @@ async fn exchange(http: &reqwest::Client, endpoint: &str, form: &[(&str, &str)])
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
