@@ -120,6 +120,10 @@ export default function ChatScreen() {
   const publishComposerExtra = useCallback(() => {
     const actual = composerActual.current;
     const compact = composerCompact.current;
+    // Until the composer's first layout there is no compact height, and the guess stands. A
+    // keyboard that comes to rest before then (one dismissed on the way into the chat) would
+    // otherwise publish an infinite inset, and UIKit throws on the NaN scroll bar it makes.
+    if (!Number.isFinite(compact)) return;
     const expanded = actual > compact + 1;
     composerExtraTarget.value = expanded
       ? actual
