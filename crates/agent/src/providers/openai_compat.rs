@@ -36,7 +36,9 @@ pub struct OpenAiCompatProvider {
     /// Sent as `reasoning_effort`. `Off` is `thinking: { type: "disabled" }` on a model the
     /// catalog says can stop thinking, and sends nothing on any other.
     pub thinking_level: Option<ThinkingLevel>,
-    /// The catalog entry for the model, when it has one.
+    /// The model's entry, when it has one: the catalog's, or one its caller built (a custom
+    /// provider's, with the thinking levels its server's model list declares). Its levels are
+    /// the only ones sent.
     pub info: Option<&'static ModelInfo>,
     /// Sends the session id as `prompt_cache_key`, OpenAI's routing hint for its prompt cache.
     /// Off for a server that refuses fields it does not know.
@@ -98,9 +100,10 @@ impl OpenAiCompatProvider {
             None if level == ThinkingLevel::Off => None,
             None => Some(level),
         });
-        // A catalogued model gets the word for its level, since its levels are the words it
-        // takes; any other model gets at most `high`, which every gateway takes.
-        let catalogued = self.info.is_some();
+        // A model with an entry gets the word for its level, since the clamp above held it to
+        // the levels the entry declares; any other model gets at most `high`, which every
+        // gateway takes.
+        let declared = self.info.is_some();
         let effort = match level {
             None => None,
             // Only a model the catalog says can stop thinking keeps `Off` through the clamp.
@@ -111,8 +114,8 @@ impl OpenAiCompatProvider {
             Some(ThinkingLevel::Minimal) => Some("minimal"),
             Some(ThinkingLevel::Low) => Some("low"),
             Some(ThinkingLevel::Medium) => Some("medium"),
-            Some(ThinkingLevel::XHigh) if catalogued => Some("xhigh"),
-            Some(ThinkingLevel::Max) if catalogued => Some("max"),
+            Some(ThinkingLevel::XHigh) if declared => Some("xhigh"),
+            Some(ThinkingLevel::Max) if declared => Some("max"),
             Some(ThinkingLevel::High | ThinkingLevel::XHigh | ThinkingLevel::Max) => Some("high"),
         };
         if let Some(effort) = effort {
@@ -587,5 +590,46 @@ mod tests {
         assert_eq!(body("openai", "some-model", ThinkingLevel::Max)["reasoning_effort"], "high");
         let unknown_off = body("openai", "some-model", ThinkingLevel::Off);
         assert!(unknown_off.get("thinking").is_none() && unknown_off.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn a_model_sends_the_levels_its_own_entry_declares() {
+        use ThinkingLevel::{High, Low, Max, Medium, XHigh};
+        let request = request(vec![LlmMessage::User(UserMessage::text("hi"))]);
+        // An entry built from a custom provider's model list, as the CLI builds one.
+        let entry = |levels: &'static [ThinkingLevel]| -> &'static ModelInfo {
+            Box::leak(Box::new(ModelInfo {
+                id: "gpt-lab",
+                name: "gpt-lab",
+                provider: "custom:lab",
+                context_window: 0,
+                max_output: 0,
+                reasoning: !levels.is_empty(),
+                images: false,
+                rates: models::Rates { input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0 },
+                tiers: &[],
+                thinking: models::ThinkingMode::Effort,
+                levels,
+                wire: None,
+            }))
+        };
+        let effort = |info: &'static ModelInfo, level: ThinkingLevel| {
+            let mut provider = OpenAiCompatProvider::new("custom:lab", "http://lab/v1", "", "gpt-lab").with_thinking(Some(level));
+            provider.info = Some(info);
+            provider.body(&request)["reasoning_effort"].as_str().map(str::to_string)
+        };
+        let declared = entry(&[Low, Medium, High, XHigh, Max]);
+        for (level, word) in [(Low, "low"), (Medium, "medium"), (High, "high"), (XHigh, "xhigh"), (Max, "max")] {
+            println!("declared [low, medium, high, xhigh, max] at {level}: reasoning_effort = {:?}", effort(declared, level));
+            assert_eq!(effort(declared, level).as_deref(), Some(word));
+        }
+        // Never a level it does not declare: up to the next it has, else its highest.
+        let up_to_xhigh = entry(&[Low, High, XHigh]);
+        assert_eq!(effort(up_to_xhigh, Medium).as_deref(), Some("high"));
+        assert_eq!(effort(up_to_xhigh, Max).as_deref(), Some("xhigh"));
+        // The common levels a model that declares nothing takes stop at `high`.
+        assert_eq!(effort(entry(&[Low, Medium, High]), Max).as_deref(), Some("high"));
+        // A model that does not reason is sent no effort.
+        assert_eq!(effort(entry(&[]), Max), None);
     }
 }

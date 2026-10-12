@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
+use lorca_models::ThinkingLevel;
 use lorca_provider_auth::chatgpt::{self as chatgpt_oauth, ChatGptTokens};
 use lorca_provider_auth::grok::{self as grok_oauth, GrokTokens};
 
@@ -211,7 +212,7 @@ pub async fn connect_custom(app: &Arc<App>, input: CustomInput) -> Result<String
         ids.into_iter()
             .map(|id| match listed.iter().find(|(_, model)| model.id == id) {
                 Some((_, model)) => model.clone(),
-                None => CustomModel { id, name: None, context_window: None, max_output: None, images: None },
+                None => CustomModel { id, name: None, context_window: None, max_output: None, images: None, levels: None },
             })
             .collect()
     };
@@ -396,7 +397,29 @@ fn listed_model(entry: &Value) -> Option<(Use, CustomModel)> {
     } else {
         Use::Chat
     };
-    Some((using, CustomModel { id, name, context_window, max_output, images }))
+    let levels = declared_levels(entry);
+    Some((using, CustomModel { id, name, context_window, max_output, images, levels }))
+}
+
+/// The thinking levels a model list declares a model takes, lowest first:
+/// `supported_reasoning_levels`, each an `{ "effort": … }` or the bare word. Empty for a model
+/// that does not reason (`"reasoning": false`), and `None` when the list declares no level
+/// Lorca knows. A word that is not a level is dropped rather than guessed at, and so is Off,
+/// since an unknown server has no one way to turn its thinking off.
+fn declared_levels(entry: &Value) -> Option<Vec<ThinkingLevel>> {
+    if entry["reasoning"].as_bool() == Some(false) {
+        return Some(Vec::new());
+    }
+    let mut levels: Vec<ThinkingLevel> = entry["supported_reasoning_levels"]
+        .as_array()?
+        .iter()
+        .filter_map(|level| level["effort"].as_str().or_else(|| level.as_str()))
+        .filter_map(|word| word.parse().ok())
+        .filter(|level| *level != ThinkingLevel::Off)
+        .collect();
+    levels.sort();
+    levels.dedup();
+    Some(levels).filter(|levels| !levels.is_empty())
 }
 
 /// Runs a ChatGPT sign-in, opening its authorization URL through the Device's UI.
@@ -503,7 +526,7 @@ mod tests {
 
     #[test]
     fn a_decision_api_takes_the_decision_models_a_list_marks() {
-        let model = |id: &str| CustomModel { id: id.into(), name: None, context_window: None, max_output: None, images: None };
+        let model = |id: &str| CustomModel { id: id.into(), name: None, context_window: None, max_output: None, images: None, levels: None };
         let listed = vec![(Use::Chat, model("openai/gpt-6-luna")), (Use::Decides, model("openai/gpt-6-luna-decisions")), (Use::Other, model("embed"))];
         let ids = |api, listed: &Vec<(Use, CustomModel)>| usable(api, listed.clone()).into_iter().map(|m| m.id).collect::<Vec<_>>();
         assert_eq!(ids(CustomApi::Decisions, &listed), ["openai/gpt-6-luna-decisions"]);
@@ -559,6 +582,29 @@ mod tests {
         assert_eq!(listed_models(&json!([{ "id": "a" }, { "id": "b" }])).unwrap().len(), 2);
         assert_eq!(listed_models(&json!({ "models": [{ "name": "qwen3:8b" }] })).unwrap()[0].1.id, "qwen3:8b");
         assert!(listed_models(&json!({ "status": "ok" })).is_none());
+    }
+
+    #[test]
+    fn model_lists_declare_the_thinking_levels_a_model_takes() {
+        use ThinkingLevel::{High, Low, Max, Medium, Minimal, XHigh};
+        let levels = |entry: Value| listed_model(&entry).unwrap().1.levels;
+        // The shape from #189.
+        let declared = json!({
+            "id": "gpt-lab", "modalities": { "input": ["text", "image"] }, "reasoning": true,
+            "supported_reasoning_levels": [{ "effort": "low" }, { "effort": "medium" }, { "effort": "high" }, { "effort": "xhigh" }, { "effort": "max" }]
+        });
+        println!("#189 sample parses to levels {:?}", levels(declared.clone()));
+        assert_eq!(levels(declared), Some(vec![Low, Medium, High, XHigh, Max]));
+        // The bare words, in any order and case, lowest first.
+        assert_eq!(levels(json!({ "id": "m", "supported_reasoning_levels": ["MAX", "minimal", "high", "high"] })), Some(vec![Minimal, High, Max]));
+        // A word that is not a level is dropped, and so is Off; nothing Lorca knows is nothing declared.
+        assert_eq!(levels(json!({ "id": "m", "supported_reasoning_levels": [{ "effort": "turbo" }, { "effort": "off" }, "high", 3] })), Some(vec![High]));
+        assert_eq!(levels(json!({ "id": "m", "supported_reasoning_levels": [{ "effort": "turbo" }] })), None);
+        assert_eq!(levels(json!({ "id": "m", "supported_reasoning_levels": [] })), None);
+        // A model that does not reason takes none, whatever else the list says.
+        assert_eq!(levels(json!({ "id": "m", "reasoning": false, "supported_reasoning_levels": ["high"] })), Some(vec![]));
+        assert_eq!(levels(json!({ "id": "m", "reasoning": true })), None);
+        assert_eq!(levels(json!({ "id": "m" })), None);
     }
 
     struct ScratchApp(Arc<App>, std::path::PathBuf);
