@@ -245,6 +245,37 @@ pub async fn notice(app: &App, token: &str, chat_id: &str, message_id: &str, thr
     }
 }
 
+/// How often the bot's typing is sent again: Telegram shows a chat action for about five seconds.
+const TYPING_EVERY: Duration = if cfg!(test) { Duration::from_millis(100) } else { Duration::from_secs(4) };
+
+/// Shows the bot typing in a chat (`sendChatAction`) until `stop`. Best effort: a network
+/// failure tries again at the next refresh, a request to slow down waits as asked, and a refusal
+/// (a wrong token, a chat the bot left) ends it.
+pub async fn typing(app: Arc<App>, token: String, chat_id: String, thread_id: Option<String>, stop: CancellationToken) {
+    let number = |id: &str| id.parse::<i64>().map(Value::from).unwrap_or_else(|_| json!(id));
+    let mut body = json!({ "chat_id": number(&chat_id), "action": "typing" });
+    if let Some(thread_id) = &thread_id {
+        body["message_thread_id"] = number(thread_id);
+    }
+    loop {
+        let wait = tokio::select! {
+            shown = call(&app, &token, "sendChatAction", body.clone(), Duration::from_secs(10)) => match shown {
+                Ok(_) | Err(Failure::Network) => TYPING_EVERY,
+                Err(Failure::Slow(seconds)) => Duration::from_secs_f64(seconds.clamp(1.0, 3600.0)),
+                Err(error) => {
+                    tracing::debug!(?error, "showing the bot typing in a Telegram chat");
+                    return;
+                }
+            },
+            _ = stop.cancelled() => return,
+        };
+        tokio::select! {
+            _ = tokio::time::sleep(wait) => {}
+            _ = stop.cancelled() => return,
+        }
+    }
+}
+
 /// The bot joining or leaving a group, from a `my_chat_member` update.
 #[derive(Debug, PartialEq)]
 pub enum Membership {
@@ -356,6 +387,7 @@ impl crate::plugins::builtin::Service for Server {
                 match call(app, &token, "sendMessage", body, Duration::from_secs(30)).await {
                     Ok(sent) => {
                         let message_id = id_text(&sent["message_id"]).unwrap_or_default();
+                        super::replied(app, context["lorca/chat_id"].as_str().unwrap_or_default(), &chat_id);
                         super::sent(app, plugin_id, &chat_id, thread.as_deref(), &message_id, reply_to.as_deref(), text, context);
                         structured_result(json!({ "message_id": message_id, "chat_id": chat_id }))
                     }

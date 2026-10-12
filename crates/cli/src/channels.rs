@@ -268,6 +268,9 @@ pub struct Channels {
     problems: Mutex<HashMap<String, String>>,
     /// The account's own bot as the service describes it, by account id.
     identities: Mutex<HashMap<String, Identity>>,
+    /// The chat action a message's turn shows on the service, by conversation id.
+    #[cfg(feature = "runner")]
+    typing: Mutex<HashMap<String, runner::Showing>>,
 }
 
 /// The bot behind an account, as the service said when it was read.
@@ -925,6 +928,54 @@ mod runner {
         message.external_id = Some(external_id.to_string());
         message.notification = Some(crate::attention::Notification::Quiet);
         app.upsert_message(message, true);
+    }
+
+    // MARK: - Typing
+
+    /// A turn showing its chat action: the Job, the service's chat, and what stops it.
+    pub(crate) struct Showing {
+        job_id: String,
+        chat_id: String,
+        stop: CancellationToken,
+    }
+
+    /// Ends a turn's chat action when the turn ends, however it ends.
+    pub struct Typing {
+        app: Arc<App>,
+        conversation_id: String,
+        job_id: String,
+        stop: CancellationToken,
+    }
+
+    impl Drop for Typing {
+        fn drop(&mut self) {
+            self.stop.cancel();
+            let mut typing = self.app.channels.typing.lock().unwrap();
+            if typing.get(&self.conversation_id).is_some_and(|showing| showing.job_id == self.job_id) {
+                typing.remove(&self.conversation_id);
+            }
+        }
+    }
+
+    /// Shows the bot typing in a Telegram conversation's chat while the turn of a message its
+    /// channel took runs, from the account's own bot, until the bot's reply there goes out
+    /// ([`replied`]), the turn is stopped (`cancel`), or the returned guard drops at its end.
+    pub fn typing(app: &Arc<App>, chat: &Chat, job_id: &str, cancel: &CancellationToken) -> Option<Typing> {
+        let channel = chat.meta.channel.as_ref().filter(|channel| channel.service == TELEGRAM)?;
+        let token = tokens(app, &channel.account_id, TELEGRAM)?.into_iter().next()?;
+        let stop = cancel.child_token();
+        let showing = Showing { job_id: job_id.to_string(), chat_id: channel.chat_id.clone(), stop: stop.clone() };
+        app.channels.typing.lock().unwrap().insert(chat.meta.id.clone(), showing);
+        tokio::spawn(telegram::typing(app.clone(), token, channel.chat_id.clone(), channel.thread_id.clone(), stop.clone()));
+        Some(Typing { app: app.clone(), conversation_id: chat.meta.id.clone(), job_id: job_id.to_string(), stop })
+    }
+
+    /// The bot's message went out to a chat: the turn of the conversation that sent it shows no
+    /// chat action there from now on.
+    pub(crate) fn replied(app: &App, conversation_id: &str, chat_id: &str) {
+        if let Some(showing) = app.channels.typing.lock().unwrap().get(conversation_id).filter(|showing| showing.chat_id == chat_id) {
+            showing.stop.cancel();
+        }
     }
 
     // MARK: - Readers

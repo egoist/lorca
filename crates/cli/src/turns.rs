@@ -155,6 +155,8 @@ async fn run_budgeted_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) 
         }
     };
     let Some(chat) = app.chat(&job.chat_id) else { return TurnOutcome::Skipped };
+    // A channel's message: its chat sees the bot typing until the reply goes out or the turn ends.
+    let _typing = event.as_ref().filter(|event| event.message_id.is_some()).and_then(|_| crate::channels::typing(app, &chat, &job.id, &cancel));
 
     let workdir = bot.working_directory(&app.config.home);
     if let Err(error) = std::fs::create_dir_all(&workdir) {

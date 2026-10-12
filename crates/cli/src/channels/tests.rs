@@ -258,10 +258,27 @@ async fn messages_land_in_their_conversation_once_and_paused_channels_take_none(
 struct BotApi {
     updates: Vec<Value>,
     sent: Vec<Value>,
+    /// Chat actions, `sendChatAction`'s bodies.
+    actions: Vec<Value>,
     slow: bool,
 }
 
 type Shared = Arc<Mutex<BotApi>>;
+
+/// `LORCA_TELEGRAM_API_URL` is the process's, so one test at a time has the stand-in.
+static BOT_API: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Starts the Bot API stand-in and points Telegram calls at it until the guard drops.
+async fn telegram_stub() -> (Shared, tokio::sync::MutexGuard<'static, ()>) {
+    let guard = BOT_API.lock().await;
+    let api: Shared = Arc::default();
+    let router = Router::new().route("/{token}/{method}", post(bot_api)).with_state(api.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    std::env::set_var("LORCA_TELEGRAM_API_URL", format!("http://{address}"));
+    (api, guard)
+}
 
 async fn bot_api(Path((token, method)): Path<(String, String)>, State(api): State<Shared>, Json(body): Json<Value>) -> Json<Value> {
     if token != "bot1:abc" {
@@ -288,6 +305,10 @@ async fn bot_api(Path((token, method)): Path<(String, String)>, State(api): Stat
             api.sent.push(body.clone());
             Json(json!({ "ok": true, "result": { "message_id": 100 + api.sent.len(), "chat": { "id": body["chat_id"] }, "text": body["text"] } }))
         }
+        "sendChatAction" => {
+            api.lock().unwrap().actions.push(body);
+            Json(json!({ "ok": true, "result": true }))
+        }
         _ => Json(json!({ "ok": false, "error_code": 404, "description": "Not Found" })),
     }
 }
@@ -308,12 +329,7 @@ async fn eventually(what: &str, mut done: impl FnMut() -> bool) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_telegram_group_reaches_the_bot_and_its_reply_lands_in_the_thread() {
-    let api: Shared = Arc::default();
-    let router = Router::new().route("/{token}/{method}", post(bot_api)).with_state(api.clone());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    std::env::set_var("LORCA_TELEGRAM_API_URL", format!("http://{address}"));
+    let (api, _stub) = telegram_stub().await;
 
     let scratch = scratch();
     let app = &scratch.0;
@@ -530,6 +546,8 @@ async fn hanging_model(app: &App) -> Arc<Mutex<usize>> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stopping_a_messages_turn_settles_it_and_the_channel_listens_on() {
+    // A message's turn shows the bot typing, here to the stand-in.
+    let (_api, _stub) = telegram_stub().await;
     let scratch = scratch();
     let app = &scratch.0;
     let asked = hanging_model(app).await;
@@ -567,6 +585,55 @@ async fn stopping_a_messages_turn_settles_it_and_the_channel_listens_on() {
     eventually("the next message's turn", || *asked.lock().unwrap() == 2).await;
     crate::runtime::cancel_chat(app, &chat.meta.id);
     eventually("that turn ending too", || app.running_jobs.lock().unwrap().is_empty()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_messages_turn_shows_the_bot_typing_until_it_replies_or_ends() {
+    use crate::plugins::builtin::Service;
+    let (api, _stub) = telegram_stub().await;
+    let scratch = scratch();
+    let app = &scratch.0;
+    let asked = hanging_model(app).await;
+    let account_id = account(app, TELEGRAM, "Community", &[(telegram::TOKEN, "1:abc")]);
+    run_tool(&tool(app, false), json!({ "action": "create", "account": account_id, "listen": { "tags": ["feedback"] }, "task": "File it", "chats": ["-1001"] })).await.unwrap();
+    let actions = || api.lock().unwrap().actions.clone();
+    // Nothing is sent until no new chat action has come in for a while.
+    let settled = || async {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let shown = actions().len();
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert_eq!(actions().len(), shown, "no chat action after it stopped");
+    };
+
+    // The message's turn shows the bot typing in its chat, and keeps it up while it runs.
+    ingest(app, &sample(&account_id, "#feedback crash on export")).unwrap();
+    let chat = conversations(app).remove(0);
+    assert!(actions().is_empty(), "nothing before the turn runs");
+    crate::event_triggers::tick(app).unwrap();
+    eventually("the bot typing again", || actions().len() >= 3).await;
+    assert!(actions().iter().all(|action| *action == json!({ "chat_id": -1001, "action": "typing" })), "{:?}", actions());
+
+    // Its reply to the chat ends it while the turn goes on.
+    let context = json!({ "lorca/chat_id": chat.meta.id, "lorca/bot_id": bot(app).id });
+    let sent = telegram::Server.call(app, &account_id, "send_message", json!({ "chat_id": "-1001", "text": "On it", "reply_to_message_id": 41 }), &context).await;
+    assert!(sent["isError"] != true, "{sent}");
+    settled().await;
+    assert_eq!(app.running_jobs.lock().unwrap().len(), 1, "the turn goes on");
+    assert!(app.channels.typing.lock().unwrap().contains_key(&chat.meta.id), "the turn keeps its place until it ends");
+    crate::runtime::cancel_chat(app, &chat.meta.id);
+    eventually("the turn ending", || app.running_jobs.lock().unwrap().is_empty()).await;
+    assert!(app.channels.typing.lock().unwrap().is_empty());
+
+    // The next message's turn shows it again, and Stop ends it with the turn.
+    ingest(app, &Incoming { message_id: "42".into(), ..sample(&account_id, "#feedback and dark mode") }).unwrap();
+    let before = actions().len();
+    crate::event_triggers::tick(app).unwrap();
+    eventually("the next turn typing", || actions().len() >= before + 2).await;
+    assert_eq!(*asked.lock().unwrap(), 2);
+    crate::runtime::cancel_chat(app, &chat.meta.id);
+    eventually("that turn ending too", || app.running_jobs.lock().unwrap().is_empty()).await;
+    settled().await;
+    assert!(app.channels.typing.lock().unwrap().is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
