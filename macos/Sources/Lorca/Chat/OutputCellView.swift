@@ -3,11 +3,15 @@ import AppKit
 /// A published output in the transcript, standing without a bubble or a time: an image's
 /// preview, the file's icon, name, type and size, and what the bot checked. A click opens the
 /// output's sheet, or retries a file that could not be fetched; the menu opens or saves the
-/// file, and replies to it. In a group the bot's avatar sits beside its bottom edge.
+/// file, and replies to it. In a group the bot's avatar sits beside its bottom edge. A run of one
+/// bot's outputs joins into one list, a compact row each: the icon (an image's own picture), name,
+/// type and size, and the check's symbol; the check's words are in the output's sheet.
 final class OutputCellView: TranscriptCellView {
     static let identifier = NSUserInterfaceItemIdentifier("OutputCell")
 
     static let width: CGFloat = 320
+    /// A row's height in a run of outputs.
+    static let stackedHeight: CGFloat = 44
 
     /// The card's height at `rowWidth`, starting at `indent`. The table's row height and the
     /// cell's own layout come from the same `Layout`, so a card is exactly as tall as what it shows.
@@ -34,6 +38,8 @@ final class OutputCellView: TranscriptCellView {
         static let pad: CGFloat = 12
         static let iconSize: CGFloat = 26
         static let textX: CGFloat = pad + iconSize + 10
+        static let stackedIconSize: CGFloat = 24
+        static let stackedTextX: CGFloat = pad + stackedIconSize + 10
         static let headerHeight: CGFloat = 54
         static let checkIconSize: CGFloat = 15
         static let checkX: CGFloat = pad + checkIconSize + 8
@@ -96,6 +102,7 @@ final class OutputCellView: TranscriptCellView {
 
     private let avatar = AvatarView(diameter: ChatMetrics.avatarSize)
     private let card = BubbleView()
+    private let stackShape = StackShapeView()
     private let preview = OutputPreviewView()
     private let previewRule = BackgroundView()
     private let outline = OutlineView()
@@ -111,6 +118,9 @@ final class OutputCellView: TranscriptCellView {
     private var attachment: Attachment?
     private var failed = false
     private var groupStart = true
+    private var stack = OutputStack()
+    /// In a group every row keeps the avatar's room, though only a run's last row shows it.
+    private var hasAvatar = false
 
     /// A click on the card: the output's sheet.
     var onOpen: (() -> Void)?
@@ -129,6 +139,8 @@ final class OutputCellView: TranscriptCellView {
         card.layer?.masksToBounds = true
         // A tall picture draws past the box; a view no longer clips its drawing by default.
         preview.clipsToBounds = true
+        preview.wantsLayer = true
+        preview.layer?.masksToBounds = true
         previewRule.cornerRadius = 0
         previewRule.fillColor = .separatorColor
         separator.cornerRadius = 0
@@ -139,6 +151,7 @@ final class OutputCellView: TranscriptCellView {
         detail.lineBreakMode = .byTruncatingTail
         summary.lineBreakMode = .byWordWrapping
         command.lineBreakMode = .byTruncatingTail
+        card.addSubview(stackShape.framePositioned())
         for view in [preview, previewRule, icon, name, detail, separator, checkIcon, checkTitle, summary, command, outline] as [NSView] {
             card.addSubview(view.framePositioned())
         }
@@ -156,14 +169,22 @@ final class OutputCellView: TranscriptCellView {
     /// until they are fetched; `error` is why they could not be.
     func configure(
         output: Output, attachment: Attachment?, url: URL?, error: String?, avatar avatarContent: AvatarView.Content?,
-        groupStart: Bool
+        groupStart: Bool, stack: OutputStack = OutputStack()
     ) {
         self.output = output
         self.attachment = attachment
         self.groupStart = groupStart
+        self.stack = stack
         failed = error != nil
-        avatar.isHidden = avatarContent == nil
+        // In a run, the avatar sits beside the last row.
+        hasAvatar = avatarContent != nil
+        avatar.isHidden = !hasAvatar || stack.below
         if let avatarContent { avatar.content = avatarContent }
+        // A run's rows draw the list's shape themselves, rounded only at its ends.
+        card.fillColor = stack.isStacked ? .clear : Theme.outputCard
+        card.layer?.cornerRadius = stack.isStacked ? 0 : 12
+        stackShape.stack = stack
+        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: stack.isStacked ? 15 : 19, weight: .regular)
         icon.image = NSImage(systemSymbolName: output.symbolName, accessibilityDescription: nil)
         icon.contentTintColor = output.tint
         name.stringValue = output.name
@@ -176,11 +197,15 @@ final class OutputCellView: TranscriptCellView {
             detail.textColor = .secondaryLabelColor
             card.toolTip = url == nil && attachment != nil ? L("%@ · fetching…", output.name) : output.name
         }
+        if let evidence = output.evidence, stack.isStacked, error == nil {
+            card.toolTip = "\(output.name)\n\(evidence.title) · \(evidence.statusText)"
+        }
         if output.kind == .image, let attachment, error == nil, let url {
             // Sharp at the card's widest, on a Retina screen: the longest side the picture
-            // takes at that width, doubled.
+            // takes at that width, doubled. In a run, it stands in for the icon.
             let full = Layout.fullHeight(of: attachment, width: Self.width)
-            preview.image = Thumbnails.image(at: url, maxPixels: Int(min(4096, ceil(max(Self.width, full) * 2))))
+            let side = stack.isStacked ? 128 : Int(min(4096, ceil(max(Self.width, full) * 2)))
+            preview.image = Thumbnails.image(at: url, maxPixels: side)
         } else {
             preview.image = nil
         }
@@ -233,11 +258,17 @@ final class OutputCellView: TranscriptCellView {
     override func layout() {
         super.layout()
         guard let output else { return }
-        let top = groupStart ? ChatMetrics.groupTopPadding : ChatMetrics.tightTopPadding
-        let x = ChatMetrics.indent(showsAvatar: !avatar.isHidden)
+        let top = stack.above ? 0 : groupStart ? ChatMetrics.groupTopPadding : ChatMetrics.tightTopPadding
+        let x = ChatMetrics.indent(showsAvatar: hasAvatar)
+        if stack.isStacked {
+            layoutStacked(output: output, top: top, x: x)
+            return
+        }
         let layout = Layout(output: output, attachment: attachment, rowWidth: bounds.width, indent: x)
 
         card.frame = NSRect(x: x, y: top, width: layout.width, height: layout.height)
+        stackShape.isHidden = true
+        outline.isHidden = false
         outline.frame = card.bounds
         avatar.frame = NSRect(
             x: ChatMetrics.horizontalInset, y: top + layout.height - ChatMetrics.avatarSize,
@@ -246,9 +277,11 @@ final class OutputCellView: TranscriptCellView {
         preview.isHidden = layout.preview == nil
         previewRule.isHidden = layout.preview == nil
         preview.frame = layout.preview ?? .zero
+        preview.layer?.cornerRadius = 0
         previewRule.frame = NSRect(x: 0, y: layout.headerY - 1, width: layout.width, height: 1)
 
         let textWidth = layout.width - Layout.textX - Layout.pad
+        icon.isHidden = false
         icon.frame = NSRect(
             x: Layout.pad, y: layout.headerY + (Layout.headerHeight - Layout.iconSize) / 2,
             width: Layout.iconSize, height: Layout.iconSize)
@@ -267,6 +300,39 @@ final class OutputCellView: TranscriptCellView {
         summary.isHidden = layout.summary.height == 0
         command.frame = layout.command
         command.isHidden = layout.command.height == 0
+    }
+
+    /// A row in a run of outputs: the icon, name, type and size, and the check's symbol at the end.
+    private func layoutStacked(output: Output, top: CGFloat, x: CGFloat) {
+        let width = min(Self.width, bounds.width - x - ChatMetrics.horizontalInset)
+        let height = Self.stackedHeight
+        card.frame = NSRect(x: x, y: top, width: width, height: height)
+        stackShape.isHidden = false
+        stackShape.frame = card.bounds
+        stackShape.separatorX = Layout.stackedTextX
+        outline.isHidden = true
+        avatar.frame = NSRect(
+            x: ChatMetrics.horizontalInset, y: top + height - ChatMetrics.avatarSize,
+            width: ChatMetrics.avatarSize, height: ChatMetrics.avatarSize)
+        for view in [previewRule, separator, checkTitle, summary, command] as [NSView] { view.isHidden = true }
+
+        let hasCheck = output.evidence != nil
+        checkIcon.isHidden = !hasCheck
+        let checkX = width - Layout.pad - Layout.checkIconSize
+        checkIcon.frame = NSRect(x: checkX, y: (height - Layout.checkIconSize) / 2, width: Layout.checkIconSize, height: Layout.checkIconSize)
+        let textWidth = (hasCheck ? checkX - 8 : width - Layout.pad) - Layout.stackedTextX
+        let iconFrame = NSRect(
+            x: Layout.pad, y: (height - Layout.stackedIconSize) / 2,
+            width: Layout.stackedIconSize, height: Layout.stackedIconSize)
+        // An image's own picture, once its bytes are here, in place of the icon.
+        let thumbnail = preview.image != nil
+        preview.isHidden = !thumbnail
+        preview.frame = iconFrame
+        preview.layer?.cornerRadius = 5
+        icon.isHidden = thumbnail
+        icon.frame = iconFrame
+        name.frame = NSRect(x: Layout.stackedTextX, y: 6, width: textWidth, height: 17)
+        detail.frame = NSRect(x: Layout.stackedTextX, y: 23, width: textWidth, height: 15)
     }
 }
 
@@ -293,6 +359,43 @@ private final class OutputPreviewView: NSView {
         }
         image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high.rawValue])
     }
+}
+
+/// A row's part of a run's list: the card's fill and hairline, rounded at the run's ends, open
+/// where the row joins the next, and a rule between rows from the text's edge.
+private final class StackShapeView: NSView {
+    var stack = OutputStack() { didSet { needsDisplay = true } }
+    var separatorX: CGFloat = 0 { didSet { needsDisplay = true } }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        clipsToBounds = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var isFlipped: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        // A joined edge runs past the view, corners and all, so only the outer ends draw them.
+        var rect = bounds.insetBy(dx: 0.5, dy: 0.5)
+        let past: CGFloat = 14
+        if stack.above { rect.origin.y -= past; rect.size.height += past }
+        if stack.below { rect.size.height += past }
+        let path = NSBezierPath(roundedRect: rect, xRadius: 11.5, yRadius: 11.5)
+        Theme.outputCard.setFill()
+        path.fill()
+        NSColor.separatorColor.setStroke()
+        path.lineWidth = 1
+        path.stroke()
+        if stack.above {
+            NSColor.separatorColor.setFill()
+            NSRect(x: separatorX, y: 0, width: bounds.width - separatorX, height: 1).fill()
+        }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 /// The card's hairline, drawn over the preview so the picture's top edge keeps the border.
