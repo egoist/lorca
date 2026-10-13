@@ -1014,6 +1014,10 @@ final class SwitchRow: NSView {
         let problem: String? = switch channel.state {
         case .held: L("On hold")
         case .offline: L("Can’t connect")
+        case _ where channel.requests.count == 1: L("A chat is waiting")
+        case _ where channel.requests.count > 1: L("%d chats are waiting", channel.requests.count)
+        // A listening channel's only detail is the Telegram privacy-mode note.
+        case .listening where !channel.detail.isEmpty: L("Privacy mode on")
         default: nil
         }
         if let problem {

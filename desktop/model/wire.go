@@ -140,6 +140,7 @@ type WireAgent struct {
 	Branch   *string `json:"branch"`
 	State    string  `json:"state"`
 	Stalled  *bool   `json:"stalled"`
+	Held     *bool   `json:"held"`
 	Question *struct {
 		Kind    string   `json:"kind"`
 		Text    *string  `json:"text"`
@@ -175,6 +176,12 @@ type WireChannel struct {
 	State        string        `json:"state"`
 	Detail       string        `json:"detail"`
 	HeldDelivery string        `json:"held_delivery"`
+	Requests     []struct {
+		ID      string `json:"id"`
+		Title   string `json:"title"`
+		Private bool   `json:"private"`
+		From    string `json:"from"`
+	} `json:"requests"`
 }
 
 // WireChatChannel is where a channel's conversation happens.
@@ -833,6 +840,9 @@ func ToChannel(wire WireChannel) Channel {
 	for _, chat := range wire.Chats {
 		channel.Chats = append(channel.Chats, ChannelChat{ID: chat.ID, Title: chat.Title})
 	}
+	for _, request := range wire.Requests {
+		channel.Requests = append(channel.Requests, ChatRequest{ID: request.ID, Title: request.Title, Private: request.Private, From: request.From})
+	}
 	return channel
 }
 
@@ -890,7 +900,7 @@ func ToMessage(wire WireMessage) *Message {
 			}
 			card := &AgentRun{
 				ID: agent.ID, Kind: agent.Kind, Host: str(agent.Host), Task: str(agent.Task), Folder: str(agent.Folder),
-				Branch: str(agent.Branch), State: state, Stalled: flag(agent.Stalled), Output: str(agent.Output),
+				Branch: str(agent.Branch), State: state, Stalled: flag(agent.Stalled), Held: flag(agent.Held), Output: str(agent.Output),
 				Outcome: str(agent.Outcome), Device: str(agent.Device),
 			}
 			if q := agent.Question; q != nil {

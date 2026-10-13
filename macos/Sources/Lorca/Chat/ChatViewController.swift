@@ -261,12 +261,30 @@ final class ChatViewController: NSViewController {
             previousAuthor = isChrome ? nil : message.author
             previousDate = message.createdAt
         }
+        stackOutputs(of: chat)
 
         let working = store.workingBots(in: chat.id)
         if !working.isEmpty {
             rows.append(.working(working))
         } else if let stoppedNotice {
             rows.append(.status(stoppedNotice))
+        }
+    }
+
+    /// Joins each run of one bot's outputs, with nothing between them, into one list.
+    private func stackOutputs(of chat: Chat) {
+        func output(at row: Int) -> Message? {
+            guard let id = rows[row].messageID, let index = messageIndex[id] else { return nil }
+            let message = chat.messages[index]
+            return message.isOutputCard ? message : nil
+        }
+        for row in rows.indices.dropFirst() {
+            guard let below = output(at: row), let above = output(at: row - 1), above.author == below.author,
+                case let .message(aboveID, aboveStart, aboveStack) = rows[row - 1],
+                case let .message(belowID, belowStart, belowStack) = rows[row]
+            else { continue }
+            rows[row - 1] = .message(id: aboveID, groupStart: aboveStart, stack: OutputStack(above: aboveStack.above, below: true))
+            rows[row] = .message(id: belowID, groupStart: belowStart, stack: OutputStack(above: true, below: belowStack.below))
         }
     }
 
@@ -731,7 +749,7 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
             configure(cell: cell, row: chatRow)
             return cell
 
-        case let .message(id, _):
+        case let .message(id, _, _):
             guard let message = message(for: id) else { return nil }
             let identifier: NSUserInterfaceItemIdentifier
             let cell: NSView
@@ -858,7 +876,7 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
         case let .status(text):
             return text
 
-        case let .message(id, _):
+        case let .message(id, _, _):
             guard let message = message(for: id) else { return "" }
             switch message.body {
             case .text where message.isOutputCard:
@@ -901,7 +919,7 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
         case let .status(text):
             (cell as? StatusCellView)?.configure(text)
 
-        case let .message(id, groupStart):
+        case let .message(id, groupStart, stack):
             guard let message = message(for: id), let chatID, let chat = store.chat(chatID) else {
                 return
             }
@@ -914,7 +932,7 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
                     output: output, attachment: attachment,
                     url: attachment.flatMap { store.localURL(for: $0, in: chatID, messageID: message.id) },
                     error: attachment.flatMap { store.attachmentError(for: $0) },
-                    avatar: cardAvatar(for: message), groupStart: groupStart)
+                    avatar: cardAvatar(for: message), groupStart: groupStart, stack: stack)
                 outputCell.onOpen = { [weak self] in
                     guard let self, let series = store.outputs(in: chatID).first(where: { $0.id == output.id }) else { return }
                     presentAsSheet(OutputViewController(chatID: chatID, series: series))

@@ -516,7 +516,11 @@ func (m *mainWindow) chatRow(c *ui.Context, chat *model.Chat, selected, listFocu
 		for _, bot := range members[:min(4, len(members))] {
 			avatars = append(avatars, botAvatar(bot))
 		}
-		avatarCluster(c, avatars, 38, working, backdrop)
+		service := ""
+		if chat.Channel != nil {
+			service = chat.Channel.Service
+		}
+		avatarCluster(c, avatars, 38, working, service, backdrop)
 		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(2).Children(func() {
 			ui.Row(c).Gap(6).MinWidth(0).Children(func() {
 				ui.Text(c, title).Grow(1).Shrink(1).MinWidth(0).FontSize(13).FontWeight(500).SingleLine()

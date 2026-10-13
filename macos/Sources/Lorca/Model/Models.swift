@@ -491,6 +491,16 @@ struct ChannelStatus: Identifiable, Hashable {
         var title: String
     }
 
+    /// A chat that wrote to the account's bot or added it to a group, waiting for the user to
+    /// allow it; the bot answers nothing there meanwhile.
+    struct Request: Hashable {
+        var id: String
+        var title: String
+        var isPrivate: Bool
+        /// Who wrote, or who added the bot to the group.
+        var from: String
+    }
+
     let id: String
     var botID: Bot.ID
     var name: String
@@ -502,6 +512,7 @@ struct ChannelStatus: Identifiable, Hashable {
     var state: State
     var detail: String
     var heldDelivery: String?
+    var requests: [Request] = []
 
     var serviceName: String { service == "slack" ? "Slack" : "Telegram" }
     var isPaused: Bool { state == .paused }
@@ -1428,6 +1439,8 @@ struct AgentRun: Hashable {
     var state: State
     /// Working, with nothing new for a while.
     var stalled = false
+    /// Auto-review held its start and told the bot why, without asking: it is `denied`.
+    var held = false
     var question: Question?
     var output: String?
     var outcome: String?
@@ -1465,7 +1478,7 @@ struct AgentRun: Hashable {
         case .exited: L("Ended", context: "coding agent")
         case .failed: L("Failed", context: "coding agent")
         case .stopped: L("Stopped", context: "coding agent")
-        case .denied: L("Not allowed", context: "coding agent")
+        case .denied: held ? L("Held by Auto-review", context: "coding agent") : L("Not allowed", context: "coding agent")
         case .expired: L("No answer", context: "coding agent")
         case .dismissed: L("Dismissed", context: "coding agent")
         }

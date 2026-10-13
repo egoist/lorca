@@ -370,6 +370,13 @@ fn summary(sub: &Subscription, items: &[Delivery], now: i64) -> Value {
 
 /// Local API on the owning Runner. Replies deliberately omit secrets and event payloads.
 pub fn serve(app: &Arc<App>, method: &str, body: &Value) -> anyhow::Result<Value> {
+    // A chat asking a channel's bot: the user allows it in the channel or ignores it.
+    if matches!(method, "events.allow_chat" | "events.ignore_chat") {
+        #[cfg(feature = "runner")]
+        return crate::channels::answer_request(app, method, body);
+        #[cfg(not(feature = "runner"))]
+        bail!("Only a Runner has channels");
+    }
     let key = dek(app)?;
     let id = body["id"].as_str().unwrap_or_default();
     // Resolve App state before taking the store lock: roster writes acquire them in that order.

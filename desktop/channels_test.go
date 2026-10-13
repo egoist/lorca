@@ -47,12 +47,45 @@ func TestChannelSheet(t *testing.T) {
 	m, tt := sheetTester(t, func(m *mainWindow) {})
 	m.presentChannel("ev-feedback", store.Bot("bot-tally"), m.open)
 	settle(tt)
-	for _, text := range []string{L("Listening"), "Telegram · Community", L("Every chat the bot is in"), "Mentions, replies, #feedback", L("Conversations"), "Acme Community"} {
+	for _, text := range []string{L("Listening"), "Telegram · Community", "Mentions, replies, #feedback", L("Asking to Chat"), "Acme Beta Testers", L("Group · %@", "Priya Nair"), L("Conversations"), "Acme Community"} {
 		if !tt.HasText(text) {
 			t.Errorf("no %q in %q", text, tt.Texts())
 		}
 	}
 	renderBoth(t, tt, "channel-sheet")
+
+	// Allowed, the chat that asked joins the channel's chats.
+	if err := tt.Click(L("Allow")); err != nil {
+		t.Fatal(err)
+	}
+	settle(tt)
+	if channel := store.Channel("ev-feedback"); len(channel.Requests) != 0 || len(channel.Chats) != 2 || channel.Chats[1].Title != "Acme Beta Testers" {
+		t.Errorf("Allow left %+v", channel)
+	}
+	if tt.HasText(L("Asking to Chat")) {
+		t.Error("the section stays with nothing asking")
+	}
+
+	// Add… asks for a chat's id, for a chat that can't ask itself.
+	if err := tt.Click(L("Add…")); err != nil {
+		t.Fatal(err)
+	}
+	settleTransitions(tt)
+	if !tt.HasText(L("Add a Chat")) {
+		t.Errorf("no prompt: %q", tt.Texts())
+	}
+	renderBoth(t, tt, "channel-sheet-add-chat")
+	tt.Key(0, ui.KeyEscape)
+	settleTransitions(tt)
+	store.AddChat("ev-feedback", "-1003", func(err error) {
+		if err != nil {
+			t.Error(err)
+		}
+	})
+	settle(tt)
+	if chats := store.Channel("ev-feedback").Chats; len(chats) != 3 || chats[2].ID != "-1003" {
+		t.Errorf("AddChat left %+v", chats)
+	}
 	closeSheet(t, m, tt)
 
 	store.Channel("ev-feedback").State, store.Channel("ev-feedback").HeldDelivery = model.ChannelHeld, "d1"

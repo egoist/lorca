@@ -1668,6 +1668,7 @@ mod tests {
                     context_window: Some(32000),
                     max_output: Some(4096),
                     images: None,
+                    levels: None,
                 }],
                 created_at: 1,
             },

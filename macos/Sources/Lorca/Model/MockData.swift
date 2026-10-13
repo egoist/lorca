@@ -151,9 +151,10 @@ enum MockData {
         [
             ChannelStatus(
                 id: "ev-feedback", botID: "bot-tally", name: "Community feedback", service: "telegram", accountID: "telegram-5f0c",
-                chats: [], listen: ChannelListen(mentions: true, replies: true, tags: ["feedback"]),
+                chats: [.init(id: "-1001846203311", title: "Acme Community")], listen: ChannelListen(mentions: true, replies: true, tags: ["feedback"]),
                 task: "Decide whether the new message is product feedback. If it is, find the matching open issue in acme/app and comment on it, or open a new one labeled feedback with the person's words quoted. Then reply to the person in their thread in one line with the issue number.",
-                state: .listening, detail: "", heldDelivery: nil),
+                state: .listening, detail: "", heldDelivery: nil,
+                requests: [.init(id: "-1002218840551", title: "Acme Beta Testers", isPrivate: false, from: "Priya Nair")]),
         ]
     }
 

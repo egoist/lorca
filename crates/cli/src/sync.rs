@@ -7,7 +7,7 @@ use crate::app::{remember_applied, upsert_device, App};
 use crate::events::{Event, RelayProblem};
 use crate::keys::unb64;
 use crate::model::*;
-use crate::relay::{BlobIn, RelayError, Signal};
+use crate::relay::{BlobIn, RelayError};
 
 /// A pull page at least this long is applied as a backlog: see `App::bulk_sync`.
 const BULK_BLOBS: usize = 20;
@@ -212,10 +212,10 @@ async fn session(app: &Arc<App>, failures: &mut u32) -> Result<(), RelayError> {
         *failures = 0;
 
         (pull, refresh) = tokio::select! {
-            signal = socket.next() => match signal? {
-                Signal::Blobs => (true, false),
-                Signal::Machines => (false, true),
-            },
+            signals = socket.next() => {
+                let signals = signals?;
+                (signals.blobs, signals.machines)
+            }
             // The outbox, or a wake from a phone that came back to the foreground: its socket
             // may have died unnoticed while the app was suspended, so the relay is asked to
             // answer on it, and a pull costs one request.
@@ -223,7 +223,7 @@ async fn session(app: &Arc<App>, failures: &mut u32) -> Result<(), RelayError> {
                 let woken = app.sync_wakes.load(Ordering::Relaxed);
                 if woken != wakes {
                     wakes = woken;
-                    socket.probe().await?;
+                    socket.probe();
                 }
                 (true, false)
             }

@@ -229,7 +229,7 @@ pub async fn deliver(state: &AppState, sub: &ReceiverSub, delivery_id: &str, pay
     };
     let inserted = state.db.insert_blob(blob, state.quota_bytes).await?;
     if !inserted.existing {
-        state.db.publish(db::Event::Blobs { identity: sub.identity_pubkey.clone(), recipient: Some(sub.machine_pubkey.clone()) }).await;
+        state.db.publish(db::Event::Blobs { identity: sub.identity_pubkey.clone(), recipient: Some(sub.machine_pubkey.clone()), sender: None }).await;
     }
     crate::metrics::METRICS.receiver_events.add(1);
     Ok(true)

@@ -299,6 +299,12 @@ enum Wire {
             var replies: Bool?
             var tags: [String]?
         }
+        struct Request: Decodable {
+            var id: String
+            var title: String
+            var `private`: Bool?
+            var from: String?
+        }
         var id: String
         var botId: String
         var name: String
@@ -310,6 +316,7 @@ enum Wire {
         var state: String
         var detail: String?
         var heldDelivery: String?
+        var requests: [Request]?
 
         func toModel() -> Lorca.ChannelStatus {
             Lorca.ChannelStatus(
@@ -317,7 +324,8 @@ enum Wire {
                 chats: (chats ?? []).map { .init(id: $0.id, title: $0.title ?? "") },
                 listen: listen.toModel(), task: task,
                 state: Lorca.ChannelStatus.State(rawValue: state) ?? .listening, detail: detail ?? "",
-                heldDelivery: heldDelivery)
+                heldDelivery: heldDelivery,
+                requests: (requests ?? []).map { .init(id: $0.id, title: $0.title, isPrivate: $0.private ?? false, from: $0.from ?? "") })
         }
     }
 
@@ -732,6 +740,7 @@ enum Wire {
         var branch: String?
         var state: String
         var stalled: Bool?
+        var held: Bool?
         var question: Question?
         var output: String?
         var outcome: String?
@@ -1007,7 +1016,7 @@ extension Wire.Agent {
     func toModel() -> AgentRun {
         AgentRun(
             id: id, kind: kind, host: host, task: task ?? "", folder: folder ?? "", branch: branch,
-            state: AgentRun.State(rawValue: state) ?? .stopped, stalled: stalled ?? false,
+            state: AgentRun.State(rawValue: state) ?? .stopped, stalled: stalled ?? false, held: held ?? false,
             question: question.flatMap { question in
                 AgentRun.Question.Kind(rawValue: question.kind).map {
                     AgentRun.Question(

@@ -1,4 +1,4 @@
-// Lorca for Windows and Linux, an app of native UI. `go tool mygo dev` builds Lorca Dev
+// Lorca for Windows, Linux, and macOS, an app of native UI. `go tool mygo dev` builds Lorca Dev
 // (app.lorca.dev), which keeps its account in ~/.lorca-dev and its CLI on port 4863, apart from an
 // installed Lorca.
 export default ({ command }: { command: string }) => ({
@@ -6,7 +6,7 @@ export default ({ command }: { command: string }) => ({
   identifier: "app.lorca",
   // The app's own version, apart from the Mac app's (the root package.json's). `bun run
   // release-desktop` and the Release desktop workflow read it here.
-  version: "0.1.7",
+  version: "0.1.11",
   icon: command === "dev" ? "assets/icon-dev.png" : "assets/icon.png",
   out: "build",
   // Open in Lorca on a shared bot's page (lorca.app/t/…). The installer registers the scheme on
@@ -21,6 +21,15 @@ export default ({ command }: { command: string }) => ({
     publicKey: "WzJsOGNIuf6mcEqo5ff8jub+NoQQOEk4JXreLPYjgyQ=",
     github: "egoist/lorca",
     tagPrefix: "desktop-v",
+  },
+  // Signed ad hoc unless SIGN_IDENTITY names a Developer ID, and notarized with the notarytool
+  // profile NOTARY_PROFILE (in the keychain NOTARY_KEYCHAIN, else the login keychain). `bun run
+  // release-desktop` sets both for a macOS release, as `bun run release-mac` signs the Mac app.
+  macos: {
+    signingIdentity: process.env.SIGN_IDENTITY,
+    notarize: process.env.NOTARY_PROFILE
+      ? { keychainProfile: process.env.NOTARY_PROFILE, keychain: process.env.NOTARY_KEYCHAIN }
+      : undefined,
   },
   linux: {
     comment: "Chat with your bots, which run on computers you own",

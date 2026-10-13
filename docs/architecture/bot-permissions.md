@@ -1,6 +1,6 @@
 # Bot permissions
 
-A bot's Access belongs to the user. It limits which plugins on the bot's Runner the bot may use, how far (read, draft, write), down to single tools, and whether the bot reads or changes files and runs shell commands there. The CLI checks it before [Auto-review](tools.md) and again when a call runs; an account rule, Allow once, or Always allow cannot widen it. A bot's description tells it what to do; its Access decides what its tools may do.
+A bot's Access belongs to the user. It limits which plugins on the bot's Runner the bot may use, how far (read, draft, write), down to single tools, and whether the bot reads or changes files and runs shell commands there. The CLI checks it before [Auto-review](auto-review.md) and again when a call runs; an account rule, Allow once, or Always allow cannot widen it. A bot's description tells it what to do; its Access decides what its tools may do.
 
 ## Profile and wire shape
 

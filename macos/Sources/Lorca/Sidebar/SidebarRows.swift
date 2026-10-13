@@ -296,6 +296,8 @@ final class SidebarChatCell: NSTableCellView {
     /// every store event, and a cell that already shows it is left alone.
     struct Content: Equatable {
         var avatars: [AvatarView.Content]
+        /// A channel conversation's service, whose mark the avatar wears.
+        var service: String?
         var isWorking: Bool
         var title: String
         var preview: String
@@ -307,6 +309,7 @@ final class SidebarChatCell: NSTableCellView {
         @MainActor
         init(chat: Chat, store: AppStore) {
             avatars = store.bots(in: chat).prefix(4).map { AvatarView.content(for: $0, store: store) }
+            service = chat.channel?.service
             isWorking = chat.botIDs.contains { store.isWorking($0) }
             title = store.title(for: chat)
             preview = store.preview(for: chat)
@@ -421,6 +424,7 @@ final class SidebarChatCell: NSTableCellView {
         guard content != self.content else { return }
         self.content = content
         avatars.configure(with: content.avatars)
+        avatars.service = content.service
         avatars.isWorking = content.isWorking
         title.stringValue = content.title
         preview.stringValue = content.preview
@@ -445,7 +449,7 @@ final class SidebarChatCell: NSTableCellView {
         previewBeforeBadge.isActive = unread > 0
         previewBeforeEdge.isActive = unread == 0
         setAccessibilityLabel(
-            [title.stringValue, unreadLabel, content.isMuted ? L("Muted") : nil, avatars.isWorking ? L("Working") : nil]
+            [title.stringValue, content.service.map { $0 == "slack" ? "Slack" : "Telegram" }, unreadLabel, content.isMuted ? L("Muted") : nil, avatars.isWorking ? L("Working") : nil]
                 .compactMap { $0 }.joined(separator: ", "))
         applyBackgroundStyle()
     }

@@ -1,14 +1,16 @@
-# Releases the Windows and Linux app (desktop/) as a release of this repository tagged
+# Releases the app in desktop/ for Windows, Linux, and macOS as a release of this repository tagged
 # desktop-vX.Y.Z. The repository's latest release stays the CLI's, which install-cli.sh and
 # install-cli.ps1 download, and the apps find the newest desktop-v release through the GitHub API.
 # A tag desktop-vX.Y.Z, naming the version in desktop/mygo.config.ts, drafts the release with the
-# version's section of desktop/CHANGELOG.md as its notes, then builds Windows x64, Linux x64 and
-# Linux arm64 side by side. A run by hand does the same for the commit it runs on, naming the
-# release after desktop/mygo.config.ts; the tag appears when the draft is published. Each build runs
-# `bun run release-desktop <platform>`: the CLI with cargo-zigbuild, then `go tool mygo build -upload`,
-# which builds the app and its installer, signs the update archive and deltas, and uploads them to
-# the draft. Publishing the draft, without making it the latest release, once every platform is
-# there makes it the update apps see. docs/releasing-desktop.md has the steps.
+# version's section of desktop/CHANGELOG.md as its notes, then builds Windows x64, Linux x64,
+# Linux arm64 and macOS on Apple silicon side by side. A run by hand does the same for the commit it
+# runs on, naming the release after desktop/mygo.config.ts; the tag appears when the draft is
+# published. Each build runs `bun run release-desktop <platform>`: the CLI (with cargo-zigbuild off
+# the Mac), then `go tool mygo build -upload`, which builds the app and its installer, signs the
+# macOS app with the Developer ID and notarizes its disk image, signs the update archive and
+# deltas, and uploads them to the draft. Publishing the draft, without making it the latest
+# release, once every platform is there makes it the update apps see. docs/releasing-desktop.md
+# has the steps.
 name: Release desktop
 
 on:
@@ -95,14 +97,14 @@ jobs:
               '
               # Not the latest release, which stays the CLI's. On the tag's commit, or on the commit a
               # run by hand builds, where publishing the draft makes the tag.
-              gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --latest=false --target "$GITHUB_SHA" --title "Lorca for Windows and Linux $VERSION" --notes-file notes.md
+              gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --latest=false --target "$GITHUB_SHA" --title "Lorca for Windows, Linux, and macOS $VERSION" --notes-file notes.md
               ;;
           esac
 
   build:
     name: build ${{ matrix.platform }}
     needs: draft
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: write
     strategy:
@@ -110,20 +112,25 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # MyGo builds every platform from Linux without cgo, and zig, through cargo-zigbuild,
-          # builds the CLI inside each app as the CLI releases do: static (musl) for Linux.
-          - { platform: windows/amd64, target: x86_64-pc-windows-gnu }
-          - { platform: linux/amd64, target: x86_64-unknown-linux-musl }
-          - { platform: linux/arm64, target: aarch64-unknown-linux-musl }
+          # MyGo builds Windows and Linux from Linux without cgo, and zig, through cargo-zigbuild,
+          # builds the CLI inside each app as the CLI releases do: static (musl) for Linux. The
+          # macOS app needs a Mac, which signs it, notarizes it, and makes its disk image; it is
+          # for Apple silicon, as the Mac app and the CLI's macOS release are.
+          - { platform: windows/amd64, target: x86_64-pc-windows-gnu, os: ubuntu-latest }
+          - { platform: linux/amd64, target: x86_64-unknown-linux-musl, os: ubuntu-latest }
+          - { platform: linux/arm64, target: aarch64-unknown-linux-musl, os: ubuntu-latest }
+          - { platform: darwin/arm64, target: aarch64-apple-darwin, os: macos-26 }
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
       - uses: mlugg/setup-zig@v2
+        if: runner.os == 'Linux'
         with:
           version: 0.16.0
       - uses: taiki-e/install-action@v2
+        if: runner.os == 'Linux'
         with:
           tool: cargo-zigbuild
       - uses: Swatinem/rust-cache@v2
@@ -140,6 +147,42 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends nsis
+      # The Developer ID Application certificate, alone in a keychain of its own as in
+      # release-mac.yml, so release-desktop's partial name "Developer ID Application" matches exactly
+      # one identity, and the notarytool profile NOTARY, signed in with the App Store Connect API
+      # key, in the same keychain, where mygo.config.ts finds it through NOTARY_KEYCHAIN.
+      - name: Add the signing identity and the notary profile
+        if: runner.os == 'macOS'
+        env:
+          ASC_KEY: ${{ secrets.ASC_KEY }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          IDENTITY: ${{ secrets.MAC_SIGNING_IDENTITY }}
+          IDENTITY_PASSWORD: ${{ secrets.MAC_SIGNING_IDENTITY_PASSWORD }}
+        run: |
+          for name in ASC_KEY ASC_KEY_ID ASC_ISSUER_ID IDENTITY IDENTITY_PASSWORD; do
+            if [[ -z ${!name} ]]; then
+              echo "::error::a secret for $name is missing: docs/releasing-mac.md"
+              exit 1
+            fi
+          done
+          umask 077
+          keychain=$RUNNER_TEMP/signing.keychain-db
+          password=$(openssl rand -hex 16)
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          base64 --decode <<<"$IDENTITY" > "$RUNNER_TEMP/identity.p12"
+          security import "$RUNNER_TEMP/identity.p12" -k "$keychain" -P "$IDENTITY_PASSWORD" -f pkcs12 -T /usr/bin/codesign -T /usr/bin/security
+          rm "$RUNNER_TEMP/identity.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain"
+          security find-identity -v -p codesigning "$keychain"
+          key=$RUNNER_TEMP/AuthKey_$ASC_KEY_ID.p8
+          printf '%s\n' "$ASC_KEY" > "$key"
+          xcrun notarytool store-credentials NOTARY --key "$key" --key-id "$ASC_KEY_ID" --issuer "$ASC_ISSUER_ID" --keychain "$keychain"
+          rm "$key"
+          echo "NOTARY_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
       - name: Build and upload
         env:
           PLATFORM: ${{ matrix.platform }}
@@ -147,3 +190,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
         run: bun run release-desktop "$PLATFORM"
+      - name: Remove the keychain
+        if: always() && runner.os == 'macOS'
+        run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true

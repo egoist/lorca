@@ -11,8 +11,9 @@ import (
 
 // The account's attention, after the macOS app's AttentionViewController: a popover under the
 // header's Attention button with each coordinator's latest brief, then what waits on the user,
-// urgent first. A row opens its chat; its menu opens another source chat or marks it resolved. The
-// ⋯ menu holds the notification switches and the coordinator. Bots keep the list; the CLI sends
+// urgent first. A row opens its chat, and an item waiting on a review the inspector lists opens
+// that review's sheet over it; its menu opens another source chat or marks it resolved, and a
+// brief's dismisses it. The ⋯ menu holds the notification switches and the coordinator. Bots keep the list; the CLI sends
 // it whole (attention.changed), and the popover follows it while it shows.
 
 // attentionWidth is the popover's, as the Mac's.
@@ -94,8 +95,9 @@ func (m *mainWindow) attentionList(c *ui.Context) {
 	})
 }
 
-// attentionRow is a row lit under the pointer, as a menu item is, that opens `chatID`.
-func (m *mainWindow) attentionRow(c *ui.Context, chatID, label string, children func()) ui.Element {
+// attentionRow is a row lit under the pointer, as a menu item is, that opens `chatID`, then
+// `review`'s sheet when there is one.
+func (m *mainWindow) attentionRow(c *ui.Context, chatID string, review *model.ReviewItem, label string, children func()) ui.Element {
 	p := colors(c)
 	outer := ui.Box(c).Padding(1, 6)
 	var row ui.Element
@@ -109,6 +111,9 @@ func (m *mainWindow) attentionRow(c *ui.Context, chatID, label string, children 
 	if row.Clicked() && store.Chat(chatID) != nil {
 		m.attention.open = false
 		m.selectChat(chatID)
+		if review != nil && !m.hasSheet() {
+			m.presentReview(*review)
+		}
 	}
 	return row
 }
@@ -138,7 +143,7 @@ func (m *mainWindow) attentionBrief(c *ui.Context, brief model.AttentionBrief) u
 		keys = append(keys, l.key)
 	}
 	keyWidth := mcpFormLabelWidth(c, keys...)
-	return m.attentionRow(c, brief.ChatID, strings.Join(spoken, "\n"), func() {
+	row := m.attentionRow(c, brief.ChatID, nil, strings.Join(spoken, "\n"), func() {
 		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(8).Children(func() {
 			ui.Row(c).Gap(6).Children(func() {
 				avatar(c, botAvatarOrSystem(bot), 18, false)
@@ -155,6 +160,12 @@ func (m *mainWindow) attentionBrief(c *ui.Context, brief model.AttentionBrief) u
 			})
 		})
 	})
+	row.ContextMenu(func(menu *ui.Menu) {
+		if menu.Item(L("Dismiss")).Chosen() {
+			store.DismissBrief(brief.CoordinatorBotID, brief.Revision, m.attentionFailed)
+		}
+	})
+	return row
 }
 
 // attentionItem is the category's symbol, the title, the next action, and "Review · Launch copy".
@@ -174,7 +185,11 @@ func (m *mainWindow) attentionItem(c *ui.Context, item model.AttentionItem) ui.E
 	if len(chats) > 0 {
 		first = chats[0].ID
 	}
-	row := m.attentionRow(c, first, strings.Join([]string{status, item.Title, item.NextAction, item.Summary}, ". "), func() {
+	review := attentionReview(item)
+	if review != nil {
+		first = review.Origin.ChatID
+	}
+	row := m.attentionRow(c, first, review, strings.Join([]string{status, item.Title, item.NextAction, item.Summary}, ". "), func() {
 		ui.Row(c).Width(18).Padding(1, 0, 0, 0).Justify(ui.Center).TextColor(tint).Children(func() { symbol(c, symbolName, 15, 1.9) })
 		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(3).Children(func() {
 			ui.Text(c, item.Title).FontSize(12.5).FontWeight(600).LineHeight(1.3).MaxLines(2)
@@ -218,6 +233,20 @@ func attentionCategory(category string) (title, symbol string) {
 }
 
 // attentionChats are the chats an item came from, once each, that still exist.
+// attentionReview is the review the item waits on while it is open and decided in a sheet, not a
+// draft card in the chat.
+func attentionReview(item model.AttentionItem) *model.ReviewItem {
+	for _, source := range item.Sources {
+		if source.ReviewID == "" {
+			continue
+		}
+		if review := store.Review(source.ReviewID); review != nil && review.Open() && !review.IsMessage && store.Chat(review.Origin.ChatID) != nil {
+			return review
+		}
+	}
+	return nil
+}
+
 func attentionChats(item model.AttentionItem) []*model.Chat {
 	var chats []*model.Chat
 	seen := map[string]bool{}

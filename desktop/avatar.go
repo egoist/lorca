@@ -70,10 +70,36 @@ func authorAvatar(author model.Author) avatarContent {
 	return avatarContent{Kind: avatarSystem}
 }
 
-// presencePlace is where the working dot sits: over the bottom-right edge of a circle `size` across.
-func presencePlace(size float32) (dot, x, y float32) {
+// presencePlace is where the working dot sits: over the bottom-right edge of a circle `size` across,
+// or the top-right one when a service's mark holds the bottom.
+func presencePlace(size float32, top bool) (dot, x, y float32) {
 	dot = float32(math.Max(7, math.Round(float64(size)*0.28)))
+	if top {
+		return dot, size - dot + 1, -1
+	}
 	return dot, size - dot + 1, size - dot + 1
+}
+
+// drawPresence breathes the green working dot over `box`, a circle `size` across, on a ring of
+// `backdrop`.
+func drawPresence(c *ui.Context, box ui.Element, size float32, top bool, backdrop ui.Color) {
+	green := colors(c).Green
+	box.DrawOver(func(painter *ui.Painter, r ui.Rect) {
+		painter.AnimationFrame()
+		dot, x, y := presencePlace(size, top)
+		cx, cy := r.X+x+dot/2, r.Y+y+dot/2
+		// Breathing: 1 to 0.8 and back, 1.2 seconds each way.
+		phase := float64(painter.Now().UnixMilli()%2400) / 1200
+		if phase > 1 {
+			phase = 2 - phase
+		}
+		eased := float32(0.5 - 0.5*math.Cos(phase*math.Pi))
+		var ring, disc ui.Path
+		ring.Circle(cx, cy, dot/2+2)
+		painter.FillPath(&ring, backdrop)
+		disc.Circle(cx, cy, dot/2*(1-0.2*eased))
+		painter.FillPath(&disc, green)
+	})
 }
 
 // avatar is one avatar, `size` across. While `working`, the green dot breathes on a ring of the
@@ -129,23 +155,7 @@ func avatarOn(c *ui.Context, content avatarContent, size float32, working bool, 
 		})
 	})
 	if working {
-		green := p.Green
-		box.DrawOver(func(painter *ui.Painter, r ui.Rect) {
-			painter.AnimationFrame()
-			dot, x, y := presencePlace(size)
-			cx, cy := r.X+x+dot/2, r.Y+y+dot/2
-			// Breathing: 1 to 0.8 and back, 1.2 seconds each way.
-			phase := float64(painter.Now().UnixMilli()%2400) / 1200
-			if phase > 1 {
-				phase = 2 - phase
-			}
-			eased := float32(0.5 - 0.5*math.Cos(phase*math.Pi))
-			var ring, disc ui.Path
-			ring.Circle(cx, cy, dot/2+2)
-			painter.FillPath(&ring, backdrop)
-			disc.Circle(cx, cy, dot/2*(1-0.2*eased))
-			painter.FillPath(&disc, green)
-		})
+		drawPresence(c, box, size, false, backdrop)
 	}
 	return box
 }
@@ -154,8 +164,9 @@ type clusterBox struct{ x, y, size float32 }
 
 // avatarCluster packs group avatars into a fixed square: a row of overlapping circles would grow
 // with the member count and push the title along, and a constant slot keeps every row's text in
-// line.
-func avatarCluster(c *ui.Context, contents []avatarContent, slot float32, working bool, backdrop ui.Color) ui.Element {
+// line. A channel conversation's `service` (telegram, slack) puts its mark on the front avatar's
+// bottom-right edge and sends the working dot to the top-right.
+func avatarCluster(c *ui.Context, contents []avatarContent, slot float32, working bool, service string, backdrop ui.Color) ui.Element {
 	count := min(len(contents), 4)
 	var boxes []clusterBox
 	size := float32(math.Round(float64(slot) * 0.6))
@@ -181,12 +192,33 @@ func avatarCluster(c *ui.Context, contents []avatarContent, slot float32, workin
 				// The front circles stand off those behind by a ring of the backdrop.
 				cell.Shadow(0, 0, 0, 1, backdrop)
 			}
+			front := i == len(boxes)-1
+			marked := front && service != ""
 			cell.Children(func() {
-				avatarOn(c, contents[i], b.size, working && i == len(boxes)-1, backdrop)
+				avatarOn(c, contents[i], b.size, working && front && !marked, backdrop)
+				if mark := pluginMark(service); marked && mark != nil {
+					serviceBadge(c, mark, service, b.size, backdrop)
+				}
 			})
+			if marked && working {
+				drawPresence(c, cell, b.size, true, backdrop)
+			}
 		}
 	})
 	return cluster
+}
+
+// serviceBadge is a service's mark over the bottom-right edge of an avatar `size` across:
+// Telegram's disc as it is, any other mark on a white disc, ringed in the backdrop.
+func serviceBadge(c *ui.Context, mark *ui.SVG, service string, size float32, backdrop ui.Color) {
+	badge := float32(math.Round(float64(size) * 0.42))
+	inset := float32(0)
+	if service != "telegram" {
+		inset = float32(math.Round(float64(badge) * 0.22))
+	}
+	ui.Box(c).Absolute().Left(size-badge+1).Top(size-badge+1).Size(badge, badge).Radius(badge/2).
+		Background(colors(c).White).Shadow(0, 0, 0, 1.5, backdrop).Padding(inset).
+		Children(func() { ui.Image(c, mark).Fill() })
 }
 
 // avatarStack is overlapping avatars where there is room to spread out: up to three, later ones

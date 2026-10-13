@@ -4,7 +4,7 @@ description: A bot listens in your Telegram groups or Slack channels and answers
 icon: MessagesSquare
 ---
 
-A **channel** has a bot listen on a Telegram or Slack account: in the groups and channels that account's bot is in, to every message, to mentions and replies, or to hashtags such as #feedback. Each message it takes starts the bot's work with the channel's task, and the bot answers in the thread as the account's own bot, never as you.
+A **channel** has a bot listen on a Telegram or Slack account: in the groups and chats you allow, to every message, to mentions and replies, or to hashtags such as #feedback. Each message it takes starts the bot's work with the channel's task, and the bot answers in the thread as the account's own bot, never as you.
 
 Your Runner reads Telegram and Slack itself, so nothing needs a public address or a server of yours.
 
@@ -15,7 +15,7 @@ Accounts are added on a computer, from the [marketplace](/docs/plugins#the-marke
 - **Telegram:** make a bot with [BotFather](https://t.me/BotFather) (`/newbot`), add a **Telegram** account, and paste the bot's token. In a group, a Telegram bot sees only replies and commands unless it is an admin or its privacy mode is off (`/setprivacy` in BotFather, then add it to the group again). The channel's sheet says when that is in the way.
 - **Slack:** the [Slack account](/docs/plugins#named-accounts) you sign in with, whose Slack app has a bot user and Socket Mode on. Its setup takes the app's Bot User OAuth Token (`xoxb-…`) and an app-level token (`xapp-…`); the fields list the scopes and events the app needs.
 
-Then add the bot to the Telegram group or invite it to the Slack channel.
+Then add the bot to the Telegram group or invite it to the Slack channel. The chat asks to be allowed, and the bot answers there once you allow it ([Who can reach the bot](#who-can-reach-the-bot)).
 
 ## Set up a channel
 
@@ -23,13 +23,23 @@ Ask the bot:
 
 > Listen in the Acme Community Telegram group for mentions, replies, and #feedback. File each one as a GitHub issue and thank the person with its number.
 
-The bot sets up the channel: the account, what it listens to, the task, and optionally which chats. Its direct chat's inspector then has a **Channels** section after Routines (on the phone, in Details): each channel with what it takes, and a switch that pauses it.
+The bot sets up the channel: the account, what it listens to, the task, and the chats it answers in. Its direct chat's inspector then has a **Channels** section after Routines (on the phone, in Details): each channel with what it takes, and a switch that pauses it.
 
 ## Conversations
 
 Each Telegram chat or topic and each Slack thread is a **conversation** in your chat list, under its title, with the bot's avatar: "Feedback Collector on Telegram". It shows the people there by name and the bot's replies, which add no unread mark. You can write in it too; the bot answers you in Lorca, or in the thread when you ask it to. Deleting a conversation deletes only its transcript.
 
 A conversation starts in the same [section](/docs/chats#organize-chats) as the bot's direct chat, and muted if that chat is.
+
+## Who can reach the bot
+
+Anyone can message a Telegram bot or add it to their group, and anyone in your Slack workspace, or in a Slack Connect channel the bot is in, can write to it. So a channel answers only in the chats you allow, and everyone in an allowed chat can reach it.
+
+When someone adds the bot to a group, or a chat you haven't allowed writes something the channel would take, that chat **asks**: the channel's row reads **A chat is waiting**, and its sheet lists it under **Asking to Chat** with who wrote or added the bot. **Allow** lets the bot answer there from then on, starting with what people asked it while the chat waited; **Ignore** keeps the chat from asking again. Until you allow it, the bot does nothing there: the first person who writes to it gets one reply, "Pending approval", and nothing more. To message the bot yourself, send it a message once and allow that chat too.
+
+If a chat never asks, for example a group where the bot only hears replies to it, use **Add…** on the sheet's **Chats** row and paste the chat's id, such as `-1001234567890` for a Telegram group.
+
+You can also tell the bot: "Allow Acme Beta Testers in the feedback channel." A message from outside can't allow a chat, since only your own messages change a channel.
 
 ## What people can and can't do
 
@@ -39,8 +49,8 @@ The bot reads people's text, and the photos and images they send on Telegram, wi
 
 If the bot's work on a message fails or is cut off, later messages wait. The channel reads **On hold**, [Attention](/docs/attention) lists it, and its sheet offers **Try Again** and **Skip**. **Stop** in a conversation ends the work on that message and the channel goes on to the next. The switch pauses the channel: messages that arrive meanwhile are left out.
 
-Click a channel for its sheet: **Listening**, its state, the account, the chats, what it takes, the task, the latest conversations, and **Remove…**, which keeps the conversations.
+Click a channel for its sheet: **Listening**, its state, the account, the chats, what it takes, the chats asking to be allowed, the task, the latest conversations, and **Remove…**, which keeps the conversations.
 
 ## The feedback collector
 
-The **Feedback collector** [workflow](/docs/workflows) sets this up in one go: a Telegram account and GitHub, the repository, the Feedback Collector bot, a digest each morning, and a channel for mentions, replies, and #feedback that files or updates an issue and thanks the person in their thread. Its sample drafts a digest and a reply, and the channel starts listening when you turn the workflow on.
+The **Feedback collector** [workflow](/docs/workflows) sets this up in one go: a Telegram account and GitHub, the repository, the Feedback Collector bot, a digest each morning, and a channel for mentions, replies, and #feedback that files or updates an issue and thanks the person in their thread. Its sample drafts a digest and a reply, and the channel starts listening when you turn the workflow on. Add the bot to your group then, and allow the group when it asks.

@@ -101,6 +101,19 @@ func TestAttentionPopover(t *testing.T) {
 		t.Fatal("the item stayed")
 	}
 
+	// A brief's menu dismisses it.
+	if err := tt.RightClick("Ship the relay with TLS on by default."); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.ChooseMenuItem(L("Dismiss")); err != nil {
+		t.Fatalf("%v in %q", err, tt.Menu())
+	}
+	settle(tt)
+	if len(store.Attention.Briefs) != 0 || tt.HasText("Ship the relay with TLS on by default.") {
+		t.Fatal("the brief stayed")
+	}
+
 	// A click on a row opens its chat and closes the popover.
 	if err := tt.Click("Staging certificate expires tonight"); err != nil {
 		t.Fatal(err)
@@ -108,6 +121,42 @@ func TestAttentionPopover(t *testing.T) {
 	settle(tt)
 	if m.selection.ChatID != "chat-ember" || m.attention.open {
 		t.Fatalf("selection %q, open %v", m.selection.ChatID, m.attention.open)
+	}
+}
+
+// A row waiting on a review opens the review's chat and its sheet; once the review is decided the
+// row opens only the chat.
+func TestAttentionRowOpensItsReview(t *testing.T) {
+	m := demoWindow(t)
+	m.selectChat("chat-relay")
+	tt := ui.NewTester(m.frame(m.view), 1180, 760)
+	tt.SetScale(2)
+	attentionFixture()
+	store.Attention.Items[1].Sources = []model.AttentionSource{{ChatID: "chat-launch"}, {ChatID: "chat-nova", ReviewID: "review-comment"}}
+	settle(tt)
+	m.run("attention")
+	settle(tt)
+	if err := tt.Click("Release notes draft"); err != nil {
+		t.Fatal(err)
+	}
+	settleTransitions(tt)
+	if m.selection.ChatID != "chat-nova" || m.attention.open || !m.hasSheet() {
+		t.Fatalf("selection %q, open %v, sheet %v", m.selection.ChatID, m.attention.open, m.hasSheet())
+	}
+	tt.Key(0, ui.KeyEscape)
+	settleTransitions(tt)
+	if m.hasSheet() {
+		t.Fatal("Escape left the sheet up")
+	}
+	store.Review("review-comment").State = "rejected"
+	m.run("attention")
+	settle(tt)
+	if err := tt.Click("Release notes draft"); err != nil {
+		t.Fatal(err)
+	}
+	settleTransitions(tt)
+	if m.selection.ChatID != "chat-launch" || m.hasSheet() {
+		t.Fatalf("decided: selection %q, sheet %v", m.selection.ChatID, m.hasSheet())
 	}
 }
 

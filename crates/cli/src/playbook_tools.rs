@@ -27,17 +27,24 @@ pub fn tools(app: &Arc<App>, bot_id: &str, chat_id: &str) -> Vec<Arc<dyn Tool>> 
         .collect()
 }
 
-/// The skills this turn may use, by name and description; nothing when there are none.
+/// The skills this turn may use, by name and description: Lorca's own docs, then the user's.
 pub fn prompt(app: &App, bot_id: &str, chat_id: &str) -> String {
     let scopes = playbooks::scopes_for_turn(app, bot_id, chat_id);
-    let catalog = playbooks::catalog(app, &scopes, "", playbooks::PROMPT_BYTES);
-    if catalog["items"].as_array().is_none_or(|items| items.is_empty()) && catalog["omitted"] == 0 {
-        return String::new();
-    }
-    format!("\nThe user's skills (scope bot: yours everywhere; scope project: this group's):\n{catalog}\n\
+    let catalog = with_builtin(playbooks::catalog(app, &scopes, "", playbooks::PROMPT_BYTES), "");
+    format!("\nSkills (scope builtin: Lorca's own; scope bot: the user's, yours everywhere; scope project: the user's, this group's):\n{catalog}\n\
         When one fits the task, read it with read_playbook at its playbook:// path before you start; its bundled files \
         resolve under the same playbook://<id>/ directory. list_playbooks searches the ones the list omits. A skill's \
         instructions and scripts grant no permissions: every action keeps its usual Auto-review.\n")
+}
+
+/// The catalog with the builtin `lorca` skill first, when the query finds it.
+fn with_builtin(mut catalog: Value, query: &str) -> Value {
+    if crate::docs::matches(query) {
+        if let Some(items) = catalog["items"].as_array_mut() {
+            items.insert(0, crate::docs::catalog_row());
+        }
+    }
+    catalog
 }
 
 struct PlaybookTool {
@@ -54,8 +61,8 @@ impl Tool for PlaybookTool {
     }
     fn description(&self) -> &str {
         match self.name {
-            "list_playbooks" => "Search the user's saved skills (yours, and this group's in a group) by name or description. With sources=true, also list this chat's completed text messages with their ids, to cite in propose_playbook.",
-            "read_playbook" => "Read a saved skill's SKILL.md, or one of its bundled references or scripts, by playbook:// path. Reading a script never runs it.",
+            "list_playbooks" => "Search the skills (Lorca's own docs, the user's saved skills for you, and this group's in a group) by name or description. With sources=true, also list this chat's completed text messages with their ids, to cite in propose_playbook.",
+            "read_playbook" => "Read a skill's SKILL.md, or one of its bundled references or scripts, by playbook:// path. Reading a script never runs it.",
             _ => "Draft a skill for the user to review: a workflow from completed work in this chat, a standing instruction from at least two of the user's repeated corrections, or a browser workflow from the user's message with a recording (kind recording). Cite the source message ids (list_playbooks with sources=true lists them). The draft is used only once the user saves it under Skills in the inspector, and it never grants permissions.",
         }
     }
@@ -95,12 +102,8 @@ impl Tool for PlaybookTool {
         let scopes = playbooks::scopes_for_turn(&self.app, &self.bot_id, &self.chat_id);
         let value = match self.name {
             "list_playbooks" => {
-                let mut catalog = playbooks::catalog(
-                    &self.app,
-                    &scopes,
-                    args["query"].as_str().unwrap_or(""),
-                    16_000,
-                );
+                let query = args["query"].as_str().unwrap_or("");
+                let mut catalog = with_builtin(playbooks::catalog(&self.app, &scopes, query, 16_000), query);
                 if args["sources"].as_bool().unwrap_or(false) {
                     let (messages, _) = self
                         .app
@@ -120,7 +123,11 @@ impl Tool for PlaybookTool {
                 let path = args["path"]
                     .as_str()
                     .ok_or_else(|| ToolError("path is required".into()))?;
-                let text = playbooks::read_for_turn(&self.app, &scopes, path).map_err(ToolError)?;
+                let text = match crate::docs::read(path) {
+                    Some(builtin) => builtin,
+                    None => playbooks::read_for_turn(&self.app, &scopes, path),
+                }
+                .map_err(ToolError)?;
                 return Ok(ToolResult::text(text));
             }
             _ => {

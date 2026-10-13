@@ -155,6 +155,8 @@ async fn run_budgeted_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) 
         }
     };
     let Some(chat) = app.chat(&job.chat_id) else { return TurnOutcome::Skipped };
+    // A channel's message: its chat sees the bot typing until the reply goes out or the turn ends.
+    let _typing = event.as_ref().filter(|event| event.message_id.is_some()).and_then(|_| crate::channels::typing(app, &chat, &job.id, &cancel));
 
     let workdir = bot.working_directory(&app.config.home);
     if let Err(error) = std::fs::create_dir_all(&workdir) {
@@ -5194,7 +5196,7 @@ mod tests {
         assert_eq!(runs(), ("anthropic".into(), Some("claude-next".into()), Some("minimal".into())));
 
         // A custom provider offers its saved models, found by the id after a gateway's `vendor/`.
-        let models = ["anthropic/claude-opus-5", "qwen3:8b"].map(|id| CustomModel { id: id.into(), name: None, context_window: None, max_output: None, images: None }).to_vec();
+        let models = ["anthropic/claude-opus-5", "qwen3:8b"].map(|id| CustomModel { id: id.into(), name: None, context_window: None, max_output: None, images: None, levels: None }).to_vec();
         let router = CustomProvider { name: "Router".into(), api: CustomApi::ChatCompletions, base_url: "http://router/v1".into(), api_key: String::new(), models, created_at: 1 };
         app.credentials.lock().unwrap().custom.insert("custom:router".into(), router);
         edit(json!({ "provider": "custom:router", "model": "claude-opus-5", "thinking": "max" })).await.unwrap();

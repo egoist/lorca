@@ -415,6 +415,8 @@ export interface AgentRun {
   state: "checking" | "asking" | "starting" | "working" | "idle" | "exited" | "failed" | "stopped" | "denied" | "expired" | "dismissed";
   /** Working, with nothing new for a while. */
   stalled?: boolean;
+  /** Auto-review held its start and told the bot why, without asking: it is `denied`. */
+  held?: boolean;
   question?: AgentQuestion;
   output?: string;
   outcome?: string;
@@ -744,6 +746,18 @@ export interface ChannelStatus {
   state: "listening" | "paused" | "held" | "offline";
   detail?: string;
   held_delivery?: string | null;
+  /// Chats that wrote to the account's bot or added it to a group, waiting for the user to allow
+  /// them; the bot answers nothing there meanwhile. Newest first.
+  requests?: ChatRequest[];
+}
+
+/// A chat asking to be allowed in a channel.
+export interface ChatRequest {
+  id: string;
+  title: string;
+  private?: boolean;
+  /// Who wrote, or who added the bot to the group.
+  from?: string;
 }
 
 /// The one DM a bot has with the user: a direct chat that is not a channel's conversation.

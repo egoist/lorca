@@ -58,7 +58,7 @@ const R2_DEST = `${process.env.R2_REMOTE ?? "r2"}:${process.env.R2_BUCKET ?? "lo
 // A bucket-scoped R2 token cannot create buckets, which rclone otherwise checks before an upload.
 const RCLONE_FLAGS = ["--s3-no-check-bucket"]
 // How many earlier archives generate_appcast builds deltas against.
-const HISTORY_COUNT = Number(process.env.HISTORY_COUNT ?? "15")
+const HISTORY_COUNT = Number(process.env.HISTORY_COUNT ?? "3")
 if (!Number.isSafeInteger(HISTORY_COUNT) || HISTORY_COUNT < 0) die("HISTORY_COUNT must be a non-negative integer")
 
 for (const tool of ["cargo", "swift", "ditto", "plutil", "xcrun", "create-dmg", ...(local ? [] : ["rclone"])]) {

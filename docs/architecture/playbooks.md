@@ -1,6 +1,6 @@
 # Playbooks
 
-A playbook is a skill the user writes for a bot or a group: instructions, an example, reference text, and optional script text. The apps call them skills. `crates/cli/src/playbooks.rs` owns the records; the macOS app and the Windows and Linux app read and edit them through their local CLI. Plugin-provided skills remain part of their installed plugin ([Plugins](plugins.md#plugins)); a user playbook has its own identity and revision history.
+A playbook is a skill the user writes for a bot or a group: instructions, an example, reference text, and optional script text. The apps call them skills. `crates/cli/src/playbooks.rs` owns the records; the macOS app and the Windows and Linux app read and edit them through their local CLI. Plugin-provided skills remain part of their installed plugin ([Plugins](plugins.md#plugins)), and Lorca's own docs are the builtin `lorca` skill ([below](#discovery-and-lazy-reads)); a user playbook has its own identity and revision history.
 
 ## Scope and contents
 
@@ -22,7 +22,9 @@ An arriving blob merges into the library by revision id, keeps the revisions in 
 
 ## Discovery and lazy reads
 
-When the turn's bot or group has saved skills, `turns.rs` adds their catalog through `playbook_tools.rs`: each skill's name, description, scope kind, and `playbook://<id>/SKILL.md` path, within 6,000 bytes, with an omitted count. Drafts and deleted records stay out, and a turn with no skills gets no section. Instructions, examples, and bundled files enter the model's context only through `read_playbook` after a match.
+Every turn's system prompt carries the skill catalog through `playbook_tools.rs`: each skill's name, description, scope kind, and `playbook://<id>/SKILL.md` path. The builtin `lorca` skill comes first, then the turn's bot's and group's saved skills within 6,000 bytes, with an omitted count. Drafts and deleted records stay out. Instructions, examples, and bundled files enter the model's context only through `read_playbook` after a match.
+
+The `lorca` skill (`crates/cli/src/docs.rs`, scope `builtin`) points the bot at Lorca's user docs on the website: its `SKILL.md` names `https://lorca.app/llms.txt`, the pages as `/docs/<page>.md`, `/llms-full.txt`, and the Chinese ones under `/zh` ([Website](website.md)), and tells the bot to answer how Lorca works from them, fetched with its web fetch tool or `curl`, not from memory or by reading Lorca's binary. It has no other files, is in no library and syncs nowhere, the apps' Skills sections leave it out, and no saved skill's id can take its directory. `list_playbooks` finds it by its name and description as it finds the user's.
 
 `list_playbooks { query?, sources? }` searches visible names and descriptions in a larger bounded result; `sources: true` additionally lists up to twenty completed user/current-bot text messages in the current chat with ids and short previews for capture. `read_playbook { path }` reads `SKILL.md`, generated with skill frontmatter and links to its bundled resources, or one exact resource path under the same `playbook://<id>/` directory. Each call resolves current scope and saved status again. Reading a project skill from a DM, another project, or after leaving the group fails.
 

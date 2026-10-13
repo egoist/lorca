@@ -92,11 +92,12 @@ final class ChatNotificationTests: XCTestCase {
     }
 
     func testAttentionSnapshotDecodesCoordinatorAndCanonicalSourceReferences() throws {
-        let json = #"{"items":[{"id":"attention-item","category":"review","title":"Review draft","summary":"Decide scope","next_action":"Approve scope","coordinator_bot_id":"bot","sources":[{"chat_id":"chat","task_id":"task-08a3fb26-3a14-4084-ae89-10f7d4028c47","review_id":"review-1"}],"reporters":["scout"],"urgent":false,"revision":{"counter":2,"device_id":"runner"}}],"briefs":[],"preferences":{"summaries":false,"urgent_direct":true,"default_coordinator_bot_id":"bot","coordinators":{}}}"#
+        let json = #"{"items":[{"id":"attention-item","category":"review","title":"Review draft","summary":"Decide scope","next_action":"Approve scope","coordinator_bot_id":"bot","sources":[{"chat_id":"chat","task_id":"task-08a3fb26-3a14-4084-ae89-10f7d4028c47","review_id":"review-1"}],"reporters":["scout"],"urgent":false,"revision":{"counter":2,"device_id":"runner"}}],"briefs":[{"coordinator_bot_id":"bot","chat_id":"dm","decisions":["Merge"],"changes":[],"next_action":"Merge it","item_ids":[],"message_id":"m","revision":{"counter":3,"device_id":"runner"},"updated_at":1}],"preferences":{"summaries":false,"urgent_direct":true,"default_coordinator_bot_id":"bot","coordinators":{}}}"#
         let attention = try Wire.decoder.decode(AttentionView.self, from: Data(json.utf8))
         XCTAssertEqual(attention.items.first?.sources.first?.reviewId, "review-1")
         XCTAssertEqual(attention.items.first?.coordinatorBotId, "bot")
         XCTAssertEqual(attention.items.first?.revision.deviceId, "runner")
+        XCTAssertEqual(attention.briefs.first?.revision.counter, 3, "a brief's dismissal names the revision the user saw")
         XCTAssertFalse(attention.preferences.summaries)
         XCTAssertTrue(attention.preferences.urgentDirect)
     }

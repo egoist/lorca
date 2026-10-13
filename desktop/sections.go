@@ -513,6 +513,21 @@ func channelRow(c *ui.Context, k *card, channel *model.Channel, change func(bool
 				detail = append([]ui.Span{{Text: L("On hold"), Color: p.Orange}, {Text: " · ", Color: p.Label2}}, detail...)
 			case model.ChannelOffline:
 				detail = append([]ui.Span{{Text: L("Can’t connect"), Color: p.Orange}, {Text: " · ", Color: p.Label2}}, detail...)
+			case model.ChannelListening:
+				// A listening channel's only detail is the Telegram privacy-mode note.
+				if len(channel.Requests) > 0 {
+					break
+				}
+				if channel.Detail != "" {
+					detail = append([]ui.Span{{Text: L("Privacy mode on"), Color: p.Orange}, {Text: " · ", Color: p.Label2}}, detail...)
+				}
+			}
+			if waiting := len(channel.Requests); waiting > 0 && channel.State != model.ChannelHeld && channel.State != model.ChannelOffline {
+				words := L("A chat is waiting")
+				if waiting > 1 {
+					words = L("%d chats are waiting", waiting)
+				}
+				detail = append([]ui.Span{{Text: words, Color: p.Orange}, {Text: " · ", Color: p.Label2}}, detail...)
 			}
 			ui.RichText(c, detail...).FontSize(textCaption).TextColor(p.Label2).MaxLines(2)
 		})

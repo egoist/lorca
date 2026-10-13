@@ -9,7 +9,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
-use super::{clean, ingest, load_account, mentions, pause, save_account, set_identity, set_problem, Identity, Incoming, IncomingFile, TELEGRAM};
+use super::{ask, clean, ingest, load_account, mentions, pause, set_identity, set_problem, update_account, withdraw, ChatRequest, Identity, Incoming, IncomingFile, TELEGRAM};
 use crate::app::App;
 use crate::plugins::builtin::{structured_result, text_result};
 
@@ -107,7 +107,8 @@ pub async fn read(app: Arc<App>, account_id: String, token: String, cancel: Canc
     };
     loop {
         let offset = load_account(&app, &account_id).offset;
-        let body = json!({ "offset": offset, "timeout": POLL_SECS, "allowed_updates": ["message"] });
+        // `my_chat_member` says when someone adds the bot to a group, which then asks the user.
+        let body = json!({ "offset": offset, "timeout": POLL_SECS, "allowed_updates": ["message", "my_chat_member"] });
         let polled = tokio::select! {
             polled = call(&app, &token, "getUpdates", body, Duration::from_secs(POLL_SECS + 15)) => polled,
             _ = cancel.cancelled() => return,
@@ -128,13 +129,14 @@ pub async fn read(app: Arc<App>, account_id: String, token: String, cancel: Canc
         // An album's photos arrive a moment apart: the rest of one the poll ends in is read with it.
         let ends_in_album = updates.as_array().and_then(|updates| updates.last()).is_some_and(|update| update["message"]["media_group_id"].is_string());
         if ends_in_album && pause(&cancel, 1.0).await {
-            let again = json!({ "offset": offset, "timeout": 0, "allowed_updates": ["message"] });
+            let again = json!({ "offset": offset, "timeout": 0, "allowed_updates": ["message", "my_chat_member"] });
             if let Ok(more) = call(&app, &token, "getUpdates", again, Duration::from_secs(15)).await {
                 updates = more;
             }
         }
         let mut stuck = None;
-        for (update_id, message) in gathered(&account_id, &me, updates.as_array().map(Vec::as_slice).unwrap_or_default()) {
+        let updates = updates.as_array().map(Vec::as_slice).unwrap_or_default();
+        for (update_id, message) in gathered(&account_id, &me, updates) {
             if let Some(mut message) = message {
                 if let Err(failure) = fetch_images(&app, &token, &mut message).await {
                     stuck = Some(if let Failure::Slow(seconds) = failure { seconds.max(1.0) } else { 5.0 });
@@ -146,9 +148,17 @@ pub async fn read(app: Arc<App>, account_id: String, token: String, cancel: Canc
                     break;
                 }
             }
-            let mut state = load_account(&app, &account_id);
-            state.offset = Some(update_id + 1);
-            if let Err(error) = save_account(&app, &account_id, &state) {
+            match updates.iter().find(|update| update["update_id"] == update_id).and_then(membership) {
+                Some(Membership::Added(request)) => {
+                    ask(&app, &account_id, request, None);
+                }
+                Some(Membership::Left(chat_id)) => withdraw(&app, &account_id, &chat_id),
+                None => {}
+            }
+            if let Err(error) = update_account(&app, &account_id, |state| {
+                state.offset = Some(update_id + 1);
+                true
+            }) {
                 tracing::error!(%error, "saving a Telegram account's place");
                 stuck = Some(5.0);
                 break;
@@ -258,6 +268,87 @@ pub fn incoming(account_id: &str, me: &Identity, update: &Value) -> Option<Incom
         replies_to_bot,
         files,
         attachments: Vec::new(),
+        held: false,
+    })
+}
+
+/// Tells a chat that asks that the bot answers once its owner allows it, as a reply to the
+/// message that asked. Best effort: nothing else waits on it.
+pub async fn notice(app: &App, token: &str, chat_id: &str, message_id: &str, thread_id: Option<&str>) {
+    let number = |id: &str| id.parse::<i64>().map(Value::from).unwrap_or_else(|_| json!(id));
+    let mut body = json!({ "chat_id": number(chat_id), "text": super::PENDING,
+        "reply_parameters": { "message_id": number(message_id), "allow_sending_without_reply": true } });
+    if let Some(thread_id) = thread_id {
+        body["message_thread_id"] = number(thread_id);
+    }
+    if let Err(error) = call(app, token, "sendMessage", body, Duration::from_secs(30)).await {
+        tracing::debug!(?error, "telling a Telegram chat it waits");
+    }
+}
+
+/// How often the bot's typing is sent again: Telegram shows a chat action for about five seconds.
+const TYPING_EVERY: Duration = if cfg!(test) { Duration::from_millis(100) } else { Duration::from_secs(4) };
+
+/// Shows the bot typing in a chat (`sendChatAction`) until `stop`. Best effort: a network
+/// failure tries again at the next refresh, a request to slow down waits as asked, and a refusal
+/// (a wrong token, a chat the bot left) ends it.
+pub async fn typing(app: Arc<App>, token: String, chat_id: String, thread_id: Option<String>, stop: CancellationToken) {
+    let number = |id: &str| id.parse::<i64>().map(Value::from).unwrap_or_else(|_| json!(id));
+    let mut body = json!({ "chat_id": number(&chat_id), "action": "typing" });
+    if let Some(thread_id) = &thread_id {
+        body["message_thread_id"] = number(thread_id);
+    }
+    loop {
+        let wait = tokio::select! {
+            shown = call(&app, &token, "sendChatAction", body.clone(), Duration::from_secs(10)) => match shown {
+                Ok(_) | Err(Failure::Network) => TYPING_EVERY,
+                Err(Failure::Slow(seconds)) => Duration::from_secs_f64(seconds.clamp(1.0, 3600.0)),
+                Err(error) => {
+                    tracing::debug!(?error, "showing the bot typing in a Telegram chat");
+                    return;
+                }
+            },
+            _ = stop.cancelled() => return,
+        };
+        tokio::select! {
+            _ = tokio::time::sleep(wait) => {}
+            _ = stop.cancelled() => return,
+        }
+    }
+}
+
+/// The bot joining or leaving a group, from a `my_chat_member` update.
+#[derive(Debug, PartialEq)]
+pub enum Membership {
+    /// Someone added the bot to a group: the group asks to be allowed.
+    Added(ChatRequest),
+    /// The bot left the group or was removed: its request goes.
+    Left(String),
+}
+
+pub fn membership(update: &Value) -> Option<Membership> {
+    let change = update.get("my_chat_member")?;
+    let chat = &change["chat"];
+    // A Telegram channel's posts are not messages a channel reads, and a private chat's own
+    // first message asks for it.
+    if !matches!(chat["type"].as_str(), Some("group" | "supergroup")) {
+        return None;
+    }
+    let chat_id = id_text(&chat["id"])?;
+    let gone = |status: &Value| matches!(status.as_str(), Some("left" | "kicked"));
+    let (old, new) = (&change["old_chat_member"], &change["new_chat_member"]);
+    if gone(&new["status"]) || (new["status"] == "restricted" && new["is_member"] == false) {
+        return Some(Membership::Left(chat_id));
+    }
+    let was_out = gone(&old["status"]) || (old["status"] == "restricted" && old["is_member"] == false);
+    was_out.then(|| {
+        Membership::Added(ChatRequest {
+            id: chat_id,
+            title: clean(chat["title"].as_str().unwrap_or("Telegram"), 80),
+            private: false,
+            from: clean(&person(&change["from"]), 64),
+            at: crate::config::now_unix(),
+        })
     })
 }
 
@@ -414,6 +505,7 @@ impl crate::plugins::builtin::Service for Server {
                 match call(app, &token, "sendMessage", body, Duration::from_secs(30)).await {
                     Ok(sent) => {
                         let message_id = id_text(&sent["message_id"]).unwrap_or_default();
+                        super::replied(app, context["lorca/chat_id"].as_str().unwrap_or_default(), &chat_id);
                         super::sent(app, plugin_id, &chat_id, thread.as_deref(), &message_id, reply_to.as_deref(), text, context);
                         structured_result(json!({ "message_id": message_id, "chat_id": chat_id }))
                     }

@@ -246,7 +246,7 @@ async fn presence_and_events_reach_the_sockets() {
         assert!(ok!(store.online(&who)).contains(&mac));
 
         // The store opened once its listener was listening, so an event published at once arrives.
-        store.publish(Event::Blobs { identity: who.clone(), recipient: None }).await;
+        store.publish(Event::Blobs { identity: who.clone(), recipient: None, sender: None }).await;
         let signal = tokio::time::timeout(std::time::Duration::from_secs(5), seat.signals.recv()).await;
         assert_eq!(signal.ok().flatten(), Some(crate::hub::Signal::Blobs), "{}", store.describe());
 

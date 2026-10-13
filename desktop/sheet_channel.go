@@ -9,9 +9,9 @@ import (
 
 // One channel's details, after the macOS app's ChannelViewController: whether it listens, and what
 // holds it when a message's turn didn't finish or the account can't be read; where it listens and
-// what it takes; the task the bot does with each message; and its conversations, each a click away.
-// The bot sets a channel up and changes it when asked in chat; here the user pauses it, settles a
-// held message, or removes it.
+// what it takes; the chats asking to be allowed; the task the bot does with each message; and its
+// conversations, each a click away. The bot sets a channel up and changes it when asked in chat;
+// here the user pauses it, allows or ignores a chat, settles a held message, or removes it.
 
 // presentChannel is a channel's details; openChat opens one of its conversations.
 func (w *appWindow) presentChannel(channelID string, bot *model.Bot, openChat func(chatID string)) {
@@ -78,7 +78,7 @@ func (w *appWindow) channelView(c *ui.Context, s *sheet, title, channelID string
 					noteRow(c.Key("note"), k, channel.Detail, nil)
 				}
 			}
-			chats := L("Every chat the bot is in")
+			chats := L("None yet")
 			if len(channel.Chats) > 0 {
 				var names []string
 				for _, chat := range channel.Chats {
@@ -91,9 +91,40 @@ func (w *appWindow) channelView(c *ui.Context, s *sheet, title, channelID string
 				chats = strings.Join(names, Lc(", ", "list"))
 			}
 			keyValueRow(c.Key("account"), k, L("Account"), store.AccountName(channel), false, nil)
-			keyValueRow(c.Key("chats"), k, L("Chats"), chats, false, nil)
+			if _, add := actionRow(c.Key("chats"), k, L("Chats"), actionRowOptions{Value: chats, Action: L("Add…")}); add.Action {
+				w.askChatID(channel.ID, channel.Service)
+			}
 			keyValueRow(c.Key("messages"), k, L("Messages"), channel.Listen.Summary(), false, nil)
+			if len(channel.Chats) == 0 && len(channel.Requests) == 0 {
+				hint := L("Add the bot to a group or send it a message, then allow the chat here.")
+				if channel.Service == "slack" {
+					hint = L("Invite the bot to a channel or send it a message, then allow the chat here.")
+				}
+				noteRow(c.Key("chats-note"), k, hint, nil)
+			}
 		})
+		// Anyone can message the bot or add it to a group; it answers only where the user allows.
+		if len(channel.Requests) > 0 {
+			section(c, L("Asking to Chat"), sectionCaption, nil, func(k *card) {
+				for _, request := range channel.Requests {
+					kind := L("Direct message")
+					if !request.Private {
+						kind = L("Group")
+						if request.From != "" {
+							kind = L("Group · %@", request.From)
+						}
+					}
+					_, asked := actionRow(c.Key("request-"+request.ID), k, request.Title, actionRowOptions{Value: kind, Tint: &p.Label2, Action: L("Allow"), Second: L("Ignore")})
+					if asked.Action {
+						store.AnswerChatRequest(channel.ID, request.ID, true)
+					}
+					if asked.Second {
+						store.AnswerChatRequest(channel.ID, request.ID, false)
+					}
+				}
+				noteRow(c.Key("requests-note"), k, L("%@ answers only in chats you allow. An ignored chat doesn’t ask again.", bot.Name), nil)
+			})
+		}
 		section(c, L("Task"), sectionCaption, nil, func(k *card) {
 			k.row(ui.Row(c).Padding(10, 12).Children(func() {
 				ui.Text(c, channel.Task).FontSize(12).LineHeight(1.4).Selectable()
@@ -120,6 +151,34 @@ func (w *appWindow) channelView(c *ui.Context, s *sheet, title, channelID string
 	if result.Confirmed || result.Cancelled {
 		s.dismiss()
 	}
+}
+
+// askChatID asks for a chat's id, for a chat that can't ask itself: one where the bot hears nothing
+// it would answer, such as a group from before the bot needed chats allowed.
+func (w *appWindow) askChatID(channelID, service string) {
+	value := ""
+	informative := L("Paste the chat’s id, such as -1001234567890 for a group. Or message the bot there, and the chat asks here.")
+	if service == "slack" {
+		informative = L("Paste the channel’s id, such as C0123456789. Or message the bot there, and the chat asks here.")
+	}
+	w.showAlert(alertOptions{
+		Message:     L("Add a Chat"),
+		Informative: informative,
+		Buttons:     []alertButton{{Title: L("Add")}, {Title: L("Cancel")}},
+		Accessory: func(c *ui.Context) {
+			textField(c, &value, fieldOptions{Placeholder: L("Chat ID"), AutoFocus: true})
+		},
+	}, func(answer int) {
+		chatID := strings.TrimSpace(value)
+		if answer != 0 || chatID == "" {
+			return
+		}
+		store.AddChat(channelID, chatID, func(err error) {
+			if err != nil {
+				w.showAlert(alertOptions{Message: L("Couldn’t add the chat"), Informative: model.ErrorText(err)}, nil)
+			}
+		})
+	})
 }
 
 // confirmRemoveChannel asks before removing a channel; its conversations stay.

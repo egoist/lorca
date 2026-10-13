@@ -6,12 +6,17 @@ final class ChannelTests: XCTestCase {
         let device = try Wire.decoder.decode(Wire.Device.self, from: Data(#"""
         {"id":"runner-1","name":"Workbench","model":"Mac","os":"macos","os_version":"27","machine_key":"mk","is_this_device":true,"status":"online","last_seen":1,
          "channels":[{"id":"ev-1","bot_id":"bot-1","name":"Community feedback","service":"telegram","account_id":"telegram-1",
-           "listen":{"mentions":true,"replies":true,"tags":["feedback"]},"task":"File it","state":"held","held_delivery":"d1"}]}
+           "listen":{"mentions":true,"replies":true,"tags":["feedback"]},"task":"File it","state":"held","held_delivery":"d1",
+           "requests":[{"id":"7","title":"Mallory","private":true,"from":"Mallory","at":1},{"id":"-1002","title":"Beta","at":1}]}]}
         """#.utf8)).toModel()
         let channel = try XCTUnwrap(device.channels.first)
         XCTAssertEqual(channel.state, .held)
         XCTAssertEqual(channel.heldDelivery, "d1")
         XCTAssertTrue(channel.chats.isEmpty)
+        XCTAssertEqual(channel.requests, [
+            .init(id: "7", title: "Mallory", isPrivate: true, from: "Mallory"),
+            .init(id: "-1002", title: "Beta", isPrivate: false, from: ""),
+        ])
         XCTAssertEqual(channel.listen.summary, "Mentions, replies, #feedback")
         XCTAssertEqual(ChannelListen(every: true, tags: ["feedback"]).summary, "Every message")
 

@@ -122,7 +122,7 @@ The script:
 2. packs the app into `Lorca-<version>.dmg` and signs the image;
 3. notarizes the image and staples the ticket to the image and to the app (notarizing the image
    covers the code inside it), then runs `codesign --verify` and `spctl --assess`;
-4. pulls the 15 most recent archives and the published `appcast.xml` from R2, so
+4. pulls the 3 most recent archives and the published `appcast.xml` from R2, so
    `generate_appcast` can build deltas and keep the older entries;
 5. zips the stapled app as `Lorca-<version>.zip`, writes the changelog section beside it as
    `Lorca-<version>.md`, and regenerates `appcast.xml`, signing with the keychain key;
@@ -209,7 +209,7 @@ gh secret set R2_ENDPOINT --body https://<ACCOUNT_ID>.r2.cloudflarestorage.com
 | `SIGN_IDENTITY` | `Developer ID Application` | codesigning identity |
 | `SPARKLE_BIN` | the SwiftPM copy | directory holding `generate_appcast` |
 | `DOWNLOAD_URL_PREFIX` | `https://mac-releases.lorca.app/` | base URL of the appcast's links, and of `SUFeedURL` |
-| `HISTORY_COUNT` | `15` | recent archives pulled for deltas |
+| `HISTORY_COUNT` | `3` | recent archives pulled for deltas |
 | `FORCE=1` | | replace a version that is already published |
 | `NO_HISTORY=1` | | skip the old archives: a full download, no deltas |
 

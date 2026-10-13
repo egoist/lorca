@@ -7,7 +7,8 @@ export interface AttentionItem {
   next_action: string; coordinator_bot_id: string; sources: AttentionSource[]; urgent: boolean; revision: AttentionRevision;
 }
 export interface AttentionBrief {
-  coordinator_bot_id: string; chat_id: string; decisions: string[]; changes: string[]; next_action: string; updated_at: number;
+  coordinator_bot_id: string; chat_id: string; decisions: string[]; changes: string[]; next_action: string;
+  revision: AttentionRevision; updated_at: number;
 }
 export interface AttentionPreferences { summaries: boolean; urgent_direct: boolean; default_coordinator_bot_id: string | null }
 export interface AttentionView { items: AttentionItem[]; briefs: AttentionBrief[]; preferences: AttentionPreferences }

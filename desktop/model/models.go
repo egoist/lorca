@@ -1619,12 +1619,15 @@ type AgentRun struct {
 	// Kind is `claude` or `codex`.
 	Kind string
 	// Host is `herdr` or `luvus` when it runs in a pane of that terminal host on its Runner.
-	Host     string
-	Task     string
-	Folder   string
-	Branch   string
-	State    AgentState
-	Stalled  bool
+	Host    string
+	Task    string
+	Folder  string
+	Branch  string
+	State   AgentState
+	Stalled bool
+	// Held is set when Auto-review held its start and told the bot why, without asking: it is
+	// AgentDenied.
+	Held     bool
 	Question *AgentQuestion
 	Output   string
 	Outcome  string
@@ -1703,6 +1706,9 @@ func (a *AgentRun) Status() string {
 	case AgentFailed:
 		return Lc("Failed", "coding agent")
 	case AgentDenied:
+		if a.Held {
+			return Lc("Held by Auto-review", "coding agent")
+		}
 		return Lc("Not allowed", "coding agent")
 	case AgentExpired:
 		return Lc("No answer", "coding agent")
@@ -2156,6 +2162,16 @@ type ChannelChat struct {
 	Title string
 }
 
+// ChatRequest is a chat that wrote to the account's bot or added it to a group, waiting for the
+// user to allow it; the bot answers nothing there meanwhile.
+type ChatRequest struct {
+	ID      string
+	Title   string
+	Private bool
+	// From is who wrote, or who added the bot to the group.
+	From string
+}
+
 // Channel is a bot listening on a Telegram or Slack account, as its Runner advertises it.
 type Channel struct {
 	ID           string
@@ -2169,6 +2185,7 @@ type Channel struct {
 	State        ChannelState
 	Detail       string
 	HeldDelivery string
+	Requests     []ChatRequest
 }
 
 // ServiceName is the service as people call it.
