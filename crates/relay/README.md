@@ -61,6 +61,15 @@ Attachments go to the bucket because a deploy replaces the container's disk. The
 
 Both keys go in as text, so the service needs no volume and the Postgres setup keeps its deploys without a gap. A key with `\n` in place of its line breaks works too. Either variable also takes the path of a file (`/data/apns.p8`), for a relay that has a volume anyway. The relay's first log line shows `push=apns`, `push=fcm`, or `push=apns+fcm`.
 
+### Google sign-in
+
+| Variable | Value |
+| --- | --- |
+| `LORCA_RELAY_GOOGLE_CLIENT_ID` | The id of Lorca's Google OAuth client: a Desktop app client in a Google Cloud project enrolled in the Google Workspace developer preview, with the Gmail, Calendar, and Drive APIs and their MCP APIs turned on. |
+| `LORCA_RELAY_GOOGLE_CLIENT_SECRET` | That client's secret. It stays on the relay, which swaps the Runners' codes and refresh tokens with it. |
+
+Both or neither. With them, a Gmail, Calendar, or Drive account signs in with no client of the user's own; until Google verifies the project's consent screen for those scopes, only the test users listed on it can. The relay's first log line shows `oauth_clients=google`.
+
 ### Optional
 
 | Variable | Default | What it does |

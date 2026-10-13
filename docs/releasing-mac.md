@@ -182,7 +182,6 @@ team key can notarize.
 | `R2_ACCESS_KEY_ID` | The R2 API token's access key ID |
 | `R2_SECRET_ACCESS_KEY` | Its secret access key |
 | `R2_ENDPOINT` | `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` |
-| `LORCA_GOOGLE_CLIENT_ID`, `LORCA_GOOGLE_CLIENT_SECRET` | Lorca's Google client, built into the bundled CLI ([releasing-cli.md](releasing-cli.md#google-client)); without them the build still succeeds |
 
 Export the identity from Keychain Access ▸ login ▸ My Certificates: the "Developer ID
 Application: …" item with its private key, File ▸ Export Items… as `identity.p12` with a password.

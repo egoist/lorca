@@ -157,6 +157,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/pair/{nonce}/request", get(get_pair_request))
         .route("/v1/pair/{nonce}/reply", post(post_pair_reply))
         .merge(crate::receivers::router(state.clone()))
+        .merge(crate::clients::router())
         .merge(public)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(axum::middleware::from_fn_with_state(state.clone(), require_protocol))
@@ -169,8 +170,9 @@ async fn root() -> &'static str {
     "Lorca Relay is running..."
 }
 
-async fn health() -> Json<Value> {
-    Json(json!({ "ok": true, "service": "lorca-relay", "protocol": PROTOCOL }))
+/// The protocol, and the id of each OAuth client Lorca's Runners sign in with here.
+async fn health(State(state): State<AppState>) -> Json<Value> {
+    Json(json!({ "ok": true, "service": "lorca-relay", "protocol": PROTOCOL, "oauth_clients": state.clients.ids() }))
 }
 
 fn random_nonce(len: usize) -> String {

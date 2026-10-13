@@ -399,7 +399,7 @@ async fn connect(app: &Arc<App>, plugin: &Installed, name: &str, spec: &ServerSp
                             AuthSpec::Oauth { token_endpoint: Some(endpoint), .. } => endpoint,
                             _ => return Err("The saved sign-in cannot be refreshed. Sign in again.".into()),
                         };
-                        let refreshed = super::oauth::refresh(&app.http, token_endpoint, &stored).await?;
+                        let refreshed = super::oauth::refresh(app, token_endpoint, &stored).await?;
                         let saved = refreshed.as_ref().unwrap_or(&stored);
                         if let Some(refreshed) = &refreshed { super::set_oauth_at_generation(app, &plugin.manifest.id, name, refreshed.clone(), generation)?; }
                         let token = saved["tokens"]["access_token"].as_str().ok_or("The saved sign-in has no access token")?.to_string();
@@ -808,7 +808,7 @@ pub async fn service_token(app: &Arc<App>, plugin_id: &str, server: &str) -> Res
     if stored["native_flow"].as_bool() != Some(true) {
         return Err("Sign in to the account again.".into());
     }
-    let refreshed = super::oauth::refresh(&app.http, &token_endpoint, &stored).await?;
+    let refreshed = super::oauth::refresh(app, &token_endpoint, &stored).await?;
     if let Some(refreshed) = &refreshed {
         super::set_oauth_at_generation(app, plugin_id, server, refreshed.clone(), generation)?;
     }
@@ -1092,15 +1092,20 @@ pub async fn connect_oauth_for_card(app: &Arc<App>, plugin_id: &str, server: &st
             let set = |fixed: &Option<String>, variable: &Option<String>| {
                 fixed.as_deref().map(|value| fill(value, &values)).filter(|v| !v.trim().is_empty()).or_else(|| variable.as_ref().and_then(|v| values.get(v).cloned())).filter(|v| !v.trim().is_empty())
             };
-            // The user's own client, else the one Lorca registered with the service; an id and
-            // its secret always come from the same one.
-            let (id, secret) = match set(client_id, client_id_variable) {
-                Some(id) => (Some(id), set(client_secret, client_secret_variable)),
-                None => lorca_client.as_deref().and_then(super::lorca_client).map_or((None, None), |(id, secret)| (Some(id), secret)),
+            // The user's own client, with its secret, else the one Lorca registered with the
+            // service, whose secret stays on the relay.
+            let (id, secret, lorca_client) = match (set(client_id, client_id_variable), lorca_client) {
+                (Some(id), _) => (Some(id), set(client_secret, client_secret_variable), None),
+                (None, Some(name)) if authorization_endpoint.is_some() => match lorca_client_id(app, name).await? {
+                    Some(id) => (Some(id), None, Some(name.clone())),
+                    None => (None, None, None),
+                },
+                (None, _) => (None, None, None),
             };
             let hint = ClientHint {
                 id,
                 secret,
+                lorca_client,
                 token_variable: token_variable.clone(),
                 client_id_variable: client_id_variable.clone(),
                 client_secret_variable: client_secret_variable.clone(),
@@ -1176,6 +1181,13 @@ pub async fn connect_oauth_for_card(app: &Arc<App>, plugin_id: &str, server: &st
         let _ = ended.send(outcome);
     });
     Ok(SignInStart { message, url: None, id: None, done: Some(done) })
+}
+
+/// The id of a client Lorca registered with a service, from the relay that holds its secret;
+/// none from a relay without it.
+async fn lorca_client_id(app: &Arc<App>, client: &str) -> Result<Option<String>, String> {
+    let Some(relay) = app.relay_url() else { return Ok(None) };
+    app.relay.oauth_client_id(&relay, client).await.map_err(|_| "The relay could not be reached. Try again.".to_string())
 }
 
 fn this_runner(app: &App) -> String {
@@ -1415,6 +1427,8 @@ pub async fn answer_sign_in(app: &Arc<App>, chat_id: &str, message_id: &str, dec
 struct ClientHint {
     id: Option<String>,
     secret: Option<String>,
+    /// One of Lorca's clients (`id` is its id), whose token requests go through the relay.
+    lorca_client: Option<String>,
     token_variable: Option<String>,
     client_id_variable: Option<String>,
     client_secret_variable: Option<String>,
@@ -1485,7 +1499,7 @@ async fn begin_sign_in(app: &Arc<App>, url: &str, scopes: &[String], name: &str,
     if let Some(endpoint) = &client.authorization_endpoint {
         let id = client.id.as_deref().ok_or_else(|| client.no_registration_advice(name))?;
         let token = client.token_endpoint.as_deref().ok_or("The integration has no token endpoint.")?;
-        let (pending, page) = super::oauth::Pending::begin(endpoint, token, id, client.secret.as_deref(), &redirect, scopes, &client.authorization_params)?;
+        let (pending, page) = super::oauth::Pending::begin(endpoint, token, id, client.secret.as_deref(), client.lorca_client.as_deref(), &redirect, scopes, &client.authorization_params)?;
         return Ok((BrowserState::Native(pending), page));
     }
     let setup = async {
@@ -1524,7 +1538,7 @@ async fn begin_sign_in(app: &Arc<App>, url: &str, scopes: &[String], name: &str,
 /// Finishes an authorization with where the browser landed: its code for the tokens.
 async fn complete_sign_in(app: &Arc<App>, state: BrowserState, callback: &str, name: &str) -> Result<Value, String> {
     let mut state = match state {
-        BrowserState::Native(pending) => return pending.finish(&app.http, callback).await,
+        BrowserState::Native(pending) => return pending.finish(app, callback).await,
         BrowserState::Mcp(state) => state,
     };
     if super::sign_in::denied(callback) {

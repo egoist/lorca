@@ -45,9 +45,6 @@ jobs:
       RCLONE_CONFIG_R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
       RCLONE_CONFIG_R2_REGION: auto
       RCLONE_CONFIG_R2_NO_CHECK_BUCKET: "true"
-      # The bundled CLI signs Google accounts in with Lorca's Google client.
-      LORCA_GOOGLE_CLIENT_ID: ${{ secrets.LORCA_GOOGLE_CLIENT_ID }}
-      LORCA_GOOGLE_CLIENT_SECRET: ${{ secrets.LORCA_GOOGLE_CLIENT_SECRET }}
     steps:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2

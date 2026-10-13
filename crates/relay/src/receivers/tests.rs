@@ -13,9 +13,9 @@ use crate::routes::PROTOCOL;
 
 const WEBHOOK_SECRET: &str = "a-github-webhook-secret-for-tests";
 
-struct Relay {
-    state: AppState,
-    url: String,
+pub(crate) struct Relay {
+    pub state: AppState,
+    pub url: String,
     home: std::path::PathBuf,
     task: tokio::task::JoinHandle<()>,
 }
@@ -54,6 +54,11 @@ async fn github_stub(calls: Arc<Mutex<Vec<String>>>) -> String {
 }
 
 async fn relay(github: Option<&str>) -> Relay {
+    relay_with(github, crate::clients::Clients::default()).await
+}
+
+/// A relay with the receivers, and with Lorca's OAuth clients.
+pub(crate) async fn relay_with(github: Option<&str>, clients: crate::clients::Clients) -> Relay {
     let home = std::env::temp_dir().join(format!("lorca-receivers-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&home).unwrap();
     let local = Arc::new(db::Local::default());
@@ -86,6 +91,7 @@ async fn relay(github: Option<&str>) -> Relay {
         pusher: Arc::new(crate::push::Pusher::new(None, None)),
         pushes: tokio_util::task::TaskTracker::new(),
         receivers: Arc::new(receivers),
+        clients: Arc::new(clients),
     };
     let app = crate::routes::router(state.clone());
     let task = tokio::spawn(async move { axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>()).await.unwrap() });
@@ -93,7 +99,7 @@ async fn relay(github: Option<&str>) -> Relay {
 }
 
 /// A Runner registered with the relay, with one bot.
-async fn runner(relay: &Relay) -> (Arc<lorca::app::App>, String) {
+pub(crate) async fn runner(relay: &Relay) -> (Arc<lorca::app::App>, String) {
     let app = lorca::app::App::load(lorca::config::Config { home: relay.home.join(format!("runner-{}", uuid::Uuid::new_v4())), port: 0 }).unwrap();
     lorca::identity::create(&app, Some("Workbench".into())).unwrap();
     app.set_relay_url(Some(relay.url.clone())).unwrap();

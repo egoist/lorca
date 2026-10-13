@@ -241,4 +241,4 @@ pub fn shared(receivers: Receivers) -> Arc<Receivers> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
