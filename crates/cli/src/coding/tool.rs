@@ -314,10 +314,23 @@ pub async fn review_start(app: &Arc<App>, bot: &Bot, chat_id: &str, trigger: &Tr
         description.push_str(&format!(" {}", super::holds_secrets(&secrets)));
     }
     let args = json!({ "agent": ctx.args["agent"], "folder": ctx.args["folder"], "worktree": ctx.args["worktree"], "prompt": ctx.args["prompt"], "proof": ctx.args["proof"], "secrets": ctx.args["secrets"] });
-    let action = Action { target_name: &runner_name, tool: "coding_agent", description: &description, args: &args, script: None, propose_rule: true };
-    let Outcome::Ask { reason, rule } = crate::plugins::review::review(app, bot, chat_id, trigger, action, ctx.cancel).await else {
-        update(&|card| card.state = "starting".into());
-        return None;
+    let action = Action { target_name: &runner_name, tool: "coding_agent", description: &description, args: &args, script: None, facts: &[], propose_rule: true };
+    let (reason, rule) = match crate::plugins::review::review(app, bot, chat_id, trigger, action, ctx.cancel).await {
+        Outcome::Allow => {
+            update(&|card| card.state = "starting".into());
+            return None;
+        }
+        // The bot reads why and finds another way, or asks the user in the chat.
+        Outcome::Held { reason, note, .. } if !unattended => {
+            update(&|card| {
+                card.state = "denied".into();
+                card.held = true;
+                card.outcome = Some(reason.clone());
+            });
+            return Some(crate::local_review::blocked(note));
+        }
+        Outcome::Held { reason, rule, .. } => (Some(reason), rule),
+        Outcome::Ask { reason, rule } => (reason, rule),
     };
     let Some(message_id) = card.clone().filter(|_| !unattended) else {
         update(&|card| {

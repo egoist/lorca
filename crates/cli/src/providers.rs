@@ -185,6 +185,16 @@ pub fn reviewer(app: &Arc<App>, kind: &str) -> Result<Reviewer, String> {
     Ok(Reviewer::Chat { provider: provider_for(app, &kind, Some(&model), thinking)?, thinking })
 }
 
+/// A chat model for Auto-review's second pass when the review model is a decision model or does
+/// not answer: the small model of the bot's own provider, `kind`, at the least it thinks.
+pub fn chat_reviewer(app: &Arc<App>, kind: &str) -> Result<(Arc<dyn Provider>, Option<ThinkingLevel>), String> {
+    let (model, thinking) = small_model(app, kind);
+    if decider(app, kind, &model)?.is_some() {
+        return Err(format!("{kind} reviews with a decision model"));
+    }
+    Ok((provider_for(app, kind, Some(&model), thinking)?, thinking))
+}
+
 /// Where a decision model of `kind` is asked, or `None` for a model that chats: a custom
 /// provider's decision API at its endpoint, or a decision model the catalog lists for OpenCode,
 /// at the gateway's `/v1/systemone`.

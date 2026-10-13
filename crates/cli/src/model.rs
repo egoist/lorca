@@ -507,6 +507,10 @@ pub struct AgentRun {
     /// It is working, and has shown nothing new for a while.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub stalled: bool,
+    /// Auto-review held its start and told the bot why, without asking the user: the card is
+    /// `denied`, and the apps read it as "Held by Auto-review".
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub held: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub question: Option<AgentQuestion>,
     /// Its last lines, as its transcript shows them.
@@ -583,7 +587,8 @@ pub struct CommandRun {
     pub command: String,
     /// `checking` (Auto-review is judging it), `asking` (for the user's permission), `running`
     /// (printing, or silent), `waiting` (at a question the user can read). Once it ended:
-    /// `exited`, `failed` (a nonzero code), `stopped`, `denied` (not allowed, so never run),
+    /// `exited`, `failed` (a nonzero code), `stopped`, `denied` (not allowed, or held by
+    /// Auto-review, so never run),
     /// `expired` (nobody answered in time), or `dismissed` (the user sent a new message instead
     /// of answering, so never run).
     pub state: String,
@@ -609,9 +614,13 @@ pub struct CommandRun {
     /// The Runner it runs on, by name, for Auto-review's question: "Workbench".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device: Option<String>,
-    /// Why Auto-review asked.
+    /// Why Auto-review asked, or held it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Auto-review held it and told the bot why, without asking the user: the card is
+    /// `denied`, and the apps read it as "Held by Auto-review".
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub held: bool,
     /// The plain-language rule Always allow adds, which Auto-review proposed. Without one the
     /// question offers only Allow once and Deny.
     #[serde(default, skip_serializing_if = "Option::is_none")]

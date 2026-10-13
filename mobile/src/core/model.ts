@@ -415,6 +415,8 @@ export interface AgentRun {
   state: "checking" | "asking" | "starting" | "working" | "idle" | "exited" | "failed" | "stopped" | "denied" | "expired" | "dismissed";
   /** Working, with nothing new for a while. */
   stalled?: boolean;
+  /** Auto-review held its start and told the bot why, without asking: it is `denied`. */
+  held?: boolean;
   question?: AgentQuestion;
   output?: string;
   outcome?: string;

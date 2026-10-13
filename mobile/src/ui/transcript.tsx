@@ -854,7 +854,7 @@ export function agentStatus(agent: AgentRun): string {
     case "failed":
       return tc("Failed", "coding agent");
     case "denied":
-      return tc("Not allowed", "coding agent");
+      return agent.held ? tc("Held by Auto-review", "coding agent") : tc("Not allowed", "coding agent");
     case "expired":
       return tc("No answer", "coding agent");
     case "dismissed":

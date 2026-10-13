@@ -140,6 +140,7 @@ type WireAgent struct {
 	Branch   *string `json:"branch"`
 	State    string  `json:"state"`
 	Stalled  *bool   `json:"stalled"`
+	Held     *bool   `json:"held"`
 	Question *struct {
 		Kind    string   `json:"kind"`
 		Text    *string  `json:"text"`
@@ -899,7 +900,7 @@ func ToMessage(wire WireMessage) *Message {
 			}
 			card := &AgentRun{
 				ID: agent.ID, Kind: agent.Kind, Host: str(agent.Host), Task: str(agent.Task), Folder: str(agent.Folder),
-				Branch: str(agent.Branch), State: state, Stalled: flag(agent.Stalled), Output: str(agent.Output),
+				Branch: str(agent.Branch), State: state, Stalled: flag(agent.Stalled), Held: flag(agent.Held), Output: str(agent.Output),
 				Outcome: str(agent.Outcome), Device: str(agent.Device),
 			}
 			if q := agent.Question; q != nil {

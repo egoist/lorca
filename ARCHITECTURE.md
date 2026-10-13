@@ -78,7 +78,8 @@ One doc per subject under `docs/architecture/`, each short enough to read in one
 | [CLI (runtime)](docs/architecture/runtime.md) | The `lorca` binary and its data directory, installing it, its signed self-updates and `lorca service`, the agent loop and a turn on a Runner |
 | [Notifications](docs/architecture/notifications.md) | Phone pushes for replies, failures, and questions, the macOS app's own notifications, reads on another Device, the chat on screen |
 | [Bot permissions](docs/architecture/bot-permissions.md) | A bot's Access to plugins, tools, files, and shell; where the CLI checks it; access requests |
-| [Tools](docs/architecture/tools.md) | Team, memory, and coding tools, Auto-review |
+| [Tools](docs/architecture/tools.md) | Team, memory, and coding tools |
+| [Auto-review](docs/architecture/auto-review.md) | Fast paths, what the review reads, its rules and two passes, holds back to the bot, asks |
 | [Handoffs](docs/architecture/handoffs.md) | Durable delegated contracts, expected outputs, result evidence and return routing, offline delivery and restart recovery |
 | [Review queue](docs/architecture/review-queue.md) | Encrypted editable proposals, version-bound approval, Runner execution and outcomes |
 | [Message drafts](docs/architecture/drafts.md) | Emails and Slack messages a bot writes in a chat as drafts the user edits, sends, or discards; sending directly; edits as feedback |
