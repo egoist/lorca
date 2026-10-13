@@ -504,6 +504,12 @@ fn active(app: &App, source: &Source, prefix: &str) -> Vec<Item> {
         .collect()
 }
 
+/// A bot resolves the items it coordinates, and those it alone reported: it often sees first that
+/// the work moved on. An item others reported too waits for the coordinator.
+fn may_resolve(item: &Item, bot_id: &str) -> bool {
+    item.coordinator_bot_id == bot_id || item.reporters == [bot_id]
+}
+
 /// Resolution changes this projection only: tasks and review outcomes keep their own CAS.
 pub fn resolve(
     app: &App,
@@ -518,8 +524,8 @@ pub fn resolve(
         .into_iter()
         .find(|item| item.id == id)
         .ok_or("Unknown attention item")?;
-    if actor.is_some_and(|actor| actor != item.coordinator_bot_id) {
-        return Err("Only the owning coordinator or the user can resolve this item".into());
+    if actor.is_some_and(|actor| !may_resolve(&item, actor)) {
+        return Err("Only the owning coordinator, the bot that alone reported it, or the user can resolve this item".into());
     }
     if item.resolved {
         return Ok(item);
@@ -881,7 +887,7 @@ impl lorca_agent::Tool for AttentionTool {
         "attention"
     }
     fn description(&self) -> &str {
-        "Maintain the consolidated attention view. Report reviews, blockers, commitments and changes with a stable underlying key and next action; ordinary reports go to the owning coordinator, urgent reports also alert directly. List active items, resolve your coordinator's items, and publish one brief emphasizing decisions and changes. Quiet checks publish no alert. Task/review ids are existing records' references."
+        "Maintain the consolidated attention view. Report reviews, blockers, commitments and changes with a stable underlying key and next action; ordinary reports go to the owning coordinator, urgent reports also alert directly. List active items, resolve the items you coordinate or alone reported once they are done, and publish one brief emphasizing decisions and changes. Quiet checks publish no alert. Task/review ids are existing records' references."
     }
     fn parameters(&self) -> Value {
         json!({"type":"object", "properties":{
@@ -955,7 +961,7 @@ impl lorca_agent::Tool for AttentionTool {
 /// The attention part of a turn's system prompt. `reported` is a coordinator's turn that an
 /// attention report started.
 pub fn prompt(app: &App, bot_id: &str, chat_id: &str, reported: bool) -> String {
-    let mut prompt = format!("\nAttention: when work needs the user (a review, a blocker, a commitment, or an important change), record it with the attention tool's report under a stable topic key, with the next action. This chat's id is {chat_id}. A report goes to the coordinating bot, which tells the user; mark it urgent only when it cannot wait, which also alerts the user directly, and quiet for a check that found nothing new. A coordinating bot keeps one brief of decisions and changes, without repeating transcripts, links the items it is about in item_ids so it leaves the list once they are resolved, and resolves items once they are done.\n");
+    let mut prompt = format!("\nAttention: when work needs the user (a review, a blocker, a commitment, or an important change), record it with the attention tool's report under a stable topic key, with the next action. This chat's id is {chat_id}. A report goes to the coordinating bot, which tells the user; mark it urgent only when it cannot wait, which also alerts the user directly, and quiet for a check that found nothing new. A coordinating bot keeps one brief of decisions and changes, without repeating transcripts, links the items it is about in item_ids so it leaves the list once they are resolved. The items below are yours to resolve: when this turn's work or what it read shows one is done (the run was approved, the pull request merged, the user answered), resolve it in this turn, so the user does not have to.\n");
     if reported {
         prompt.push_str("This turn was started by an attention report. Read the attention list, publish a brief when the user needs to know something, resolve what is finished, and answer with exactly PASS when nothing needs the user.\n");
     }
@@ -963,7 +969,7 @@ pub fn prompt(app: &App, bot_id: &str, chat_id: &str, reported: bool) -> String 
         for item in view
             .items
             .iter()
-            .filter(|item| item.coordinator_bot_id == bot_id)
+            .filter(|item| may_resolve(item, bot_id))
             .take(20)
         {
             prompt.push_str(&format!(
@@ -1229,6 +1235,23 @@ mod tests {
             !message.counts_unread(),
             "quiet checks do not add an unread badge"
         );
+    }
+
+    #[test]
+    fn the_bot_that_alone_reported_an_item_resolves_it_and_sees_it_in_its_prompt() {
+        let account = Account::new();
+        let item = report(&account.app, account.report(), Some(&account.scout.id), 0).unwrap();
+        let prompt = prompt(&account.app, &account.scout.id, &account.scout_chat, false);
+        assert!(prompt.contains(&item.id), "{prompt}");
+        let mut lone = account.report();
+        lone.key = "chef-alone".into();
+        let other = report(&account.app, lone, Some(&account.chef.id), 0).unwrap();
+        assert!(
+            resolve(&account.app, &other.id, Some(&account.scout.id), None).is_err(),
+            "a bot that neither coordinates nor reported it leaves it"
+        );
+        resolve(&account.app, &item.id, Some(&account.scout.id), None).unwrap();
+        assert_eq!(view(&account.app).unwrap().items.len(), 1);
     }
 
     #[test]

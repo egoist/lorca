@@ -8,6 +8,8 @@ and the update window shows it.
 
 - Right-click a brief in Attention and choose Dismiss to take it off the list on every Device; the
   coordinator's next brief shows again. A brief also leaves once every item it is about is resolved.
+- A bot resolves an Attention item it alone reported as soon as it sees the work is done, such as a
+  run it approved or a pull request that merged, so you no longer clear them by hand.
 
 ## [0.1.11]
 
