@@ -141,16 +141,22 @@ pub fn default_model(kind: &str) -> &'static str {
 /// at [`lowest_level`]. Empty when `kind` has none.
 pub fn small_model(app: &App, kind: &str) -> (String, Option<ThinkingLevel>) {
     let model = app.credentials.lock().unwrap().review_model(kind).unwrap_or_default();
-    let thinking = if model.is_empty() { None } else { lowest_level(kind, &model) };
+    let thinking = if model.is_empty() { None } else { lowest_level(app, kind, &model) };
     (model, thinking)
 }
 
 /// The least a model can think, for a quick answer: thinking off where the model allows it and
-/// its lowest effort where it does not. A custom provider's model takes the catalog's lowest
-/// level for a model the catalog knows and the server's default for any other.
-fn lowest_level(kind: &str, model: &str) -> Option<ThinkingLevel> {
+/// its lowest effort where it does not. A custom provider's model takes the lowest level its
+/// server's list declares, else the catalog's lowest for a model the catalog knows, else the
+/// server's default.
+fn lowest_level(app: &App, kind: &str, model: &str) -> Option<ThinkingLevel> {
     if is_custom(kind) {
-        return models::find_any(model).and_then(|known| known.levels.first().copied());
+        let credentials = app.credentials.lock().unwrap();
+        let listed = credentials.custom.get(kind).and_then(|provider| provider.models.iter().find(|m| m.id == model));
+        return match listed.and_then(|m| m.levels.as_ref()) {
+            Some(levels) => levels.first().copied(),
+            None => models::find_any(model).and_then(|known| known.levels.first().copied()),
+        };
     }
     Some(models::find(kind, model).and_then(|info| info.levels.first().copied()).unwrap_or(ThinkingLevel::Off))
 }
@@ -175,8 +181,18 @@ pub fn reviewer(app: &Arc<App>, kind: &str) -> Result<Reviewer, String> {
     if let Some(decider) = decider(app, &kind, &model)? {
         return Ok(Reviewer::Decides(decider));
     }
-    let thinking = lowest_level(&kind, &model);
+    let thinking = lowest_level(app, &kind, &model);
     Ok(Reviewer::Chat { provider: provider_for(app, &kind, Some(&model), thinking)?, thinking })
+}
+
+/// A chat model for Auto-review's second pass when the review model is a decision model or does
+/// not answer: the small model of the bot's own provider, `kind`, at the least it thinks.
+pub fn chat_reviewer(app: &Arc<App>, kind: &str) -> Result<(Arc<dyn Provider>, Option<ThinkingLevel>), String> {
+    let (model, thinking) = small_model(app, kind);
+    if decider(app, kind, &model)?.is_some() {
+        return Err(format!("{kind} reviews with a decision model"));
+    }
+    Ok((provider_for(app, kind, Some(&model), thinking)?, thinking))
 }
 
 /// Where a decision model of `kind` is asked, or `None` for a model that chats: a custom
@@ -428,9 +444,9 @@ fn custom_provider(kind: &str, provider: &CustomProvider, model: &str, thinking:
     })
 }
 
-/// What a custom provider's model takes: the window, output cap, and inputs its server's list
-/// gave, else the catalog's for that model id, else nothing known, which means no window to
-/// compact by, text only, and the common thinking levels. Its cost is zero, since Lorca does
+/// What a custom provider's model takes: the window, output cap, inputs, and thinking levels its
+/// server's list gave, else the catalog's for that model id, else nothing known, which means no
+/// window to compact by, text only, and the common thinking levels. Its cost is zero, since Lorca does
 /// not know what the server charges. Kept per kind and model, so a turn reuses the entry
 /// until the provider changes.
 fn custom_model_info(kind: &str, provider: &CustomProvider, model: &str) -> &'static ModelInfo {
@@ -443,32 +459,37 @@ fn custom_model_info(kind: &str, provider: &CustomProvider, model: &str) -> &'st
         None if provider.api == CustomApi::Messages => ThinkingMode::Budget,
         None => ThinkingMode::Effort,
     };
-    let levels = crate::credentials::custom_levels(model);
+    let levels = crate::credentials::custom_levels(model, listed);
     let wanted = ModelInfo {
         id: "",
         name: "",
         provider: "",
         context_window: listed.and_then(|m| m.context_window).or(known.map(|k| k.context_window)).unwrap_or(0),
         max_output: listed.and_then(|m| m.max_output).or(known.map(|k| k.max_output)).unwrap_or(0),
-        reasoning: known.is_some_and(|k| k.reasoning),
+        reasoning: match listed.and_then(|m| m.levels.as_ref()) {
+            Some(declared) => !declared.is_empty(),
+            None => known.is_some_and(|k| k.reasoning),
+        },
         images: listed.and_then(|m| m.images).or(known.map(|k| k.images)).unwrap_or(false),
         rates: Rates { input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0 },
         tiers: &[],
         thinking,
-        levels,
+        // Set below, from `levels`, when the entry is new.
+        levels: &[],
         // The user picked the protocol for the whole provider.
         wire: None,
     };
     let mut cache = INFO.lock().unwrap();
     let key = (kind.to_string(), model.to_string());
     if let Some(info) = cache.get(&key) {
-        if (ModelInfo { id: "", name: "", provider: "", ..**info }) == wanted {
+        if (ModelInfo { id: "", name: "", provider: "", levels: &[], ..**info }) == wanted && info.levels == levels {
             return info;
         }
     }
     let name = listed.and_then(|m| m.name.clone()).or(known.map(|k| k.name.to_string())).unwrap_or_else(|| model.to_string());
     let leak = |text: String| -> &'static str { Box::leak(text.into_boxed_str()) };
-    let info: &'static ModelInfo = Box::leak(Box::new(ModelInfo { id: leak(model.to_string()), name: leak(name), provider: leak(kind.to_string()), ..wanted }));
+    let levels: &'static [ThinkingLevel] = Box::leak(levels.into_boxed_slice());
+    let info: &'static ModelInfo = Box::leak(Box::new(ModelInfo { id: leak(model.to_string()), name: leak(name), provider: leak(kind.to_string()), levels, ..wanted }));
     cache.insert(key, info);
     info
 }
@@ -580,7 +601,7 @@ mod tests {
     }
 
     fn model(id: &str) -> CustomModel {
-        CustomModel { id: id.into(), name: None, context_window: None, max_output: None, images: None }
+        CustomModel { id: id.into(), name: None, context_window: None, max_output: None, images: None, levels: None }
     }
 
     fn add_custom(app: &App, kind: &str, api: CustomApi, models: Vec<CustomModel>) {
@@ -705,11 +726,25 @@ mod tests {
         let server = std::thread::spawn(move || {
             use std::io::{Read, Write};
             let (mut socket, _) = listener.accept().unwrap();
-            let mut request = [0u8; 8192];
-            let read = socket.read(&mut request).unwrap();
+            // Headers and body can arrive apart: read up to the length the headers give.
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 8192];
+            loop {
+                let read = socket.read(&mut chunk).unwrap();
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&chunk[..read]);
+                let text = String::from_utf8_lossy(&request).to_ascii_lowercase();
+                let Some(end) = text.find("\r\n\r\n") else { continue };
+                let length = text[..end].lines().find_map(|line| line.strip_prefix("content-length:")).and_then(|n| n.trim().parse().ok()).unwrap_or(0);
+                if request.len() >= end + 4 + length {
+                    break;
+                }
+            }
             let reply = format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
             socket.write_all(reply.as_bytes()).unwrap();
-            String::from_utf8_lossy(&request[..read]).to_ascii_lowercase()
+            String::from_utf8_lossy(&request).to_ascii_lowercase()
         });
         (root, server)
     }
@@ -745,6 +780,54 @@ mod tests {
             assert!(!seen.contains("\r\nauthorization:") && !seen.contains("\r\nx-api-key:"), "{seen}");
             assert!(!seen.contains("prompt_cache_key"), "{seen}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_custom_model_sends_the_thinking_levels_its_list_declares() {
+        use futures::StreamExt;
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        let request = || ModelRequest {
+            system_prompt: String::new(),
+            messages: vec![lorca_agent::LlmMessage::User(lorca_agent::UserMessage::text("hi"))],
+            tools: Vec::new(),
+            cache_points: Vec::new(),
+            max_tokens: None,
+            options: lorca_agent::RequestOptions::default(),
+        };
+        use ThinkingLevel::{High, Low, Max, Medium, XHigh};
+        let declared = CustomModel { levels: Some(vec![Low, Medium, High, XHigh, Max]), ..model("gpt-lab") };
+        let plain = CustomModel { levels: Some(Vec::new()), ..model("plain") };
+        // The effort each model is sent at for each level asked.
+        let cases = [
+            ("gpt-lab", Max, Some("max")),
+            ("gpt-lab", XHigh, Some("xhigh")),
+            ("gpt-lab", Medium, Some("medium")),
+            // Nothing declared: the common levels, at most `high`.
+            ("mystery", XHigh, Some("high")),
+            ("mystery", Max, Some("high")),
+            // A model the list says does not reason gets no effort.
+            ("plain", Max, None),
+        ];
+        for (index, (id, level, effort)) in cases.into_iter().enumerate() {
+            let (root, server) = answer_once("data: [DONE]\n\n");
+            let kind = format!("custom:levels-{index}");
+            let models = vec![declared.clone(), plain.clone(), model("mystery")];
+            let provider = CustomProvider { name: "Levels".into(), api: CustomApi::ChatCompletions, base_url: format!("{root}/v1"), api_key: String::new(), models, created_at: 1 };
+            app.credentials.lock().unwrap().custom.insert(kind.clone(), provider);
+            let mut stream = provider_for(app, &kind, Some(id), Some(level)).unwrap().stream(request(), CancellationToken::new()).await;
+            while stream.next().await.is_some() {}
+            let seen = server.join().unwrap();
+            let body: serde_json::Value = serde_json::from_str(&seen[seen.find("\r\n\r\n").unwrap() + 4..]).unwrap();
+            println!("{id} at {level}: reasoning_effort = {}", body["reasoning_effort"]);
+            assert_eq!(body["reasoning_effort"].as_str(), effort, "{id} at {level}");
+        }
+
+        // The model entry and Auto-review's lowest level follow the list too.
+        let info = provider_for(app, "custom:levels-0", Some("gpt-lab"), None).unwrap().model_info().unwrap();
+        assert_eq!((info.levels, info.reasoning), (&[Low, Medium, High, XHigh, Max][..], true));
+        add_custom(app, "custom:review", CustomApi::ChatCompletions, vec![CustomModel { levels: Some(vec![Medium, Max]), ..model("gpt-lab") }]);
+        assert_eq!(small_model(app, "custom:review"), ("gpt-lab".into(), Some(Medium)));
     }
 
     #[test]

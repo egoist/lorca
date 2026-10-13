@@ -745,10 +745,13 @@ pub async fn review_call(app: &Arc<App>, bot: &Bot, chat_id: &str, trigger: &cra
         _ => return None,
     };
     let outcome = crate::plugins::review::decide(app, bot, chat_id, trigger, "browser-session", "Browser", "browser_session", &description, &args, None, ctx.cancel).await;
-    let crate::plugins::review::Outcome::Ask { reason, .. } = outcome else {
-        return None;
-    };
     let run = ctx.args["action"] == "run";
+    let reason = match outcome {
+        crate::plugins::review::Outcome::Allow => return None,
+        crate::plugins::review::Outcome::Held { note, .. } if !unattended => return Some(crate::local_review::blocked(note)),
+        crate::plugins::review::Outcome::Held { reason, .. } => Some(reason),
+        crate::plugins::review::Outcome::Ask { reason, .. } => reason,
+    };
     if unattended {
         let what = if run { "Running these browser steps" } else { "Opening a browser window" };
         return Some(crate::local_review::blocked(format!("{what} needs approval; nobody is here to approve it.")));

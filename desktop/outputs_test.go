@@ -3,11 +3,13 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -321,4 +323,61 @@ func TestCopyFileLeavesTheDestinationOnFailure(t *testing.T) {
 	if data, _ := os.ReadFile(target); string(data) != "new result" {
 		t.Fatal("the copy did not replace the destination")
 	}
+}
+
+func TestARunOfOutputsJoinsIntoOneList(t *testing.T) {
+	m := demoWindow(t)
+	m.selectChat("chat-relay")
+	f := newOutputFixture(t)
+	proof := map[string]any{"kind": "test_result", "status": "unverified", "summary": "Claude Code saved this as proof of its work."}
+	for i, name := range []string{"gh-pr-diff-now.txt", "go-test-all-windows.txt", "maintainer-fix-commit.diff", "test-after-fix-windows.txt"} {
+		id := fmt.Sprintf("proof%d", i)
+		f.files["att-"+id] = f.files["att-links2"]
+		f.messages = append(f.messages, map[string]any{"id": "msg-" + id, "chat_id": "chat-relay", "author": map[string]any{"kind": "bot", "bot_id": "bot-patch"},
+			"body":  map[string]any{"kind": "text", "text": "", "attachments": []any{map[string]any{"id": "att-" + id, "name": name, "mime": "text/plain", "size": 4000 + i*900}}},
+			"state": map[string]any{"kind": "complete"}, "created_at": float64(time.Now().Unix()),
+			"output": map[string]any{"id": "out-" + id, "name": name, "mime": "text/plain", "bot_id": "bot-patch", "chat_id": "chat-relay", "version": 1, "evidence": proof}})
+	}
+	f.install(true)
+	// A test frame never reads a picture off the main thread, so the screenshots' are read here.
+	for _, id := range []string{"att-header", "att-missing"} {
+		data, _ := os.ReadFile(f.files[id])
+		bitmap, err := ui.DecodeBitmap(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bitmaps.Lock()
+		bitmaps.entries[f.files[id]] = &bitmapEntry{bitmap: bitmap}
+		bitmaps.Unlock()
+	}
+	rows := buildRows(store.Chat("chat-relay"), nil, "")
+	// Before.png, the same bot's a minute earlier, starts the run; another bot's link ends the one
+	// before it.
+	var run []outputStack
+	for _, row := range rows {
+		if row.kind == rowMessage && (row.message.ID == "msg-notes" || row.message.ID == "msg-missing" || strings.HasPrefix(row.message.ID, "msg-proof")) {
+			run = append(run, row.stack)
+		}
+	}
+	want := []outputStack{{}, {below: true}, {above: true, below: true}, {above: true, below: true}, {above: true, below: true}, {above: true}}
+	if !slices.Equal(run, want) {
+		t.Fatalf("the run's rows are %v, want %v", run, want)
+	}
+	tt := ui.NewTester(m.frame(m.view), 1180, 760)
+	f.pump(tt, "the run's files", func() bool { return tt.HasText("test-after-fix-windows.txt") })
+	// The image's bytes land after the list.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		select {
+		case fn := <-f.posts:
+			fn()
+		case <-time.After(20 * time.Millisecond):
+		}
+		tt.Frame()
+	}
+	settle(tt)
+	if tt.HasText("Claude Code saved this as proof of its work.") {
+		t.Fatal("a row in the run shows its check's summary")
+	}
+	renderBoth(t, tt, "outputs-run")
 }

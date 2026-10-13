@@ -358,6 +358,17 @@ async fn a_stopping_relay_delivers_the_pushes_it_took() {
     apns.abort();
 }
 
+/// Polls `done` for up to ten seconds, and fails the test naming `what` when it never holds.
+async fn until(what: &str, done: impl Fn() -> bool) {
+    for _ in 0..200 {
+        if done() {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("timed out waiting until {what}");
+}
+
 /// A computer that joined by pairing pairs the next one: the identity device attests the first
 /// with the identity key, that one attests the next with its machine key, and the newest gets
 /// the account. Once unpaired, a computer pairs nobody.
@@ -380,12 +391,7 @@ async fn a_paired_computer_pairs_another() {
     assert_eq!(joined.account_dek, account.account_dek);
     assert_eq!(relay.state.db.machines_for(&account.identity_pubkey).await.unwrap().len(), 3);
     third.relay.token(&relay.url, &joined.machine().unwrap()).await.unwrap();
-    for _ in 0..50 {
-        if lorca::pairing::status(&second, &nonce)["state"] == "completed" {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
+    until("the second computer sees the pairing complete", || lorca::pairing::status(&second, &nonce)["state"] == "completed").await;
     assert_eq!(lorca::pairing::status(&second, &nonce)["device"]["name"], "Third");
 
     lorca::sync::unpair_device(&first, &second.this_device_id().unwrap()).await.unwrap();
@@ -408,12 +414,11 @@ async fn a_runner_answers_only_what_a_device_signed() {
     let loops = [tokio::spawn(lorca::sync::run(runner.clone())), tokio::spawn(lorca::sync::run(phone.clone()))];
     let (runner_id, phone_id) = (runner.this_device_id().unwrap(), phone.this_device_id().unwrap());
     // Each knows the other from the account's records, and the phone sees the Runner online.
-    for _ in 0..200 {
-        if phone.device_is_online(&runner_id) && runner.device(&phone_id).is_some() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
+    // The relay can list the Runner online before its machine blob reaches the phone, and
+    // `requests::ask` refuses a Runner the phone holds no record and key for.
+    until("the phone knows the Runner and its key", || phone.device(&runner_id).is_some_and(|runner| !runner.box_pubkey.is_empty())).await;
+    until("the phone sees the Runner online", || phone.device_is_online(&runner_id)).await;
+    until("the Runner knows the phone", || runner.device(&phone_id).is_some()).await;
     let chef = runner.state.lock().unwrap().bots[0].id.clone();
     lorca::requests::ask(&phone, &runner_id, "memory.read", serde_json::json!({ "bot_id": chef })).await.unwrap();
 
@@ -432,13 +437,7 @@ async fn a_runner_answers_only_what_a_device_signed() {
     };
     let signed = lorca::envelope::seal(&phone, "request", &runner_device, &save("docs")).unwrap();
     upload("signed", signed.clone()).await.unwrap();
-    for _ in 0..200 {
-        if servers().contains("docs") {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
-    assert!(servers().contains("docs"), "the signed request");
+    until("the Runner saves the signed request's server", || servers().contains("docs")).await;
     lorca::requests::ask(&phone, &runner_id, "mcp.remove", serde_json::json!({ "name": "docs" })).await.unwrap();
     assert!(!servers().contains("docs"));
 
@@ -470,15 +469,6 @@ async fn unpairing_a_device_makes_an_account_key_it_never_gets() {
         lorca::pairing::accept(device.clone(), &code, Some(name.into())).await.unwrap();
     }
     let mut loops = vec![tokio::spawn(lorca::sync::run(identity.clone())), tokio::spawn(lorca::sync::run(phone.clone())), tokio::spawn(lorca::sync::run(laptop.clone()))];
-    async fn until(what: &str, done: impl Fn() -> bool) {
-        for _ in 0..200 {
-            if done() {
-                return;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        }
-        panic!("timed out waiting until {what}");
-    }
     let laptop_id = laptop.this_device_id().unwrap();
     until("the identity device knows the laptop", || identity.device(&laptop_id).is_some()).await;
     let kept = laptop.dek().unwrap();

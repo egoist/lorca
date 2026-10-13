@@ -56,6 +56,8 @@ export function OutputRow({ series, isGroup, onPress }: { series: OutputSeries; 
 const CARD_WIDTH = 320;
 const PREVIEW_MAX = 200;
 const PREVIEW_MIN = 96;
+/// The icon's box in a run's row, where an image shows its own picture.
+const STACK_ICON = 24;
 
 const KIND_ACCENTS: Partial<Record<OutputKind, string>> = {
   link: "blue",
@@ -78,8 +80,11 @@ function outputTint(output: Output, p: Palette) {
 /// A published output in the transcript, standing without a bubble or a time: an image's preview
 /// (the top of a tall one, as a page's screenshot starts at its top), the file's icon, name, type
 /// and size, and what the bot checked. A tap opens the output's screen, or fetches again a file
-/// that could not be fetched.
-export function OutputCard({ message, maxWidth }: { message: Message; maxWidth: number }) {
+/// that could not be fetched. A run of one bot's outputs joins into one list (`stack` says
+/// whether the cards above and below are in it), a compact row each: the icon (an image's own
+/// picture), name, type and size, and the check's symbol; the check's words are on the output's
+/// screen.
+export function OutputCard({ message, maxWidth, stack }: { message: Message; maxWidth: number; stack?: { above: boolean; below: boolean } }) {
   useLanguage();
   const p = usePalette();
   const router = useRouter();
@@ -96,8 +101,9 @@ export function OutputCard({ message, maxWidth }: { message: Message; maxWidth: 
   const detail = error
     ? t("Couldn't download · Retry")
     : [outputTypeName(output), attachment ? fileSize(attachment.size) : ""].filter(Boolean).join(" · ");
+  const stacked = !!stack && (stack.above || stack.below);
   let preview: number | undefined;
-  if (kind === "image" && attachment) {
+  if (kind === "image" && attachment && !stacked) {
     const full = (width * Math.max(attachment.height ?? 3, 1)) / Math.max(attachment.width ?? 4, 1);
     preview = Math.min(Math.max(full, PREVIEW_MIN), PREVIEW_MAX);
   }
@@ -106,11 +112,46 @@ export function OutputCard({ message, maxWidth }: { message: Message; maxWidth: 
   const checkSymbol = evidence?.status === "passed" ? "checkmark.circle.fill" : evidence?.status === "failed" ? "xmark.circle.fill" : "circle.dashed";
   const summary = evidence?.summary.trim() ?? "";
   const spoken = [output.name, detail, evidence ? `${evidenceTitle(evidence)} · ${evidenceStatus(evidence)}: ${summary}` : ""].filter(Boolean).join(", ");
+  const open = () =>
+    error && attachment ? engine.retryFile(attachment) : router.push({ pathname: "/chat-info/output/[id]", params: { id: output.id, chat: message.chat_id } });
+  if (stacked) {
+    return (
+      <Pressable
+        onPress={open}
+        style={[
+          styles.stackRow,
+          { width, backgroundColor: p.outputCard, borderColor: p.separator },
+          !stack.above && styles.roundedAbove,
+          !stack.below && styles.roundedBelow,
+        ]}
+        accessibilityRole="button"
+        accessibilityLabel={spoken}
+      >
+        {stack.above && <View style={[styles.stackRule, { backgroundColor: p.separator }]} />}
+        <View style={styles.stackIcon}>
+          {kind === "image" && uri && !error ? (
+            <Image source={{ uri }} style={styles.thumbnail} contentFit="cover" transition={150} />
+          ) : (
+            <Symbol name={outputSymbol(output)} size={20} color={tint} />
+          )}
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.cardName, { color: p.label }]} numberOfLines={1} ellipsizeMode="middle">
+            {output.name}
+          </Text>
+          {detail ? (
+            <Text style={[styles.cardDetail, { color: error ? p.red : p.secondaryLabel }]} numberOfLines={1}>
+              {detail}
+            </Text>
+          ) : null}
+        </View>
+        {evidence && <Symbol name={checkSymbol} size={15} color={checkTint} />}
+      </Pressable>
+    );
+  }
   return (
     <Pressable
-      onPress={() =>
-        error && attachment ? engine.retryFile(attachment) : router.push({ pathname: "/chat-info/output/[id]", params: { id: output.id, chat: message.chat_id } })
-      }
+      onPress={open}
       style={[styles.card, { width, backgroundColor: p.outputCard, borderColor: p.separator }]}
       accessibilityRole="button"
       accessibilityLabel={spoken}
@@ -263,6 +304,13 @@ const styles = StyleSheet.create({
   status: { fontSize: Font.body },
   card: { borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, overflow: "hidden" },
   preview: { width: "100%", borderBottomWidth: StyleSheet.hairlineWidth },
+  stackRow: { flexDirection: "row", alignItems: "center", gap: 10, minHeight: 50, paddingHorizontal: 13, paddingVertical: 8, borderLeftWidth: StyleSheet.hairlineWidth, borderRightWidth: StyleSheet.hairlineWidth },
+  roundedAbove: { borderTopWidth: StyleSheet.hairlineWidth, borderTopLeftRadius: 16, borderTopRightRadius: 16 },
+  roundedBelow: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomLeftRadius: 16, borderBottomRightRadius: 16 },
+  // From the text's edge, as a list's rows are divided.
+  stackRule: { position: "absolute", top: 0, left: 13 + STACK_ICON + 10, right: 0, height: StyleSheet.hairlineWidth },
+  stackIcon: { width: STACK_ICON, height: STACK_ICON, alignItems: "center", justifyContent: "center" },
+  thumbnail: { width: STACK_ICON, height: STACK_ICON, borderRadius: 5 },
   cardHeader: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 13, paddingVertical: 11 },
   cardName: { fontSize: Font.message - 1, fontWeight: "600" },
   cardDetail: { fontSize: Font.small, marginTop: 1, fontVariant: ["tabular-nums"] },

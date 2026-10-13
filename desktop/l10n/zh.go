@@ -1426,6 +1426,7 @@ var zh = map[string]string{
 	"Ended|coding agent":                           "已结束",
 	"Failed|coding agent":                          "失败",
 	"Not allowed|coding agent":                     "未允许",
+	"Held by Auto-review|coding agent":             "被自动审查拦下",
 	"No answer|coding agent":                       "无人回应",
 	"Dismissed|coding agent":                       "已忽略",
 	"Stopped|coding agent":                         "已停止",

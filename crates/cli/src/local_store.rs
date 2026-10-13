@@ -600,6 +600,20 @@ impl LocalStore {
         Ok((messages, left_out))
     }
 
+    /// The chat's newest messages, oldest first: at least the newest `scan`, from a position
+    /// rounded down to a multiple of `align`, so that the window starts at the same message
+    /// while the chat grows by up to `align` and a provider's prompt cache keeps its prefix.
+    pub fn recent(&self, chat_id: &str, scan: usize, align: usize) -> anyhow::Result<Vec<Message>> {
+        let connection = self.connection.lock().unwrap();
+        let newest: Option<i64> = connection.query_row("SELECT MAX(position) FROM messages WHERE chat_id = ?1", params![chat_id], |row| row.get(0))?;
+        let Some(newest) = newest else { return Ok(Vec::new()) };
+        let align = align.max(1) as i64;
+        let start = (newest - scan as i64).max(0) / align * align;
+        let mut statement = connection.prepare("SELECT message_json FROM messages WHERE chat_id = ?1 AND position >= ?2 ORDER BY position")?;
+        let messages = collect_messages(statement.query_map(params![chat_id, start], |row| row.get::<_, String>(0))?);
+        messages
+    }
+
     pub fn messages_after(&self, chat_id: &str, message_id: &str) -> anyhow::Result<Vec<Message>> {
         let connection = self.connection.lock().unwrap();
         let Some(position) = connection

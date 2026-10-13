@@ -12,8 +12,8 @@ import (
 // The account's attention, after the macOS app's AttentionViewController: a popover under the
 // header's Attention button with each coordinator's latest brief, then what waits on the user,
 // urgent first. A row opens its chat, and an item waiting on a review the inspector lists opens
-// that review's sheet over it; its menu opens another source chat or marks it resolved. The
-// ⋯ menu holds the notification switches and the coordinator. Bots keep the list; the CLI sends
+// that review's sheet over it; its menu opens another source chat or marks it resolved, and a
+// brief's dismisses it. The ⋯ menu holds the notification switches and the coordinator. Bots keep the list; the CLI sends
 // it whole (attention.changed), and the popover follows it while it shows.
 
 // attentionWidth is the popover's, as the Mac's.
@@ -143,7 +143,7 @@ func (m *mainWindow) attentionBrief(c *ui.Context, brief model.AttentionBrief) u
 		keys = append(keys, l.key)
 	}
 	keyWidth := mcpFormLabelWidth(c, keys...)
-	return m.attentionRow(c, brief.ChatID, nil, strings.Join(spoken, "\n"), func() {
+	row := m.attentionRow(c, brief.ChatID, nil, strings.Join(spoken, "\n"), func() {
 		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(8).Children(func() {
 			ui.Row(c).Gap(6).Children(func() {
 				avatar(c, botAvatarOrSystem(bot), 18, false)
@@ -160,6 +160,12 @@ func (m *mainWindow) attentionBrief(c *ui.Context, brief model.AttentionBrief) u
 			})
 		})
 	})
+	row.ContextMenu(func(menu *ui.Menu) {
+		if menu.Item(L("Dismiss")).Chosen() {
+			store.DismissBrief(brief.CoordinatorBotID, brief.Revision, m.attentionFailed)
+		}
+	})
+	return row
 }
 
 // attentionItem is the category's symbol, the title, the next action, and "Review · Launch copy".

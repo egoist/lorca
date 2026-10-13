@@ -195,14 +195,33 @@ pub struct Incoming {
     /// The service id of the message it answers.
     pub reply_to: Option<String>,
     pub sender: String,
+    /// The person's words: the message's text, or a photo's caption, or nothing.
     pub text: String,
     /// When it was written, in Unix seconds; 0 when the service did not say.
     pub date: i64,
     pub mentions_bot: bool,
     pub replies_to_bot: bool,
+    /// The images that came with it, as the service names them. The reader fetches them once a
+    /// channel takes the message.
+    pub files: Vec<IncomingFile>,
+    /// Those images kept on this Runner, which the message carries as its attachments.
+    pub attachments: Vec<crate::model::Attachment>,
     /// Kept while its chat asked, and handed over once the user allowed the chat: the channel takes
     /// it although it came before the channel listened there.
     pub held: bool,
+}
+
+/// An image that came with a message, on the service.
+#[derive(Debug, Clone, Default)]
+pub struct IncomingFile {
+    /// The service's id to fetch it by: Telegram's `file_id`.
+    pub id: String,
+    /// The same file's id across bots and time: Telegram's `file_unique_id`.
+    pub unique_id: String,
+    pub name: String,
+    pub mime: String,
+    /// Its size when the service said.
+    pub size: Option<u64>,
 }
 
 /// A name or title someone outside Lorca chose, as it may appear around their words: one line,
@@ -268,6 +287,9 @@ pub struct Channels {
     problems: Mutex<HashMap<String, String>>,
     /// The account's own bot as the service describes it, by account id.
     identities: Mutex<HashMap<String, Identity>>,
+    /// The chat action a message's turn shows on the service, by conversation id.
+    #[cfg(feature = "runner")]
+    typing: Mutex<HashMap<String, runner::Showing>>,
 }
 
 /// The bot behind an account, as the service said when it was read.
@@ -381,6 +403,9 @@ mod runner {
         pub mentions_bot: bool,
         #[serde(default)]
         pub replies_to_bot: bool,
+        /// The images the reader fetched for it, kept on this Runner.
+        #[serde(default)]
+        pub attachments: Vec<crate::model::Attachment>,
     }
 
     impl HeldMessage {
@@ -397,6 +422,7 @@ mod runner {
                 date: if incoming.date > 0 { incoming.date } else { crate::config::now_unix() },
                 mentions_bot: incoming.mentions_bot,
                 replies_to_bot: incoming.replies_to_bot,
+                attachments: incoming.attachments.clone(),
             }
         }
 
@@ -415,6 +441,8 @@ mod runner {
                 date: self.date,
                 mentions_bot: self.mentions_bot,
                 replies_to_bot: self.replies_to_bot,
+                files: Vec::new(),
+                attachments: self.attachments,
                 held: true,
             }
         }
@@ -662,15 +690,18 @@ mod runner {
         format!("ext-{}", &crate::keys::b64(&digest)[..22])
     }
 
-    /// Hands a service's message to every channel of its account that takes it: the message goes
-    /// into that channel's conversation and its inbox. An error leaves the message for the reader
-    /// to hand over again, which keeps one copy of each.
-    pub fn ingest(app: &Arc<App>, incoming: &Incoming) -> anyhow::Result<usize> {
-        if incoming.text.trim().is_empty() {
-            return Ok(0);
-        }
-        let incoming = &Incoming { text: outside_text(app, &incoming.text), ..incoming.clone() };
-        let mut taken = 0;
+    /// What the channels of a message's account make of it.
+    struct Takers {
+        /// The channels that take it, each with the message as that channel sees it.
+        takers: Vec<(String, SubscriptionConfig, Incoming)>,
+        /// The chat is one no channel lists, so it asks to be allowed.
+        asks: bool,
+        /// A channel would take the message once the chat is allowed.
+        wanted: bool,
+    }
+
+    fn takers(app: &App, incoming: &Incoming) -> anyhow::Result<Takers> {
+        let mut takers = Vec::new();
         let channels = event_triggers::channel_configs(app, &incoming.account_id)?;
         let allowed = channels.iter().any(|(_, config, _)| config.channel.as_ref().is_some_and(|spec| spec.chats.iter().any(|chat| chat.id == incoming.chat_id)));
         let (mut asks, mut wanted) = (false, false);
@@ -697,15 +728,43 @@ mod runner {
             if incoming.service == SLACK && incoming.thread_id.is_some() && has_conversation(app, &channel_id, &incoming) {
                 incoming.replies_to_bot = true;
             }
-            let incoming = &incoming;
-            if !spec.listen.takes(incoming) {
-                continue;
+            if spec.listen.takes(&incoming) {
+                takers.push((channel_id, config, incoming));
             }
+        }
+        Ok(Takers { takers, asks, wanted })
+    }
+
+    /// Whether any channel takes the message, or would once its chat is allowed, so its images are
+    /// worth fetching.
+    pub(crate) fn taken(app: &App, incoming: &Incoming) -> bool {
+        takers(app, incoming).is_ok_and(|found| !found.takers.is_empty() || (found.wanted && !load_account(app, &incoming.account_id).ignored.contains(&incoming.chat_id)))
+    }
+
+    /// Hands a service's message to every channel of its account that takes it: the message goes
+    /// into that channel's conversation and its inbox, with the images the reader fetched for it.
+    /// An error leaves the message for the reader to hand over again, which keeps one copy of each.
+    pub fn ingest(app: &Arc<App>, incoming: &Incoming) -> anyhow::Result<usize> {
+        if incoming.text.trim().is_empty() && incoming.attachments.is_empty() && incoming.files.is_empty() {
+            return Ok(0);
+        }
+        let incoming = &Incoming { text: outside_text(app, &incoming.text), ..incoming.clone() };
+        let mut taken = 0;
+        let Takers { takers, asks, wanted } = takers(app, incoming)?;
+        for (channel_id, config, incoming) in takers {
+            let Some(spec) = &config.channel else { continue };
+            let incoming = &incoming;
             let chat = conversation(app, &channel_id, &config, spec, incoming)?;
             let id = contact_message_id(&channel_id, incoming);
             if app.store.message(&chat.meta.id, &id)?.is_none() {
+                // The bytes go out ahead of the message that names them, for the other Devices.
+                for attachment in &incoming.attachments {
+                    if let Err(error) = crate::files::push_blob(app, Some(&chat.meta.id), attachment) {
+                        tracing::warn!(%error, name = %attachment.name, "uploading a channel message's image");
+                    }
+                }
                 let reply_to = incoming.reply_to.as_deref().and_then(|external| by_external_id(app, &chat.meta.id, external)).and_then(|quoted| ReplyTo::quoting(&quoted));
-                let mut message = Message::new(&chat.meta.id, Author::Contact { name: incoming.sender.clone() }, Body::Text { text: incoming.text.clone(), attachments: Vec::new(), mentions: Vec::new(), reply_to });
+                let mut message = Message::new(&chat.meta.id, Author::Contact { name: incoming.sender.clone() }, Body::Text { text: incoming.text.clone(), attachments: incoming.attachments.clone(), mentions: Vec::new(), reply_to });
                 message.id = id.clone();
                 message.external_id = Some(incoming.message_id.clone());
                 app.upsert_message(message, true);
@@ -925,6 +984,54 @@ mod runner {
         message.external_id = Some(external_id.to_string());
         message.notification = Some(crate::attention::Notification::Quiet);
         app.upsert_message(message, true);
+    }
+
+    // MARK: - Typing
+
+    /// A turn showing its chat action: the Job, the service's chat, and what stops it.
+    pub(crate) struct Showing {
+        job_id: String,
+        chat_id: String,
+        stop: CancellationToken,
+    }
+
+    /// Ends a turn's chat action when the turn ends, however it ends.
+    pub struct Typing {
+        app: Arc<App>,
+        conversation_id: String,
+        job_id: String,
+        stop: CancellationToken,
+    }
+
+    impl Drop for Typing {
+        fn drop(&mut self) {
+            self.stop.cancel();
+            let mut typing = self.app.channels.typing.lock().unwrap();
+            if typing.get(&self.conversation_id).is_some_and(|showing| showing.job_id == self.job_id) {
+                typing.remove(&self.conversation_id);
+            }
+        }
+    }
+
+    /// Shows the bot typing in a Telegram conversation's chat while the turn of a message its
+    /// channel took runs, from the account's own bot, until the bot's reply there goes out
+    /// ([`replied`]), the turn is stopped (`cancel`), or the returned guard drops at its end.
+    pub fn typing(app: &Arc<App>, chat: &Chat, job_id: &str, cancel: &CancellationToken) -> Option<Typing> {
+        let channel = chat.meta.channel.as_ref().filter(|channel| channel.service == TELEGRAM)?;
+        let token = tokens(app, &channel.account_id, TELEGRAM)?.into_iter().next()?;
+        let stop = cancel.child_token();
+        let showing = Showing { job_id: job_id.to_string(), chat_id: channel.chat_id.clone(), stop: stop.clone() };
+        app.channels.typing.lock().unwrap().insert(chat.meta.id.clone(), showing);
+        tokio::spawn(telegram::typing(app.clone(), token, channel.chat_id.clone(), channel.thread_id.clone(), stop.clone()));
+        Some(Typing { app: app.clone(), conversation_id: chat.meta.id.clone(), job_id: job_id.to_string(), stop })
+    }
+
+    /// The bot's message went out to a chat: the turn of the conversation that sent it shows no
+    /// chat action there from now on.
+    pub(crate) fn replied(app: &App, conversation_id: &str, chat_id: &str) {
+        if let Some(showing) = app.channels.typing.lock().unwrap().get(conversation_id).filter(|showing| showing.chat_id == chat_id) {
+            showing.stop.cancel();
+        }
     }
 
     // MARK: - Readers

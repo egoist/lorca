@@ -146,16 +146,25 @@ struct NoticeMetrics {
     var labelFrame: NSRect
 }
 
+/// Where an output's card sits in a run of one bot's outputs, which join into one list of
+/// compact rows: whether the card above and the one below are in the run too.
+struct OutputStack: Hashable {
+    var above = false
+    var below = false
+
+    var isStacked: Bool { above || below }
+}
+
 enum ChatRow: Hashable {
     case day(Date)
-    case message(id: Message.ID, groupStart: Bool)
+    case message(id: Message.ID, groupStart: Bool, stack: OutputStack = OutputStack())
     /// Bots with a turn running, shown after the last message.
     case working([Bot.ID])
     /// A one-line note after the last message, such as "Chef stopped without replying".
     case status(String)
 
     var messageID: Message.ID? {
-        if case let .message(id, _) = self { return id }
+        if case let .message(id, _, _) = self { return id }
         return nil
     }
 
@@ -411,12 +420,14 @@ final class ChatLayout {
         case .status:
             return ChatMetrics.statusRowHeight
 
-        case let .message(_, groupStart):
+        case let .message(_, groupStart, stack):
             guard let message else { return 0 }
             let top = groupStart ? ChatMetrics.groupTopPadding : ChatMetrics.tightTopPadding
             let indent = ChatMetrics.indent(showsAvatar: showsAvatar)
 
             switch message.body {
+            case .text where message.isOutputCard && stack.isStacked:
+                return (stack.above ? 0 : top) + OutputCellView.stackedHeight
             case .text where message.isOutputCard:
                 return top + outputHeight(for: message, tableWidth: tableWidth, indent: indent)
 

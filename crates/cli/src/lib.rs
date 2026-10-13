@@ -19,6 +19,8 @@ pub mod credentials;
 pub mod crypto;
 #[cfg(feature = "runner")]
 pub mod decisions;
+#[cfg(feature = "runner")]
+pub mod docs;
 pub mod drafts;
 pub mod envelope;
 pub mod events;

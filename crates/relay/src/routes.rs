@@ -378,7 +378,7 @@ async fn put_blob(State(state): State<AppState>, auth: Auth, Json(body): Json<Pu
     if inserted.existing {
         return Ok(Json(json!({ "id": id, "seq": inserted.seq, "existing": true })));
     }
-    state.db.publish(db::Event::Blobs { identity: auth.identity_pubkey.clone(), recipient: body.recipient_machine_pubkey.clone() }).await;
+    state.db.publish(db::Event::Blobs { identity: auth.identity_pubkey.clone(), recipient: body.recipient_machine_pubkey.clone(), sender: Some(auth.machine_pubkey.clone()) }).await;
     Ok(Json(json!({ "id": id, "seq": inserted.seq })))
 }
 
@@ -425,7 +425,7 @@ async fn put_file(State(state): State<AppState>, auth: Auth, Path(id): Path<Stri
         }
     };
     if !inserted.existing {
-        state.db.publish(db::Event::Blobs { identity: auth.identity_pubkey, recipient: None }).await;
+        state.db.publish(db::Event::Blobs { identity: auth.identity_pubkey, recipient: None, sender: Some(auth.machine_pubkey) }).await;
     }
     Ok(Json(json!({ "id": id, "seq": inserted.seq, "existing": inserted.existing })))
 }

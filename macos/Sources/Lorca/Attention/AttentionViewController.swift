@@ -28,6 +28,7 @@ struct AttentionBrief: Decodable, Equatable {
     var decisions: [String]
     var changes: [String]
     var nextAction: String
+    var revision: AttentionRevision
     var updatedAt: Double
 }
 struct AttentionPreferences: Decodable, Equatable {
@@ -64,7 +65,7 @@ extension AttentionItem {
 
 /// The account's attention, in a popover under the toolbar's Attention button: each
 /// coordinator's latest brief, then what waits on the user, urgent first. A row opens its
-/// chat, and an item waiting on a review the inspector lists opens that review's sheet over it; its menu opens another source chat or marks it resolved. The options menu holds the
+/// chat, and an item waiting on a review the inspector lists opens that review's sheet over it; its menu opens another source chat or marks it resolved, and a brief's dismisses it. The options menu holds the
 /// notification switches and the coordinator. Bots keep the list; the CLI sends it whole
 /// (`attention.changed`), and the popover follows it while it shows.
 final class AttentionViewController: NSViewController, NSMenuDelegate {
@@ -211,6 +212,13 @@ final class AttentionViewController: NSViewController, NSMenuDelegate {
         let row = AttentionRowView(content: stack)
         row.setAccessibilityLabel(([L("%@’s brief", bot?.name ?? L("Coordinator"))] + lines.map { "\($0): \($1)" }).joined(separator: "\n"))
         row.onClick = { [weak self] in self?.onOpen?(brief.chatId, nil) }
+        row.contextMenu = { [weak self] in self?.menu(for: brief) }
+        row.setAccessibilityCustomActions([
+            NSAccessibilityCustomAction(name: L("Dismiss")) { [weak self] in
+                self?.dismiss(brief)
+                return true
+            }
+        ])
         return row
     }
 
@@ -314,6 +322,27 @@ final class AttentionViewController: NSViewController, NSMenuDelegate {
 
     private func resolve(_ item: AttentionItem) {
         perform { try await $0.resolveAttention(item) }
+    }
+
+    /// Dismiss, which takes the brief off the list until the coordinator publishes another.
+    private func menu(for brief: AttentionBrief) -> NSMenu {
+        let menu = NSMenu()
+        let dismiss = NSMenuItem(title: L("Dismiss"), action: #selector(dismissFromMenu(_:)), keyEquivalent: "")
+        dismiss.target = self
+        dismiss.representedObject = brief.coordinatorBotId
+        menu.addItem(dismiss)
+        return menu
+    }
+
+    @objc private func dismissFromMenu(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? Bot.ID,
+            let brief = store.attention.briefs.first(where: { $0.coordinatorBotId == id })
+        else { return }
+        dismiss(brief)
+    }
+
+    private func dismiss(_ brief: AttentionBrief) {
+        perform { try await $0.dismissBrief(brief) }
     }
 
     /// Stretches a vertical stack's views across it.

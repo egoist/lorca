@@ -254,8 +254,14 @@ pub struct Local {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum Event {
-    /// The identity has a new blob. One sealed to a machine concerns that machine alone.
-    Blobs { identity: String, recipient: Option<String> },
+    /// The identity has a new blob. One sealed to a machine concerns that machine alone, and
+    /// the machine that wrote it pulls it in the same round without being told.
+    Blobs {
+        identity: String,
+        recipient: Option<String>,
+        #[serde(default)]
+        sender: Option<String>,
+    },
     /// The identity's machine list or a machine's presence changed.
     Machines { identity: String },
     /// A machine was unpaired: its tokens die and its sockets close.
@@ -265,7 +271,7 @@ pub enum Event {
 impl Local {
     pub fn deliver(&self, event: &Event) {
         match event {
-            Event::Blobs { identity, recipient } => self.hub.blobs(identity, recipient.as_deref()),
+            Event::Blobs { identity, recipient, sender } => self.hub.blobs(identity, recipient.as_deref(), sender.as_deref()),
             Event::Machines { identity } => self.hub.machines(identity),
             Event::Revoked { identity, machine } => {
                 self.revoked.insert(machine);

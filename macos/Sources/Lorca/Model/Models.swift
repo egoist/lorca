@@ -1439,6 +1439,8 @@ struct AgentRun: Hashable {
     var state: State
     /// Working, with nothing new for a while.
     var stalled = false
+    /// Auto-review held its start and told the bot why, without asking: it is `denied`.
+    var held = false
     var question: Question?
     var output: String?
     var outcome: String?
@@ -1476,7 +1478,7 @@ struct AgentRun: Hashable {
         case .exited: L("Ended", context: "coding agent")
         case .failed: L("Failed", context: "coding agent")
         case .stopped: L("Stopped", context: "coding agent")
-        case .denied: L("Not allowed", context: "coding agent")
+        case .denied: held ? L("Held by Auto-review", context: "coding agent") : L("Not allowed", context: "coding agent")
         case .expired: L("No answer", context: "coding agent")
         case .dismissed: L("Dismissed", context: "coding agent")
         }

@@ -6,6 +6,16 @@ Sparkle shows it in the update window. The Windows and Linux app's are in
 
 ## [Unreleased]
 
+- Right-click a brief in Attention and choose Dismiss to take it off the list on every Device; the coordinator's next brief shows again. A brief also leaves once every item it is about is resolved.
+- A bot resolves an Attention item it alone reported as soon as it sees the work is done, such as a run it approved or a pull request that merged, so you no longer clear them by hand.
+- A bot listening on Telegram sees the photos people send it, with a caption or without one, and an album's photos together as one message. The photo shows in the conversation on every Device.
+
+## [1.0.16]
+
+- While a bot's turn runs for a message a Telegram channel took, that chat shows the bot typing, and the reply stops it.
+- A custom provider's model offers the thinking levels its own list declares, `xhigh` and `max` included, and sends them as written.
+- Every bot has a built-in `lorca` skill that points at the docs on lorca.app, so it looks up how Lorca works instead of guessing.
+
 ## [1.0.15]
 
 - A chat that asks for a channel gets one reply, "Pending approval", and once you allow it, the bot answers what people asked while it waited. A chat that never asks, such as a group where the bot only hears replies to it, can be added by its id with Add… on the channel's Chats row.

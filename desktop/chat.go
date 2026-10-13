@@ -98,8 +98,20 @@ type chatRow struct {
 	at         time.Time
 	message    *model.Message
 	groupStart bool
-	botIDs     []string
-	text       string
+	// stack is where an output's card sits in a run of one bot's outputs, which join into one list.
+	stack  outputStack
+	botIDs []string
+	text   string
+}
+
+// outputStack says whether the cards above and below an output's are in its run.
+type outputStack struct{ above, below bool }
+
+func (s outputStack) stacked() bool { return s.above || s.below }
+
+// isOutputCard is a bot's published output, which shows as a card of its own.
+func isOutputCard(message *model.Message) bool {
+	return message.Output != nil && message.Author.Kind != model.AuthorYou
 }
 
 // buildRows lays the transcript out as rows, after the macOS app's rebuildRows: a day separator
@@ -128,6 +140,13 @@ func buildRows(chat *model.Chat, working []string, stoppedNotice string) []chatR
 			previousAuthor = &author
 		}
 		previousDate = message.CreatedAt
+	}
+	// Each run of one bot's outputs, with nothing between them, joins into one list.
+	for i := 1; i < len(rows); i++ {
+		above, below := &rows[i-1], &rows[i]
+		if above.kind == rowMessage && below.kind == rowMessage && isOutputCard(above.message) && isOutputCard(below.message) && above.message.Author.Same(below.message.Author) {
+			above.stack.below, below.stack.above = true, true
+		}
 	}
 	if len(working) > 0 {
 		rows = append(rows, chatRow{kind: rowWorking, key: "working", botIDs: working})
@@ -240,7 +259,7 @@ func (m *mainWindow) chatRowView(c *ui.Context, chat *model.Chat, row chatRow, s
 		}
 		switch body := message.Body; body.Kind {
 		case model.BodyText:
-			m.messageCell(c, chat, message, row.groupStart, showsAvatar, s)
+			m.messageCell(c, chat, message, row.groupStart, row.stack, showsAvatar, s)
 		case model.BodyTool:
 			if body.Tool.Agent != nil {
 				m.agentCard(c, chat, message, cardAvatar, row.groupStart)
@@ -303,13 +322,16 @@ func quoteAuthorName(author model.Author) string {
 	return "Lorca"
 }
 
-func (m *mainWindow) messageCell(c *ui.Context, chat *model.Chat, message *model.Message, groupStart, showsAvatar bool, s *chatState) {
+func (m *mainWindow) messageCell(c *ui.Context, chat *model.Chat, message *model.Message, groupStart bool, stack outputStack, showsAvatar bool, s *chatState) {
 	p := colors(c)
 	isUser := message.Author.Kind == model.AuthorYou
 	text := message.Body.Text
 	showsName := showsAvatar && groupStart
 	top := float32(groupTopPadding)
-	if !groupStart {
+	switch {
+	case stack.above:
+		top = 0
+	case !groupStart:
 		top = tightTopPadding
 	}
 	left := float32(horizontalInset)
@@ -353,7 +375,7 @@ func (m *mainWindow) messageCell(c *ui.Context, chat *model.Chat, message *model
 				}
 			}
 			if message.Output != nil && !isUser {
-				m.outputCard(c, chat, message, s)
+				m.outputCard(c, chat, message, stack, s)
 				return
 			}
 			bubble := ui.Column(c).MaxWidthPercent(100).MinWidth(0).Padding(10, 14).Radius(14).FontSize(textMessage)
@@ -475,6 +497,8 @@ const (
 	outputCardWidth  = 320
 	outputPreviewMax = 200
 	outputPreviewMin = 96
+	// outputStackIcon is the icon's box in a run's row.
+	outputStackIcon = 24
 )
 
 // outputTint is the color of an output's icon, by what it is.
@@ -503,8 +527,10 @@ func outputTint(p *palette, kind model.OutputKind) ui.Color {
 // outputCard is a published output in the transcript, standing without a bubble: an image's
 // preview, the file's icon, name, type and size, and what the bot checked. It shows no time: the
 // stamps belong to the bubbles. A click opens the
-// output's sheet; the menu opens or saves the file, and replies to it.
-func (m *mainWindow) outputCard(c *ui.Context, chat *model.Chat, message *model.Message, s *chatState) {
+// output's sheet; the menu opens or saves the file, and replies to it. A run of one bot's outputs
+// joins into one list, a compact row each: the icon, name, type and size, and the check's symbol;
+// the check's words are in the output's sheet.
+func (m *mainWindow) outputCard(c *ui.Context, chat *model.Chat, message *model.Message, stack outputStack, s *chatState) {
 	p := colors(c)
 	output := message.Output
 	kind := output.Kind()
@@ -528,6 +554,24 @@ func (m *mainWindow) outputCard(c *ui.Context, chat *model.Chat, message *model.
 	ui.Row(c).AlignItems(ui.End).Gap(8).MaxWidthPercent(100).MinWidth(0).Children(func() {
 		card := ui.ButtonBase(c.Key("output:"+message.ID)).Width(outputCardWidth).MaxWidthPercent(100).Shrink(1).Radius(12).Clip().
 			Background(p.OutputCard).Border(1, p.Separator).Shadow(0, 1, 2, 0, ui.RGBA(0, 0, 0, 0.04)).Cursor(ui.CursorPointer).Label(output.Name).Tooltip(output.Name)
+		if stack.stacked() {
+			// Rounded and closed only at the run's ends; the rows between share their edges.
+			top, bottom := float32(12), float32(12)
+			topBorder, bottomBorder := float32(1), float32(1)
+			if stack.above {
+				top, topBorder = 0, 0
+			}
+			if stack.below {
+				bottom, bottomBorder = 0, 0
+			}
+			card.Radius(top, top, bottom, bottom).BorderWidth(topBorder, 1, bottomBorder, 1)
+			if stack.above {
+				card.Shadow(0, 0, 0, 0, ui.RGBA(0, 0, 0, 0))
+			}
+			if evidence := output.Evidence; evidence != nil && fileError == "" {
+				card.Tooltip(output.Name + "\n" + evidence.Title() + " · " + evidence.StatusText())
+			}
+		}
 		if s.flashID == message.ID {
 			if elapsed := c.Now().Sub(s.flashAt); elapsed < 1100*time.Millisecond {
 				phase := float64(elapsed) / float64(1100*time.Millisecond)
@@ -538,6 +582,14 @@ func (m *mainWindow) outputCard(c *ui.Context, chat *model.Chat, message *model.
 			}
 		}
 		card.Children(func() {
+			if stack.stacked() {
+				thumbnail := ""
+				if kind == model.OutputImage && fileError == "" {
+					thumbnail = path
+				}
+				outputStackRow(c, p, output, tint, detail, fileError, thumbnail, stack.above)
+				return
+			}
 			ui.Column(c).FillWidth().Children(func() {
 				if kind == model.OutputImage && attachment != nil && fileError == "" {
 					outputCardPreview(c, *attachment, path)
@@ -587,6 +639,50 @@ func (m *mainWindow) outputCard(c *ui.Context, chat *model.Chat, message *model.
 	})
 }
 
+// outputStackRow is an output's row in a run of them: the icon (an image's own picture, once its
+// bytes at `thumbnail` are here), name, type and size, and the check's symbol at the end, under a
+// rule from the text's edge when a row is above it.
+func outputStackRow(c *ui.Context, p *palette, output *model.Output, tint ui.Color, detail, fileError, thumbnail string, ruled bool) {
+	ui.Column(c).FillWidth().Children(func() {
+		if ruled {
+			ui.Box(c).Margin(0, 0, 0, 12+outputStackIcon+10).Height(1).Background(p.Separator)
+		}
+		ui.Row(c).FillWidth().Height(44).Padding(0, 12).Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Box(c).Size(outputStackIcon, outputStackIcon).Center().TextColor(tint).Children(func() {
+				if bitmap := loadBitmap(thumbnail); bitmap != nil {
+					ui.Image(c, bitmap).Size(outputStackIcon, outputStackIcon).Radius(5).Fit(ui.Cover)
+				} else {
+					symbol(c, output.Symbol(), 20, 1.6)
+				}
+			})
+			ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(1).Children(func() {
+				ui.Text(c, output.Name).FontSize(13).FontWeight(600).TextColor(p.Label).SingleLine()
+				switch {
+				case fileError != "":
+					ui.Text(c, L("Couldn't download · Retry")).FontSize(11.5).TextColor(p.Red).SingleLine()
+				case detail != "":
+					ui.Text(c, detail).FontSize(11.5).TextColor(p.Label2).FontFeatures("tnum").SingleLine()
+				}
+			})
+			if evidence := output.Evidence; evidence != nil {
+				symbolName, checkTint := evidenceSymbol(p, *evidence)
+				ui.Box(c).TextColor(checkTint).Children(func() { symbol(c, symbolName, 15, 2) })
+			}
+		})
+	})
+}
+
+// evidenceSymbol is how a check went, as a symbol and its color.
+func evidenceSymbol(p *palette, evidence model.OutputEvidence) (string, ui.Color) {
+	switch evidence.Status {
+	case "passed":
+		return "checkmark.circle.fill", p.Green
+	case "failed":
+		return "xmark.circle.fill", p.Red
+	}
+	return "circle.dashed", p.Label2
+}
+
 // outputCardPreview is an image output's picture across the top of its card: the whole picture when
 // it is wide, the top of it when it is tall, as a page's screenshot starts at its top.
 func outputCardPreview(c *ui.Context, attachment model.Attachment, path string) {
@@ -616,13 +712,7 @@ func outputCardPreview(c *ui.Context, attachment model.Attachment, path string) 
 
 // outputCheck is what the bot checked: how it went, its summary, and the command it ran.
 func outputCheck(c *ui.Context, p *palette, evidence model.OutputEvidence) {
-	symbolName, tint := "circle.dashed", p.Label2
-	switch evidence.Status {
-	case "passed":
-		symbolName, tint = "checkmark.circle.fill", p.Green
-	case "failed":
-		symbolName, tint = "xmark.circle.fill", p.Red
-	}
+	symbolName, tint := evidenceSymbol(p, evidence)
 	ui.Box(c).FillWidth().Height(1).Background(p.Separator)
 	ui.Row(c).FillWidth().Padding(9, 12, 10, 12).Gap(8).AlignItems(ui.Start).Children(func() {
 		ui.Box(c).Margin(1, 0, 0, 0).TextColor(tint).Children(func() { symbol(c, symbolName, 15, 2) })

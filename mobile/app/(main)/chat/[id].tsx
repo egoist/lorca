@@ -73,6 +73,8 @@ const FOCUS_GROWTH_GUESS = 36;
 /// How far from the end the transcript is scrolled before the jump-to-bottom disc shows.
 const JUMP_DISTANCE = 160;
 const JUMP_DISC = 36;
+/// How near the end a scroll the user lets go of has to rest for the transcript to keep following.
+const FOLLOW_DISTANCE = 24;
 /// How near the computed end a scroll offset counts as there. Android rounds the composer's
 /// space to whole pixels.
 const END_TOLERANCE = Platform.OS === "ios" ? 1 : 2;
@@ -120,6 +122,10 @@ export default function ChatScreen() {
   const publishComposerExtra = useCallback(() => {
     const actual = composerActual.current;
     const compact = composerCompact.current;
+    // Until the composer's first layout there is no compact height, and the guess stands. A
+    // keyboard that comes to rest before then (one dismissed on the way into the chat) would
+    // otherwise publish an infinite inset, and UIKit throws on the NaN scroll bar it makes.
+    if (!Number.isFinite(compact)) return;
     const expanded = actual > compact + 1;
     composerExtraTarget.value = expanded
       ? actual
@@ -168,7 +174,7 @@ export default function ChatScreen() {
   // from the content height, the viewport and the composer inset rather than read from the
   // scroll view, and the list stays invisible until a scroll event confirms it sits there.
   // Until the user drags (or the list has been quiet for a moment after its first load), every
-  // change re-pins it; `settled` also keeps FlashList's own catch-up scrolls instant meanwhile.
+  // change re-pins it.
   const settling = useRef(true);
   const pinQueued = useRef(false);
   const pinIssued = useRef(false);
@@ -176,7 +182,6 @@ export default function ChatScreen() {
   // True while the last thing that happened was a scroll event landing on the computed end.
   const confirmed = useRef(false);
   const lastOffset = useRef<number | null>(null);
-  const [settled, setSettled] = useState(false);
   // The reveal is a shared value: showing the list costs no render of the screen.
   const reveal = useSharedValue(0);
   const setRevealed = useCallback(
@@ -211,6 +216,8 @@ export default function ChatScreen() {
   const anchorKey = useRef<string | null>(null);
   const anchorTarget = useRef<number | null>(null);
   const [anchored, setAnchored] = useState(false);
+  const anchoredRef = useRef(anchored);
+  anchoredRef.current = anchored;
   // A transcript shorter than the list sits on FlashList's bottom-up padding, which shrinks as
   // rows come in: every row would move up with each piece of the reply, a frame ahead of any
   // scroll that answers it. While a message is anchored the padding is held by a header of a
@@ -390,6 +397,9 @@ export default function ChatScreen() {
     )
       return;
     anchorTarget.current = target;
+    // Rows above the anchor are measured as the user scrolls up to them: one who has scrolled
+    // since the send stays where they are.
+    if (anchorTouched.current) return;
     if (Platform.OS === "ios") {
       list.scrollToOffset({ offset: target, animated: true });
       watchAnchor(true);
@@ -422,7 +432,17 @@ export default function ChatScreen() {
   const [composerHeight, setComposerHeight] = useState(
     composerGuess - COMPOSER_GAP,
   );
+  // Once settled, the transcript follows its end as content arrives, until the user scrolls
+  // away: from a drag (or the fling after it) that comes to rest off the end, nothing moves
+  // the list until they scroll back down, jump to the end, or send. While their finger or
+  // fling is still on it, nothing follows either.
+  const following = useRef(true);
+  const userScrolling = useRef(false);
+  const dragging = useRef(false);
+  const restTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const jumpToEnd = useCallback(() => {
+    following.current = true;
+    userScrolling.current = false;
     if (Platform.OS === "ios")
       listRef.current?.scrollToOffset({ offset: restingEnd(), animated: true });
     else listRef.current?.scrollToEnd({ animated: true });
@@ -533,7 +553,6 @@ export default function ChatScreen() {
   pinToBottomRef.current = pinToBottom;
   const stopSettling = useCallback(() => {
     settling.current = false;
-    setSettled(true);
     setRevealed(true);
     if (settleTimer.current) clearTimeout(settleTimer.current);
     settleTimer.current = null;
@@ -544,6 +563,51 @@ export default function ChatScreen() {
     anchorTouched.current = true;
     stopSettling();
   }, [stopSettling]);
+  const onScrollBeginDrag = useCallback(() => {
+    if (restTimer.current) clearTimeout(restTimer.current);
+    restTimer.current = null;
+    userScrolling.current = true;
+    dragging.current = true;
+    beginDrag();
+  }, [beginDrag]);
+  // A fling's momentum starts right after the drag ends; without one, the drag's end is the rest.
+  const onScrollEndDrag = useCallback(() => {
+    dragging.current = false;
+    if (restTimer.current) clearTimeout(restTimer.current);
+    restTimer.current = setTimeout(() => {
+      restTimer.current = null;
+      userScrolling.current = false;
+    }, 50);
+  }, []);
+  const onMomentumScrollBegin = useCallback(() => {
+    if (restTimer.current) clearTimeout(restTimer.current);
+    restTimer.current = null;
+  }, []);
+  // Scrolls sent from here end with this event too, so it does not end a drag.
+  const onMomentumScrollEnd = useCallback(() => {
+    if (dragging.current || restTimer.current) return;
+    userScrolling.current = false;
+  }, []);
+  const onScrollToTop = useCallback(() => {
+    following.current = false;
+    beginDrag();
+  }, [beginDrag]);
+  // FlashList's own catch-up is off (it scrolls to the end on any change near the bottom, even
+  // under a dragging finger); the end is followed here instead, and only by a reader who stayed.
+  // A reader left behind gets the jump-to-bottom disc once the end has moved far enough below
+  // them; FlashList's offset already counts its correction for a page loaded above.
+  const followEnd = useCallback(() => {
+    const list = listRef.current;
+    if (!list || settling.current || anchoredRef.current) return;
+    if (following.current && !userScrolling.current)
+      return list.scrollToEnd({ animated: true });
+    const offset = list.getAbsoluteLastScrollOffset();
+    const toEnd =
+      Platform.OS === "ios"
+        ? restingEnd() - offset
+        : contentHeight.current - layoutHeight.current - offset;
+    setAwayFromEnd(toEnd > JUMP_DISTANCE);
+  }, [restingEnd]);
   keyboardStartRef.current = (height) => {
     compactAtKeyboardStart.current =
       composerActual.current <= composerCompact.current + 1;
@@ -561,15 +625,19 @@ export default function ChatScreen() {
     setSpacer(0);
     holdRef.current = 0;
     setHold(0);
-    setSettled(false);
     setRevealed(false);
     setAwayFromEnd(false);
+    following.current = true;
+    userScrolling.current = false;
+    dragging.current = false;
     // A chat with nothing to measure (or a load that never reports) still has to show up.
     const fallback = setTimeout(() => setRevealed(true), 800);
     return () => {
       clearTimeout(fallback);
       if (blankPending.current) clearTimeout(blankPending.current);
       blankPending.current = null;
+      if (restTimer.current) clearTimeout(restTimer.current);
+      restTimer.current = null;
       stopSettling();
     };
   }, [id, releaseAnchor, stopSettling]);
@@ -581,6 +649,10 @@ export default function ChatScreen() {
           ? restingEnd() - contentOffset.y
           : contentSize.height - layoutMeasurement.height - contentOffset.y;
       setAwayFromEnd(!settling.current && distance > JUMP_DISTANCE);
+      // Measured to the computed end on both platforms: Android's content size leaves out the
+      // composer's space.
+      if (userScrolling.current)
+        following.current = restingEnd() - contentOffset.y <= FOLLOW_DISTANCE;
       lastOffset.current = contentOffset.y;
       if (anchorKey.current && Platform.OS === "ios") watchAnchor();
       if (!settling.current) return;
@@ -621,10 +693,8 @@ export default function ChatScreen() {
     [composerBlank, composerExtra],
   );
 
-  // FlashList scrolls to the end whenever `data` changes identity while the list sits near the
-  // bottom, animated once settled. Everything it is handed is therefore kept stable across
-  // renders: the state flip on the first drag (stopSettling) re-renders this screen, and a fresh
-  // rows array or renderItem there would launch an animated scroll-to-end against the drag.
+  // Everything FlashList is handed is kept stable across renders: a fresh rows array or
+  // renderItem makes it diff the data and re-render every mounted row.
   const contentInset = useMemo(() => ({ top: insetTop }), [insetTop]);
   const head = useMemo(
     () => (spacer > 0 ? <View style={{ height: spacer }} /> : null),
@@ -643,12 +713,11 @@ export default function ChatScreen() {
   const maintainVisibleContentPosition = useMemo(
     () => ({
       startRenderingFromBottom: fromBottom,
-      // An anchored message holds the end still; FlashList's own catch-up would race the
-      // shrinking space below it.
-      autoscrollToBottomThreshold: anchored ? -1 : 0.25,
-      animateAutoScrollToBottom: settled,
+      // Its catch-up flag outlives a switch to -1 and fires on the next change, so it is never
+      // on: the open pins and followEnd keep the end.
+      autoscrollToBottomThreshold: -1,
     }),
-    [anchored, fromBottom, settled],
+    [fromBottom],
   );
 
   useFocusEffect(useCallback(() => {
@@ -727,6 +796,7 @@ export default function ChatScreen() {
         .sendMessage(id, text, files, mentions, replyTo)
         .then((message) => {
           stopSettling();
+          following.current = true;
           anchorKey.current = message.id;
           anchorTarget.current = null;
           anchorTouched.current = false;
@@ -869,11 +939,12 @@ export default function ChatScreen() {
         <SoftScrollEdgeView
           style={styles.transcript}
           onLayout={(e) => {
-            if (e.nativeEvent.layout.height !== layoutHeight.current)
-              unconfirm();
+            const resized = e.nativeEvent.layout.height !== layoutHeight.current;
+            if (resized) unconfirm();
             layoutHeight.current = e.nativeEvent.layout.height;
             syncInsetTop();
             pinToBottom();
+            if (resized) followEnd();
           }}
         >
           <FlashList
@@ -907,10 +978,12 @@ export default function ChatScreen() {
               settleTimer.current = setTimeout(stopSettling, 1500);
             }}
             onContentSizeChange={(_w, h) => {
-              if (h !== contentHeight.current) unconfirm();
+              const changed = h !== contentHeight.current;
+              if (changed) unconfirm();
               contentHeight.current = h;
               syncInsetTop();
               pinToBottom();
+              if (changed) followEnd();
             }}
             // Nearing the first message: the page before it. Not while the list is still
             // finding the end after opening.
@@ -920,8 +993,11 @@ export default function ChatScreen() {
             onStartReachedThreshold={1}
             onScroll={onScroll}
             scrollEventThrottle={16}
-            onScrollBeginDrag={beginDrag}
-            onScrollToTop={beginDrag}
+            onScrollBeginDrag={onScrollBeginDrag}
+            onScrollEndDrag={onScrollEndDrag}
+            onMomentumScrollBegin={onMomentumScrollBegin}
+            onMomentumScrollEnd={onMomentumScrollEnd}
+            onScrollToTop={onScrollToTop}
             renderItem={renderItem}
             ListHeaderComponent={head}
             ListFooterComponent={Platform.OS === "android" ? foot : slack}

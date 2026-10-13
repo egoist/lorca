@@ -518,6 +518,19 @@ final class AppStore {
         _ = try await client.request("attention.resolve", ["id": item.id, "expected_revision": item.revision.params])
     }
 
+    /// Takes a coordinator's brief off the Attention list, on every Device, until it publishes
+    /// another.
+    func dismissBrief(_ brief: AttentionBrief) async throws {
+        if isMock {
+            var view = attention
+            view.briefs.removeAll { $0.coordinatorBotId == brief.coordinatorBotId }
+            return applyAttention(view)
+        }
+        _ = try await client.request(
+            "attention.dismiss_brief",
+            ["coordinator_bot_id": brief.coordinatorBotId, "expected_revision": brief.revision.params])
+    }
+
     /// `summaries`, `urgent_direct`, or `default_coordinator_bot_id` (a bot's id, or nil for
     /// each chat's own coordinator). The account's, on every Device.
     func setAttentionPreference(_ key: String, _ value: Any?) async throws {

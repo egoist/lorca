@@ -740,6 +740,7 @@ enum Wire {
         var branch: String?
         var state: String
         var stalled: Bool?
+        var held: Bool?
         var question: Question?
         var output: String?
         var outcome: String?
@@ -1015,7 +1016,7 @@ extension Wire.Agent {
     func toModel() -> AgentRun {
         AgentRun(
             id: id, kind: kind, host: host, task: task ?? "", folder: folder ?? "", branch: branch,
-            state: AgentRun.State(rawValue: state) ?? .stopped, stalled: stalled ?? false,
+            state: AgentRun.State(rawValue: state) ?? .stopped, stalled: stalled ?? false, held: held ?? false,
             question: question.flatMap { question in
                 AgentRun.Question.Kind(rawValue: question.kind).map {
                     AgentRun.Question(

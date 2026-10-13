@@ -13,6 +13,7 @@ pub mod mcp;
 pub mod mcp_json;
 #[cfg(feature = "runner")]
 pub mod review;
+pub mod review_prompt;
 pub mod sign_in;
 pub mod accounts;
 #[cfg(feature = "runner")]

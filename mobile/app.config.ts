@@ -2,7 +2,7 @@ import type { ExpoConfig } from "expo/config";
 
 // The phone app's version on both platforms. A release (`mobile-vX.Y.Z`) names it, and Android
 // orders its builds by a versionCode made from it: 1.2.3 is 1002003.
-const version = "1.0.4";
+const version = "1.0.5";
 const [major, minor, patch] = version.split(".").map(Number);
 
 export default (): ExpoConfig => {

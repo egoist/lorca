@@ -411,6 +411,8 @@ impl Agents {
             branch: record.branch,
             state: if question.is_some() && open { "asking".into() } else { record.state },
             stalled: record.stalled,
+            // A held start never makes an agent.
+            held: false,
             question: question.filter(|_| open),
             output: (!output.trim().is_empty()).then_some(output),
             outcome: record.outcome,
@@ -1132,9 +1134,16 @@ async fn approve(app: &Arc<App>, agent: &Arc<Agent>, approval: Approval) -> Resu
     let trigger = record.trigger();
     let cancel = tokio_util::sync::CancellationToken::new();
     let propose_rule = matches!(approval, Approval::Command { .. });
-    let action = crate::plugins::review::Action { target_name: &runner_name, tool, description: &description, args: &args, script: None, propose_rule };
-    let crate::plugins::review::Outcome::Ask { reason, rule } = crate::plugins::review::review(app, &bot, &record.chat_id, &trigger, action, &cancel).await else {
-        return Ok(());
+    let facts = match &approval {
+        Approval::Command { command } => crate::local_review::facts(app, command, &folder).await,
+        _ => Vec::new(),
+    };
+    let action = crate::plugins::review::Action { target_name: &runner_name, tool, description: &description, args: &args, script: None, facts: &facts, propose_rule };
+    let (reason, rule) = match crate::plugins::review::review(app, &bot, &record.chat_id, &trigger, action, &cancel).await {
+        crate::plugins::review::Outcome::Allow => return Ok(()),
+        // The agent reads why and goes on another way, or stops and says what it needed.
+        crate::plugins::review::Outcome::Held { reason, .. } => return Err(crate::plugins::review::agent_note(&reason)),
+        crate::plugins::review::Outcome::Ask { reason, rule } => (reason, rule),
     };
     // One question at a time, on its card.
     let _one = agent.asking.lock().await;
@@ -1217,7 +1226,7 @@ async fn answer_screen(app: &Arc<App>, agent: &Arc<Agent>, screen: String) {
             );
             let args = json!({ "question": question.text, "answer": question.choices[index] });
             let trigger = record.trigger();
-            let action = crate::plugins::review::Action { target_name: &runner_name, tool: "coding_agent_question", description: &description, args: &args, script: None, propose_rule: false };
+            let action = crate::plugins::review::Action { target_name: &runner_name, tool: "coding_agent_question", description: &description, args: &args, script: None, facts: &[], propose_rule: false };
             let cancel = tokio_util::sync::CancellationToken::new();
             if crate::plugins::review::review(app, &bot, &record.chat_id, &trigger, action, &cancel).await == crate::plugins::review::Outcome::Allow {
                 if !still() {

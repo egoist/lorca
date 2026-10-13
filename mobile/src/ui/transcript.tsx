@@ -42,7 +42,7 @@ const NOTICE_ICON = 14;
 
 export type Row =
   | { key: string; type: "day"; at: number }
-  | { key: string; type: "message"; message: Message; groupStart: boolean; groupEnd: boolean; showsName: boolean }
+  | { key: string; type: "message"; message: Message; groupStart: boolean; groupEnd: boolean; showsName: boolean; stackAbove: boolean; stackBelow: boolean }
   | { key: string; type: "marker"; text: string; bot: Bot | undefined; tooltip?: string; groupStart: boolean }
   | { key: string; type: "notice"; text: string; groupStart: boolean }
   | { key: string; type: "permission"; message: Message; body: Extract<Body, { kind: "permission" }>; bot: Bot | undefined; groupStart: boolean }
@@ -73,6 +73,8 @@ export function buildRows(chat: Chat, bots: Map<string, Bot>, workingBotIds: str
         const nextKey = next ? keyOf(next.author) : null;
         const nextSeparated = next ? next.created_at - message.created_at >= SEPARATOR_GAP_SECS : true;
         const groupEnd = nextSeparated || nextKey !== authorKey || next?.body.kind !== "text";
+        // A run of one bot's outputs joins into one list.
+        const output = isOutputCard(message);
         rows.push({
           key: message.id,
           type: "message",
@@ -80,6 +82,8 @@ export function buildRows(chat: Chat, bots: Map<string, Bot>, workingBotIds: str
           groupStart,
           groupEnd,
           showsName: showsSpeakers(chat) && (message.author.kind === "bot" || message.author.kind === "contact") && groupStart,
+          stackAbove: output && !groupStart && isOutputCard(shown[i - 1]),
+          stackBelow: output && !groupEnd && isOutputCard(next),
         });
         previousAuthorKey = authorKey;
         break;
@@ -181,6 +185,11 @@ export function quoteAuthorName(author: Author, bots: Map<string, Bot>): string 
   return "Lorca";
 }
 
+/// A bot's published output, which shows as a card of its own.
+function isOutputCard(message: Message): boolean {
+  return message.output !== undefined && message.author.kind !== "you";
+}
+
 /// Who a run of bubbles belongs to: the user, one bot, or one person outside Lorca.
 function keyOf(author: Author): string {
   if (author.kind === "bot") return `bot:${author.bot_id}`;
@@ -260,7 +269,7 @@ export const MessageRow = memo(function MessageRow({
   useLanguage();
   const p = usePalette();
   const paneWidth = usePaneWidth();
-  const { message, groupStart, groupEnd, showsName } = row;
+  const { message, groupStart, groupEnd, showsName, stackAbove, stackBelow } = row;
   const quote = message.body.kind === "text" ? message.body.reply_to : undefined;
   const pulse = useSharedValue(1);
   useEffect(() => {
@@ -276,7 +285,7 @@ export const MessageRow = memo(function MessageRow({
   const failed = message.state.kind === "failed";
   const showsAvatar = isGroup && !isYou;
   // A bot's published output is a card of its own, without a bubble.
-  const isOutput = message.output !== undefined && !isYou;
+  const isOutput = isOutputCard(message);
   // The bubble column is 80% of the pane, up to a readable line; the bubble pads 13 a side.
   // Attachments and the text both fit that width.
   const columnWidth = Math.min(Math.floor(paneWidth * 0.8), BUBBLE_COLUMN_MAX);
@@ -289,7 +298,7 @@ export const MessageRow = memo(function MessageRow({
       <Symbol name="arrowshape.turn.up.left.fill" size={16} color={p.secondaryLabel} />
     </Animated.View>
     <Animated.View style={swipe.follow}>
-    <View style={[styles.messageRow, { paddingTop: groupStart ? 14 : 3 }, isYou ? styles.messageRowYou : styles.messageRowBot]}>
+    <View style={[styles.messageRow, { paddingTop: stackAbove ? 0 : groupStart ? 14 : 3 }, isYou ? styles.messageRowYou : styles.messageRowBot]}>
       {showsAvatar && (
         <View style={{ width: AVATAR + GUTTER, alignSelf: "flex-end" }}>
           {groupEnd && (contact !== undefined ? <ContactAvatar name={contact} size={AVATAR} /> : <BotAvatar bot={bot} size={AVATAR} />)}
@@ -318,7 +327,7 @@ export const MessageRow = memo(function MessageRow({
         <GestureDetector gesture={swipe.pan}>
         {isOutput ? (
           <Animated.View style={pulsing}>
-            <OutputCard message={message} maxWidth={columnWidth - (showsAvatar ? AVATAR + GUTTER : 0)} />
+            <OutputCard message={message} maxWidth={columnWidth - (showsAvatar ? AVATAR + GUTTER : 0)} stack={{ above: stackAbove, below: stackBelow }} />
           </Animated.View>
         ) : (
         <Animated.View
@@ -845,7 +854,7 @@ export function agentStatus(agent: AgentRun): string {
     case "failed":
       return tc("Failed", "coding agent");
     case "denied":
-      return tc("Not allowed", "coding agent");
+      return agent.held ? tc("Held by Auto-review", "coding agent") : tc("Not allowed", "coding agent");
     case "expired":
       return tc("No answer", "coding agent");
     case "dismissed":

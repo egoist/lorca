@@ -186,7 +186,7 @@ pub fn incoming(account_id: &str, me: &Identity, event: &Value) -> Option<Incomi
         mentions_bot: kind == "app_mention" || (!me.user_id.is_empty() && text.contains(&mention)),
         replies_to_bot: thread_ts.is_some() && event["parent_user_id"].as_str() == Some(me.user_id.as_str()),
         text,
-        held: false,
+        ..Incoming::default()
     })
 }
 

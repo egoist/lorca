@@ -2215,7 +2215,13 @@ pub async fn review_call(
     // The script the call comes from says what the whole batch is for.
     let script = ctx.parent.filter(|parent| parent.name == codemode::CODEMODE_TOOL_NAME).and_then(|parent| parent.arguments["code"].as_str());
     let outcome = super::review::decide(app, bot, chat_id, trigger, &tool.plugin_id, &tool.plugin_name, &name, &review_description, ctx.args, script, ctx.cancel).await;
-    let super::review::Outcome::Ask { reason, .. } = outcome else { return None };
+    let reason = match outcome {
+        super::review::Outcome::Allow => return None,
+        // The bot reads why and finds another way, or asks the user in the chat.
+        super::review::Outcome::Held { note, .. } if !unattended => return Some(crate::local_review::blocked(note)),
+        super::review::Outcome::Held { reason, .. } => Some(reason),
+        super::review::Outcome::Ask { reason, .. } => reason,
+    };
     if unattended {
         let staged = crate::review_execution::stage_call(app, bot, chat_id, trigger, &ctx.tool_call.id,
             crate::review_queue::ReviewPayload::Plugin { plugin_id: tool.plugin_id.clone(), server_name: tool.server_name.clone(), tool: name.clone(), arguments: ctx.args.clone() },
