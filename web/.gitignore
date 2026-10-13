@@ -8,3 +8,5 @@ dist
 # Copied from crates/models/catalog.json and crates/cli/marketplace/index.json by vite.config.ts.
 public/models
 public/marketplace
+# Written from the newest desktop release by vite.config.ts.
+public/desktop-upgrade-url.txt

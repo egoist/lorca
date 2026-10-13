@@ -1,6 +1,9 @@
 # Releasing the Mac app
 
-Lorca.app updates itself with [Sparkle](https://sparkle-project.org). Releases live in a
+Lorca on the Mac is the desktop app now ([docs/releasing-desktop.md](releasing-desktop.md)). This
+app no longer updates itself: it reads `https://lorca.app/desktop-upgrade-url.txt` and offers the
+desktop app's disk image to download by hand. Its last release reaches earlier installs through
+[Sparkle](https://sparkle-project.org), which those versions run. Releases live in a
 Cloudflare R2 bucket served at `https://mac-releases.lorca.app`: a notarized `.dmg` for a first
 download, a `.zip` Sparkle installs (with binary deltas from recent versions), and
 `appcast.xml`, the feed the app polls. Sparkle checks every archive against the EdDSA public key
@@ -13,7 +16,8 @@ git tag mac-v0.2.0 && git push origin mac-v0.2.0   # on GitHub Actions
 ```
 
 - Updater: [`macos/Sources/Lorca/App/Updater.swift`](../macos/Sources/Lorca/App/Updater.swift).
-  **Check for Updates…** in the app menu, and the Updates rows in Settings ▸ General.
+  **Check for Updates…** in the app menu and in Settings ▸ General: the desktop app's download
+  link from the site, when it has one. Sparkle is never started.
 - Bundle: [`scripts/app.ts`](../scripts/app.ts) writes the version, `SUFeedURL`, and
   `SUPublicEDKey` into Info.plist, embeds Sparkle.framework, and signs.
 - Release: [`scripts/release-mac.ts`](../scripts/release-mac.ts),
@@ -220,15 +224,13 @@ gh secret set R2_ENDPOINT --body https://<ACCOUNT_ID>.r2.cloudflarestorage.com
   Sparkle compares `CFBundleVersion`, so it goes up with every release.
 - **The update replaces the whole bundle**, the CLI in `Contents/Resources/bin` included. The app
   stops its CLI when it quits for the install and starts the new one on relaunch.
-- **Sparkle lives in the bundle.** SwiftPM links against the framework under
+- **Sparkle lives in the bundle, unused.** SwiftPM links against the framework under
   `macos/.build/artifacts`; `buildApp` copies it into `Contents/Frameworks`, which the
-  `@executable_path/../Frameworks` rpath in `Package.swift` resolves against. Debug bundles carry it
-  too, since the binary links it.
-- **Automatic checks are on** (`SUEnableAutomaticChecks`), so Sparkle never asks for permission on
-  the second launch. Settings ▸ General ▸ Updates turns them off, and has the switch for installing
-  updates without asking.
-- **A debug build never updates.** `Updater.isEnabled` is false under `DEBUG`: the menu item and
-  the settings rows leave themselves out of the dev loop's bundle.
+  `@executable_path/../Frameworks` rpath in `Package.swift` resolves against. The app never starts
+  it; Info.plist keeps `SUPublicEDKey` because the Sparkle of an earlier install refuses an update
+  that drops the key.
+- **A debug build never checks.** `Updater.isEnabled` is false under `DEBUG`: the menu item and
+  the settings row leave themselves out of the dev loop's bundle.
 - **The build is for the Mac that runs it.** `cargo build` and `swift build` target the host
   architecture, so a release cut on Apple silicon, the workflow's runner included, is an arm64
   app.

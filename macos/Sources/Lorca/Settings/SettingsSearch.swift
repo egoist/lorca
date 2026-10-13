@@ -31,10 +31,6 @@ struct SettingsEntry: Hashable {
         keywords: [L("dictate speech voice microphone locale")]) }
     static var version: SettingsEntry { SettingsEntry(
         .general, L("Check for Updates"), row: L("Version"), keywords: [L("update upgrade release sparkle")]) }
-    static var automaticChecks: SettingsEntry { SettingsEntry(
-        .general, L("Check for updates automatically"), keywords: [L("update upgrade background")]) }
-    static var automaticDownloads: SettingsEntry { SettingsEntry(
-        .general, L("Download and install updates automatically"), keywords: [L("update upgrade background")]) }
 
     static var autoReviewSwitch: SettingsEntry { SettingsEntry(
         .autoReview, L("Check actions before they run"),
@@ -102,7 +98,7 @@ enum SettingsSearch {
         switch pane {
         case .general:
             [.sendOnReturn, .timestamps, .appearance, .appLanguage, .dictationLanguage]
-                + (Updater.isEnabled ? [.version, .automaticChecks, .automaticDownloads] : [])
+                + (Updater.isEnabled ? [.version] : [])
         case .autoReview: [.autoReviewSwitch, .autoReviewModel, .autoReviewRules]
         case .sharedLinks: []
         case .advanced: [.relayURL, .cliPort, .onboarding] + (store.hasIdentity == true ? [.deleteAccount] : [])
