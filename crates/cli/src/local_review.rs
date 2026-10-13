@@ -1360,17 +1360,19 @@ mod tests {
         run(&tree, &["commit", "-qm", "b"]);
         std::fs::write(tree.join("c.txt"), "c").unwrap();
 
-        let command = format!("cd {} && git worktree remove --force {} && git branch -D fix main-copy", repo.display(), tree.display());
+        // Commands name paths as bash does, with `/`, which is also what Git Bash takes on Windows.
+        let shell = |path: &Path| path.display().to_string().replace('\\', "/");
+        let command = format!("cd {} && git worktree remove --force {} && git branch -D fix main-copy", shell(&repo), shell(&tree));
         let facts = git_facts(&command, &scratch, &worktrees, None);
         assert_eq!(facts.len(), 2, "{facts:?}");
         assert!(facts[0].ends_with("is a git working tree on fix: 0 changed and 1 untracked files not committed, 2 commits found on no remote. Lorca made it for a coding agent."), "{}", facts[0]);
         assert_eq!(facts[1], "Branch fix has 1 commit found nowhere else.");
         // A branch that is not there says nothing.
         assert!(!facts.iter().any(|fact| fact.contains("main-copy")));
-        let clean = git_facts(&format!("git -C {} reset --hard", repo.display()), &scratch, &worktrees, None);
+        let clean = git_facts(&format!("git -C {} reset --hard", shell(&repo)), &scratch, &worktrees, None);
         assert!(clean[0].ends_with("is a git working tree on main: no uncommitted changes, 1 commit found on no remote."), "{clean:?}");
         assert!(git_facts("cargo build && git status", &repo, &worktrees, None).is_empty());
-        assert_eq!(git_facts("rm -rf gone", &repo, &worktrees, None)[0], format!("{}/gone does not exist.", repo.display()));
+        assert_eq!(git_facts("rm -rf gone", &repo, &worktrees, None)[0], format!("{} does not exist.", repo.join("gone").display()));
         let _ = std::fs::remove_dir_all(scratch);
     }
 
