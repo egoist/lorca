@@ -26,12 +26,13 @@ type AttentionItem struct {
 	Revision         AttentionRevision `json:"revision"`
 }
 type AttentionBrief struct {
-	CoordinatorBotID string   `json:"coordinator_bot_id"`
-	ChatID           string   `json:"chat_id"`
-	Decisions        []string `json:"decisions"`
-	Changes          []string `json:"changes"`
-	NextAction       string   `json:"next_action"`
-	UpdatedAt        float64  `json:"updated_at"`
+	CoordinatorBotID string            `json:"coordinator_bot_id"`
+	ChatID           string            `json:"chat_id"`
+	Decisions        []string          `json:"decisions"`
+	Changes          []string          `json:"changes"`
+	NextAction       string            `json:"next_action"`
+	Revision         AttentionRevision `json:"revision"`
+	UpdatedAt        float64           `json:"updated_at"`
 }
 type AttentionPreferences struct {
 	Summaries               bool    `json:"summaries"`
@@ -66,6 +67,25 @@ func (s *Store) ResolveAttention(id string, revision AttentionRevision, done fun
 	}
 	params := map[string]any{"id": id, "expected_revision": revision}
 	Async(s, func() (struct{}, error) { return struct{}{}, s.request("attention.resolve", params, nil) }, func(_ struct{}, err error) {
+		if done != nil {
+			done(err)
+		}
+	})
+}
+
+// DismissBrief takes a coordinator's brief off the list, on every Device, until it publishes
+// another. The revision binds the action to the brief the user saw.
+func (s *Store) DismissBrief(coordinatorBotID string, revision AttentionRevision, done func(error)) {
+	if s.IsMock {
+		s.Attention.Briefs = slices.DeleteFunc(slices.Clone(s.Attention.Briefs), func(brief AttentionBrief) bool { return brief.CoordinatorBotID == coordinatorBotID })
+		s.applyAttention(s.Attention)
+		if done != nil {
+			done(nil)
+		}
+		return
+	}
+	params := map[string]any{"coordinator_bot_id": coordinatorBotID, "expected_revision": revision}
+	Async(s, func() (struct{}, error) { return struct{}{}, s.request("attention.dismiss_brief", params, nil) }, func(_ struct{}, err error) {
 		if done != nil {
 			done(err)
 		}

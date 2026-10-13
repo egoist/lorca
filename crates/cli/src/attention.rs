@@ -106,6 +106,9 @@ pub struct Brief {
     pub message_id: String,
     pub revision: Revision,
     pub updated_at: f64,
+    /// The user took it off the list. It stays out until the coordinator publishes a new brief.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dismissed: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -215,7 +218,8 @@ fn project(app: &App, records: &[Record], include_resolved: bool) -> View {
         match &record.content {
             Content::Observation { item } => groups.entry(item.id.clone()).or_default().push(item),
             Content::Brief { brief }
-                if app.bot(&brief.coordinator_bot_id).is_some()
+                if !brief.dismissed
+                    && app.bot(&brief.coordinator_bot_id).is_some()
                     && app.chat(&brief.chat_id).is_some() =>
             {
                 briefs.push(brief.clone())
@@ -252,6 +256,11 @@ fn project(app: &App, records: &[Record], include_resolved: bool) -> View {
             items.push(item)
         }
     }
+    // A brief that links items is news about them: once none of them is active, it is done too.
+    briefs.retain(|brief| {
+        brief.item_ids.is_empty()
+            || brief.item_ids.iter().any(|id| items.iter().any(|item| item.id == *id && !item.resolved))
+    });
     items.sort_by(|a, b| b.urgent.cmp(&a.urgent).then(b.revision.cmp(&a.revision)));
     briefs.sort_by(|a, b| b.revision.cmp(&a.revision));
     View {
@@ -652,14 +661,14 @@ fn publish_brief(
             return Err("Brief links must name your active attention items".into());
         }
     }
-    if let Some(old) = current.briefs.iter().find(|brief| {
-        brief.coordinator_bot_id == input.coordinator_bot_id
-            && brief.decisions == input.decisions
+    // The same words again make no write, and a brief the user dismissed stays dismissed.
+    if let Some(old) = stored_brief(&known, &input.coordinator_bot_id).filter(|brief| {
+        brief.decisions == input.decisions
             && brief.changes == input.changes
             && brief.next_action == input.next_action
             && brief.item_ids == input.item_ids
     }) {
-        return Ok(old.clone());
+        return Ok(old);
     }
     let dm = app
         .dm_with(&input.coordinator_bot_id, None)
@@ -694,11 +703,12 @@ fn publish_brief(
         message_id: message.id.clone(),
         revision: revision.clone(),
         updated_at: now_secs(),
+        dismissed: false,
     };
     save(
         app,
         &Record {
-            id: hash(&format!("brief:{}", brief.coordinator_bot_id)),
+            id: brief_id(&brief.coordinator_bot_id),
             revision,
             content: Content::Brief {
                 brief: brief.clone(),
@@ -710,6 +720,66 @@ fn publish_brief(
     changed(app);
     crate::push::attention(app, &message);
     Ok(brief)
+}
+
+fn brief_id(coordinator_bot_id: &str) -> String {
+    hash(&format!("brief:{coordinator_bot_id}"))
+}
+
+/// A coordinator's current brief as stored, dismissed or not.
+fn stored_brief(records: &[Record], coordinator_bot_id: &str) -> Option<Brief> {
+    let id = brief_id(coordinator_bot_id);
+    records
+        .iter()
+        .filter(|record| record.id == id)
+        .max_by_key(|record| &record.revision)
+        .and_then(|record| match &record.content {
+            Content::Brief { brief } => Some(brief.clone()),
+            _ => None,
+        })
+}
+
+/// The user takes a coordinator's brief off the list on every Device. The coordinator's next
+/// brief shows again. `expected` refuses a brief that changed since the user saw it.
+pub fn dismiss_brief(
+    app: &App,
+    coordinator_bot_id: &str,
+    actor: Option<&str>,
+    expected: Option<&Revision>,
+) -> Result<(), String> {
+    if actor.is_some() {
+        return Err("Only the user dismisses a brief".into());
+    }
+    let _write = WRITES.lock().unwrap();
+    let known = records(app)?;
+    let mut brief = stored_brief(&known, coordinator_bot_id).ok_or("Unknown brief")?;
+    if brief.dismissed {
+        return Ok(());
+    }
+    if expected.is_some_and(|expected| *expected != brief.revision) {
+        return Err("This brief changed on another Device. Look at it again before dismissing it.".into());
+    }
+    brief.dismissed = true;
+    brief.revision = next_revision(app, &known)?;
+    save(
+        app,
+        &Record {
+            id: brief_id(coordinator_bot_id),
+            revision: brief.revision.clone(),
+            content: Content::Brief { brief },
+        },
+    )?;
+    drop(_write);
+    changed(app);
+    Ok(())
+}
+
+fn expected_revision(params: &Value) -> Result<Option<Revision>, String> {
+    params
+        .get("expected_revision")
+        .map(|value| serde_json::from_value(value.clone()))
+        .transpose()
+        .map_err(|e| e.to_string())
 }
 
 pub fn dispatch(
@@ -735,12 +805,12 @@ pub fn dispatch(
         )?)),
         "attention.resolve" => {
             let id = params["id"].as_str().ok_or("missing id")?;
-            let expected: Option<Revision> = params
-                .get("expected_revision")
-                .map(|value| serde_json::from_value(value.clone()))
-                .transpose()
-                .map_err(|e| e.to_string())?;
-            Ok(json!(resolve(app, id, actor, expected.as_ref())?))
+            Ok(json!(resolve(app, id, actor, expected_revision(&params)?.as_ref())?))
+        }
+        "attention.dismiss_brief" => {
+            let bot = params["coordinator_bot_id"].as_str().ok_or("missing coordinator_bot_id")?;
+            dismiss_brief(app, bot, actor, expected_revision(&params)?.as_ref())?;
+            Ok(json!({}))
         }
         "attention.brief" => Ok(json!(publish_brief(
             app,
@@ -885,7 +955,7 @@ impl lorca_agent::Tool for AttentionTool {
 /// The attention part of a turn's system prompt. `reported` is a coordinator's turn that an
 /// attention report started.
 pub fn prompt(app: &App, bot_id: &str, chat_id: &str, reported: bool) -> String {
-    let mut prompt = format!("\nAttention: when work needs the user (a review, a blocker, a commitment, or an important change), record it with the attention tool's report under a stable topic key, with the next action. This chat's id is {chat_id}. A report goes to the coordinating bot, which tells the user; mark it urgent only when it cannot wait, which also alerts the user directly, and quiet for a check that found nothing new. A coordinating bot keeps one brief of decisions and changes, without repeating transcripts, and resolves items once they are done.\n");
+    let mut prompt = format!("\nAttention: when work needs the user (a review, a blocker, a commitment, or an important change), record it with the attention tool's report under a stable topic key, with the next action. This chat's id is {chat_id}. A report goes to the coordinating bot, which tells the user; mark it urgent only when it cannot wait, which also alerts the user directly, and quiet for a check that found nothing new. A coordinating bot keeps one brief of decisions and changes, without repeating transcripts, links the items it is about in item_ids so it leaves the list once they are resolved, and resolves items once they are done.\n");
     if reported {
         prompt.push_str("This turn was started by an attention report. Read the attention list, publish a brief when the user needs to know something, resolve what is finished, and answer with exactly PASS when nothing needs the user.\n");
     }
@@ -1158,6 +1228,46 @@ mod tests {
         assert!(
             !message.counts_unread(),
             "quiet checks do not add an unread badge"
+        );
+    }
+
+    #[test]
+    fn briefs_leave_with_their_items_or_when_the_user_dismisses_them() {
+        let account = Account::new();
+        let item = report(&account.app, account.report(), Some(&account.scout.id), 0).unwrap();
+        let brief = |decision: &str, item_ids: Vec<String>| {
+            dispatch(&account.app, "attention.brief", json!({"coordinator_bot_id":account.chef.id,"decisions":[decision],"changes":[],"next_action":"Merge it","item_ids":item_ids,"quiet":true}), Some(&account.chef.id)).unwrap()
+        };
+        brief("Merge #196", vec![item.id.clone()]);
+        assert_eq!(view(&account.app).unwrap().briefs.len(), 1);
+        resolve(&account.app, &item.id, None, None).unwrap();
+        assert!(
+            view(&account.app).unwrap().briefs.is_empty(),
+            "a brief leaves once every item it links is resolved"
+        );
+
+        let unlinked: Brief = serde_json::from_value(brief("Merge #193", vec![])).unwrap();
+        assert_eq!(view(&account.app).unwrap().briefs.len(), 1);
+        assert!(
+            dismiss_brief(&account.app, &account.chef.id, Some(&account.chef.id), None).is_err(),
+            "bots do not dismiss the user's briefs"
+        );
+        let stale = Revision { counter: 0, ..unlinked.revision.clone() };
+        assert!(dismiss_brief(&account.app, &account.chef.id, None, Some(&stale)).is_err());
+        dispatch(&account.app, "attention.dismiss_brief", json!({"coordinator_bot_id":account.chef.id,"expected_revision":unlinked.revision}), None).unwrap();
+        assert!(view(&account.app).unwrap().briefs.is_empty());
+        let rows = records(&account.app).unwrap();
+        brief("Merge #193", vec![]);
+        assert_eq!(
+            records(&account.app).unwrap(),
+            rows,
+            "the same brief again stays dismissed"
+        );
+        brief("Merge #192", vec![]);
+        assert_eq!(
+            view(&account.app).unwrap().briefs[0].decisions,
+            ["Merge #192"],
+            "the coordinator's next brief shows"
         );
     }
 

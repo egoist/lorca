@@ -101,6 +101,19 @@ func TestAttentionPopover(t *testing.T) {
 		t.Fatal("the item stayed")
 	}
 
+	// A brief's menu dismisses it.
+	if err := tt.RightClick("Ship the relay with TLS on by default."); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.ChooseMenuItem(L("Dismiss")); err != nil {
+		t.Fatalf("%v in %q", err, tt.Menu())
+	}
+	settle(tt)
+	if len(store.Attention.Briefs) != 0 || tt.HasText("Ship the relay with TLS on by default.") {
+		t.Fatal("the brief stayed")
+	}
+
 	// A click on a row opens its chat and closes the popover.
 	if err := tt.Click("Staging certificate expires tonight"); err != nil {
 		t.Fatal(err)

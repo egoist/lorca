@@ -1,7 +1,7 @@
 // What waits on the user across chats, after the Mac's Attention popover: each coordinator's
 // latest brief, then the items, urgent first. A tap opens the chat an item came from, and when
 // the item waits on a review the chat's details list, that review's screen over it; a long
-// press opens another of its chats or marks it resolved. The ⋯ menu holds the notification
+// press opens another of its chats or marks it resolved, and on a brief dismisses it. The ⋯ menu holds the notification
 // switches and the coordinator. Bots keep the list; the core sends it whole (`attention.changed`).
 
 import { MenuView, type MenuAction, type MenuComponentRef } from "@expo/ui/community/menu";
@@ -72,11 +72,13 @@ export default function AttentionScreen() {
       <CloseToolbar label={Platform.OS === "android" ? t("Close") : t("Done")} onClose={() => router.back()} />
       <OptionsMenu />
       <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.content} onLayout={(e) => setWidth(e.nativeEvent.layout.width - 32)}>
-        {attention.briefs.map((brief) => (
-          <Section key={brief.coordinator_bot_id}>
-            <BriefCell brief={brief} onPress={() => open(brief.chat_id)} />
-          </Section>
-        ))}
+        {width > 0
+          ? attention.briefs.map((brief) => (
+              <Section key={brief.coordinator_bot_id}>
+                <BriefCell brief={brief} width={width} onPress={() => open(brief.chat_id)} />
+              </Section>
+            ))
+          : null}
         {attention.items.length > 0 && width > 0 ? (
           <Section>
             {attention.items.map((item) => (
@@ -126,42 +128,60 @@ function OptionsMenu() {
 }
 
 /// The coordinator and when, then what was decided, what changed, and what comes next, each
-/// word in a column as wide as the widest.
-function BriefCell({ brief, onPress }: { brief: AttentionBrief; onPress: () => void }) {
+/// word in a column as wide as the widest. A long press dismisses it.
+function BriefCell({ brief, width, onPress }: { brief: AttentionBrief; width: number; onPress: () => void }) {
   const p = usePalette();
   const bot = useBotMap().get(brief.coordinator_bot_id);
   const [keyWidth, setKeyWidth] = useState(0);
+  const menu = useRef<MenuComponentRef>(null);
+  const ios = Platform.OS === "ios";
   const lines: [string, string][] = [
     ...brief.decisions.map((text): [string, string] => [t("Decision"), text]),
     ...brief.changes.map((text): [string, string] => [t("Changed"), text]),
     [t("Next"), brief.next_action],
   ];
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.cell, pressed && { backgroundColor: p.fill }]}>
-      <View style={styles.briefHeader}>
-        <BotAvatar bot={bot} size={22} />
-        <Text style={[styles.briefName, { color: p.label }]} numberOfLines={1}>
-          {bot?.name ?? t("Coordinator")}
-        </Text>
-        <Text style={[styles.footnote, { color: p.secondaryLabel }]}>{stamp(new Date(brief.updated_at * 1000))}</Text>
-      </View>
-      {lines.map(([key, text], index) => (
-        <View key={index} style={styles.briefLine}>
-          <Text
-            style={[styles.briefKey, { color: p.secondaryLabel, minWidth: keyWidth }]}
-            onLayout={(e) => {
-              const width = Math.ceil(e.nativeEvent.layout.width);
-              setKeyWidth((current) => Math.max(current, width));
-            }}
-          >
-            {key}
+    <MenuView
+      ref={menu}
+      actions={[{ id: "dismiss", title: t("Dismiss"), image: ios ? "xmark.circle" : AndroidIcons.close }]}
+      shouldOpenOnLongPress
+      style={{ width }}
+      onOpenMenu={() => void Haptics.selectionAsync()}
+      onPressAction={({ nativeEvent }) => {
+        if (nativeEvent.event === "dismiss")
+          void perform("attention.dismiss_brief", { coordinator_bot_id: brief.coordinator_bot_id, expected_revision: brief.revision });
+      }}
+    >
+      <Pressable
+        onPress={onPress}
+        onLongPress={ios ? undefined : () => menu.current?.show()}
+        style={({ pressed }) => [styles.cell, { width }, pressed && { backgroundColor: p.fill }]}
+      >
+        <View style={styles.briefHeader}>
+          <BotAvatar bot={bot} size={22} />
+          <Text style={[styles.briefName, { color: p.label }]} numberOfLines={1}>
+            {bot?.name ?? t("Coordinator")}
           </Text>
-          <Text style={[styles.briefText, { color: p.label }]} numberOfLines={4}>
-            {text}
-          </Text>
+          <Text style={[styles.footnote, { color: p.secondaryLabel }]}>{stamp(new Date(brief.updated_at * 1000))}</Text>
         </View>
-      ))}
-    </Pressable>
+        {lines.map(([key, text], index) => (
+          <View key={index} style={styles.briefLine}>
+            <Text
+              style={[styles.briefKey, { color: p.secondaryLabel, minWidth: keyWidth }]}
+              onLayout={(e) => {
+                const measured = Math.ceil(e.nativeEvent.layout.width);
+                setKeyWidth((current) => Math.max(current, measured));
+              }}
+            >
+              {key}
+            </Text>
+            <Text style={[styles.briefText, { color: p.label }]} numberOfLines={4}>
+              {text}
+            </Text>
+          </View>
+        ))}
+      </Pressable>
+    </MenuView>
   );
 }
 

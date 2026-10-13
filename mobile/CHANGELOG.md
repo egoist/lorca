@@ -4,6 +4,11 @@ The phone app's release notes, by the version in `app.config.ts`. A release (a `
 tag) takes a version's section as the notes of its GitHub release, and the Android app shows them
 when it offers the update.
 
+## [Unreleased]
+
+- Long-press a brief in Attention and choose Dismiss to take it off the list on every Device; the
+  coordinator's next brief shows again. A brief also leaves once every item it is about is resolved.
+
 ## [1.0.5]
 
 - Conversations a Telegram or Slack channel keeps show the service's real mark on their avatar

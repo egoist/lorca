@@ -6,6 +6,9 @@ and the update window shows it.
 
 ## [Unreleased]
 
+- Right-click a brief in Attention and choose Dismiss to take it off the list on every Device; the
+  coordinator's next brief shows again. A brief also leaves once every item it is about is resolved.
+
 ## [0.1.11]
 
 - While a bot's turn runs for a message a Telegram channel took, that chat shows the bot typing, and
