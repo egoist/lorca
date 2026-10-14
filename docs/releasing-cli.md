@@ -22,8 +22,9 @@ lorca-cli.json                    the version, and each archive's SHA-256 and si
 lorca-cli.json.sig                an Ed25519 signature of lorca-cli.json
 ```
 
-A CLI installed this way updates itself from the latest release, and installs only a
-`lorca-cli.json` signed by a key it trusts ([Updates and the service](architecture/runtime.md#updates-and-the-service)).
+A CLI installed this way finds the newest published, non-prerelease `cli-v` release through
+GitHub's releases API and installs only a `lorca-cli.json` signed by a key it trusts. If the API
+fails, it falls back to `releases/latest/download/` ([Updates and the service](architecture/runtime.md#updates-and-the-service)).
 [`.github/workflows/release-cli.yml`](../.github/workflows/release-cli.yml) builds, signs, tests,
 and drafts them. It writes the release with the workflow's own token and signs with the
 `CLI_UPDATE_SIGNING_KEY` secret.
@@ -64,8 +65,10 @@ The release is named after the crate's version, which `lorca --version` prints:
    git tag cli-v1.0.0 && git push origin cli-v1.0.0
    ```
 
-3. Publish the draft on GitHub, with **Set as the latest release** checked. The scripts download
-   from `releases/latest/download/`, so a published CLI release has to be the repo's latest.
+3. Publish the draft on GitHub, with **Set as the latest release** checked. The install scripts
+   download from `releases/latest/download/`; the CLI updater finds the newest published stable
+   `cli-v` release through the API and does not depend on the repo's latest-release pointer. Keeping
+   this CLI release as latest also preserves the updater's fallback path if the API is unavailable.
 
 The workflow:
 

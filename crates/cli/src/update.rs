@@ -4,15 +4,17 @@
 //!
 //! Each `cli-v` release carries `lorca-cli.json`, the version and each build's archive with its
 //! SHA-256 and size, and `lorca-cli.json.sig`, an Ed25519 signature of that file by a key in
-//! [`KEYS`]. `lorca serve` reads both from the repo's latest release (`LORCA_DOWNLOAD_URL` stands
-//! for the releases page, as it does for the install scripts) a few minutes after it starts and
-//! then once a day, at once when the relay refuses the protocol it speaks, and when a Device asks
-//! (`update.install`). With automatic updates on, the default, a newer release goes in beside the
-//! running binary: the archive has to match the signed manifest, the binary in it has to start
-//! here and name the manifest's version, and a rename puts it in the old one's place, which stays
-//! beside it for a rollback. The CLI then restarts into it once no bot is at work on this Runner
-//! ([`restart_when_idle`]): in place on macOS and Linux, through the `lorca service` supervisor on
-//! Windows. A release that keeps stopping right after it starts goes back to the one before.
+//! [`KEYS`]. By default, `lorca serve` reads both from the newest published, non-prerelease
+//! `cli-v` release found through GitHub's releases API; if that API fails, it falls back to the
+//! repo's latest release. `LORCA_DOWNLOAD_URL` keeps the `{base}/latest/download/` path for local
+//! release tests. The check runs a few minutes after startup and then once a day, when the relay
+//! refuses the protocol it speaks, and when a Device asks (`update.install`). With automatic
+//! updates on, the default, a newer release goes in beside the running binary: the archive has to
+//! match the signed manifest, the binary in it has to start here and name the manifest's version,
+//! and a rename puts it in the old one's place, which stays beside it for a rollback. The CLI then
+//! restarts into it once no bot is at work on this Runner ([`restart_when_idle`]): in place on
+//! macOS and Linux, through the `lorca service` supervisor on Windows. A release that keeps
+//! stopping right after it starts goes back to the one before.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -35,6 +37,7 @@ pub const SELF_UPDATING: bool = option_env!("LORCA_SELF_UPDATE").is_some();
 const KEYS: &[&str] = &["mQrlaAaYt9APwAWYN5smWgxI5QJ/W/9He3gsplur1gM="];
 
 const RELEASES: &str = "https://github.com/egoist/lorca/releases";
+const RELEASES_API: &str = "https://api.github.com/repos/egoist/lorca/releases";
 const MANIFEST: &str = "lorca-cli.json";
 /// What `kind` says in a manifest, so a signature over some other file never passes for one.
 const KIND: &str = "lorca-cli";
@@ -122,6 +125,14 @@ struct Build {
     file: String,
     sha256: String,
     size: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct GitHubRelease {
+    tag_name: String,
+    draft: bool,
+    prerelease: bool,
+    published_at: Option<String>,
 }
 
 // MARK: - Starting
@@ -344,12 +355,30 @@ pub async fn install_here(app: &Arc<App>) -> Result<Option<String>, String> {
     Ok(Some(manifest.version))
 }
 
-/// The latest release's manifest, its signature checked.
+/// The newest published CLI release's manifest, its signature checked.
 async fn latest(app: &App) -> Result<Manifest, String> {
     if TARGET == "unsupported" {
         return Err("There are no Lorca CLI releases for this computer.".into());
     }
-    let base = format!("{}/latest/download", releases());
+    let base = if let Some(download_url) = download_url_override() {
+        format!("{download_url}/latest/download")
+    } else {
+        match github_releases(app).await {
+            Ok(pages) => match select_latest_cli_release(&pages) {
+                Some(release) => format!("{RELEASES}/download/{}", release.tag_name),
+                None => return Err("There are no published Lorca CLI releases.".into()),
+            },
+            Err(error) => {
+                tracing::warn!(%error, "GitHub releases API failed; falling back to the latest release");
+                format!("{RELEASES}/latest/download")
+            }
+        }
+    };
+    manifest_at(app, &base).await
+}
+
+/// Downloads and checks the signed manifest at a release's asset path.
+async fn manifest_at(app: &App, base: &str) -> Result<Manifest, String> {
     let bytes = get(app, &format!("{base}/{MANIFEST}"), 1 << 20, Duration::from_secs(30)).await?;
     let signature = get(app, &format!("{base}/{MANIFEST}.sig"), 4096, Duration::from_secs(30)).await?;
     verify(&bytes, &signature, &trusted_keys())?;
@@ -360,9 +389,44 @@ async fn latest(app: &App) -> Result<Manifest, String> {
     Ok(manifest)
 }
 
+/// Reads each releases API page because a CLI release can follow releases for other tracks.
+async fn github_releases(app: &App) -> Result<Vec<Vec<GitHubRelease>>, String> {
+    const PER_PAGE: usize = 100;
+    let mut pages = Vec::new();
+    let mut page = 1;
+    loop {
+        let url = format!("{RELEASES_API}?per_page={PER_PAGE}&page={page}");
+        let bytes = get_with_accept(app, &url, 8 << 20, Duration::from_secs(10), Some("application/vnd.github+json")).await?;
+        let releases = serde_json::from_slice::<Vec<GitHubRelease>>(&bytes)
+            .map_err(|error| format!("GitHub releases from {url} do not read: {error}"))?;
+        let has_next_page = releases.len() == PER_PAGE;
+        pages.push(releases);
+        if !has_next_page {
+            return Ok(pages);
+        }
+        page += 1;
+    }
+}
+
+/// Selects the newest published stable CLI release, independent of page or item order.
+fn select_latest_cli_release(pages: &[Vec<GitHubRelease>]) -> Option<&GitHubRelease> {
+    pages.iter().flatten()
+        .filter(|release| !release.draft && !release.prerelease && release.tag_name.starts_with("cli-v"))
+        .filter(|release| release.published_at.as_deref().is_some_and(|published_at| !published_at.is_empty()))
+        .max_by(|left, right| {
+            // GitHub publishes timestamps in a fixed-width UTC format, so lexical order is chronological.
+            left.published_at.cmp(&right.published_at).then_with(|| left.tag_name.cmp(&right.tag_name))
+        })
+}
+
 /// The releases page, or the server `LORCA_DOWNLOAD_URL` names in its place.
 fn releases() -> String {
-    std::env::var("LORCA_DOWNLOAD_URL").ok().map(|url| url.trim().trim_end_matches('/').to_string()).filter(|url| !url.is_empty()).unwrap_or_else(|| RELEASES.into())
+    download_url_override().unwrap_or_else(|| RELEASES.into())
+}
+
+/// Reads the optional download base using the same normalization as the release scripts.
+fn download_url_override() -> Option<String> {
+    std::env::var("LORCA_DOWNLOAD_URL").ok().map(|url| url.trim().trim_end_matches('/').to_string()).filter(|url| !url.is_empty())
 }
 
 fn trusted_keys() -> Vec<String> {
@@ -371,14 +435,15 @@ fn trusted_keys() -> Vec<String> {
 }
 
 async fn get(app: &App, url: &str, limit: u64, timeout: Duration) -> Result<Vec<u8>, String> {
-    let response = app
-        .http
-        .get(url)
-        .timeout(timeout)
-        .header(reqwest::header::USER_AGENT, concat!("lorca/", env!("CARGO_PKG_VERSION")))
-        .send()
-        .await
-        .map_err(|e| format!("Could not reach {url}: {e}"))?;
+    get_with_accept(app, url, limit, timeout, None).await
+}
+
+async fn get_with_accept(app: &App, url: &str, limit: u64, timeout: Duration, accept: Option<&str>) -> Result<Vec<u8>, String> {
+    let mut request = app.http.get(url).timeout(timeout).header(reqwest::header::USER_AGENT, concat!("lorca/", env!("CARGO_PKG_VERSION")));
+    if let Some(accept) = accept {
+        request = request.header(reqwest::header::ACCEPT, accept);
+    }
+    let response = request.send().await.map_err(|e| format!("Could not reach {url}: {e}"))?;
     if !response.status().is_success() {
         return Err(format!("{url} answered {}", response.status()));
     }
@@ -660,10 +725,64 @@ mod tests {
     use super::*;
     use ed25519_dalek::Signer;
 
+    fn github_release(tag_name: &str, published_at: Option<&str>, draft: bool, prerelease: bool) -> GitHubRelease {
+        GitHubRelease { tag_name: tag_name.into(), draft, prerelease, published_at: published_at.map(str::to_string) }
+    }
+
     fn key() -> (ed25519_dalek::SigningKey, String) {
         let key = ed25519_dalek::SigningKey::from_bytes(&[7; 32]);
         let public = base64::engine::general_purpose::STANDARD.encode(key.verifying_key().as_bytes());
         (key, public)
+    }
+
+    #[test]
+    fn newer_desktop_and_phone_releases_do_not_hide_the_latest_cli_release() {
+        let pages = vec![
+            vec![
+                github_release("desktop-v0.1.12", Some("2026-10-14T12:00:00Z"), false, false),
+                github_release("mobile-v0.1.20", Some("2026-10-14T13:00:00Z"), false, false),
+                github_release("cli-v0.1.17", Some("2026-10-14T11:00:00Z"), false, false),
+            ],
+            vec![github_release("cli-v0.1.18", Some("2026-10-14T14:00:00Z"), false, false)],
+        ];
+
+        assert_eq!(select_latest_cli_release(&pages).map(|release| release.tag_name.as_str()), Some("cli-v0.1.18"));
+    }
+
+    #[test]
+    fn draft_and_prerelease_cli_releases_are_skipped() {
+        let pages = vec![vec![
+            github_release("cli-v0.1.17", Some("2026-10-12T10:00:00Z"), false, false),
+            github_release("cli-v0.1.19", Some("2026-10-14T10:00:00Z"), true, false),
+            github_release("cli-v0.1.18-rc.1", Some("2026-10-13T10:00:00Z"), false, true),
+        ]];
+
+        assert_eq!(select_latest_cli_release(&pages).map(|release| release.tag_name.as_str()), Some("cli-v0.1.17"));
+    }
+
+    #[test]
+    fn a_release_list_without_a_published_cli_release_returns_none() {
+        let pages = vec![vec![
+            github_release("desktop-v0.1.12", Some("2026-10-14T12:00:00Z"), false, false),
+            github_release("cli-v0.1.18", None, true, false),
+        ]];
+
+        assert!(select_latest_cli_release(&pages).is_none());
+    }
+
+    #[test]
+    fn pagination_and_release_order_do_not_change_the_newest_published_cli_release() {
+        let pages = vec![
+            vec![
+                github_release("cli-v0.1.17", Some("2026-10-14T12:00:00Z"), false, false),
+                github_release("cli-v0.1.16", Some("2026-10-12T12:00:00Z"), false, false),
+            ],
+            vec![github_release("cli-v0.1.18", Some("2026-10-15T12:00:00Z"), false, false)],
+        ];
+        let reordered = vec![pages[1].clone(), vec![pages[0][1].clone(), pages[0][0].clone()]];
+
+        assert_eq!(select_latest_cli_release(&pages).map(|release| release.tag_name.as_str()), Some("cli-v0.1.18"));
+        assert_eq!(select_latest_cli_release(&reordered).map(|release| release.tag_name.as_str()), Some("cli-v0.1.18"));
     }
 
     #[test]
