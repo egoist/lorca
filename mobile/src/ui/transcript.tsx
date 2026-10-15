@@ -951,7 +951,7 @@ export function AgentAskCard({ message, agent, bot, isGroup, onDecide }: { messa
       )}
       <View style={[styles.permission, { backgroundColor: p.cell, borderColor: p.separator }]}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-          <AgentLogo kind={agent.kind} size={15} color={p.tint} />
+          <AgentLogo kind={agent.kind} size={15} color={p.label} />
           <Text style={[styles.permissionTitle, { color: p.label, flex: 1 }]} numberOfLines={2}>
             {t("{agent} wants to run a command", { agent: name })}
           </Text>
