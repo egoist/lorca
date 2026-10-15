@@ -48,7 +48,7 @@ export default function CodingAgentsScreen() {
               const name = agentName(kind);
               return (
                 <View style={styles.row}>
-                  <AgentLogo kind={kind} size={20} color={choice.enabled ? p.label : p.tertiaryLabel} />
+                  <AgentLogo kind={kind} size={20} />
                   <Text style={[styles.name, { color: p.label }]} numberOfLines={1}>
                     {name}
                   </Text>
