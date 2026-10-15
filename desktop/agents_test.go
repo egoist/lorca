@@ -335,12 +335,25 @@ func TestCodingAgentSettings(t *testing.T) {
 		}
 	}
 	renderBoth(t, tt, "coding-settings")
-	if err := tt.Click(L("Move %@ Up", "Codex")); err != nil {
-		t.Fatal(err)
+	// Codex's row dragged onto Claude Code's goes first; the line shows where while it drags.
+	from, ok := tt.Find("Codex")
+	to, ok2 := tt.Find("Claude Code")
+	if !ok || !ok2 {
+		t.Fatalf("no rows in %q", tt.Texts())
 	}
+	tt.Press(from.X+from.W/2, from.Y+from.H/2)
+	for step := float32(1); step <= 6; step++ {
+		tt.Move(from.X+from.W/2, from.Y+from.H/2+(to.Y-from.Y)*step/6)
+		tt.Frame()
+	}
+	renderBoth(t, tt, "coding-settings-dragging")
+	tt.Release(to.X+to.W/2, to.Y+to.H/2)
 	settle(tt)
 	if store.CodingAgents[0].Kind != "codex" || store.CodingAgents[1].Kind != "claude" {
 		t.Errorf("order %+v", store.CodingAgents)
+	}
+	if moved := movedCodingAgent(store.CodingAgents, "claude", 4); moved[4].Kind != "claude" || moved[0].Kind != "codex" {
+		t.Errorf("moved to the end: %+v", moved)
 	}
 	if store.CodingAgents[2].Kind != "opencode" || store.CodingAgents[2].Enabled {
 		t.Fatalf("order %+v", store.CodingAgents)
