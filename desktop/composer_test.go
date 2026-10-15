@@ -1,11 +1,14 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/egoist/lorca/desktop/model"
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -113,4 +116,56 @@ func absDiff(a, b uint8) int {
 		return int(a - b)
 	}
 	return int(b - a)
+}
+
+// A paste with no text takes the clipboard's picture as an attachment, and files copied in a file
+// manager come in as attachments in place of their names; plain text still pastes as text.
+func TestComposerPastesPicturesAndFiles(t *testing.T) {
+	png, err := os.ReadFile("assets/icon.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	copied := filepath.Join(t.TempDir(), "notes.txt")
+	if err := os.WriteFile(copied, []byte("notes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var files []string
+	var picture []byte
+	clipboardFiles = func() ([]string, error) { return files, nil }
+	clipboardImage = func() []byte { return picture }
+	t.Cleanup(func() { clipboardFiles, clipboardImage = mygo.Clipboard.ReadFiles, mygo.Clipboard.ReadImage })
+
+	m := demoWindow(t)
+	tt := ui.NewTester(m.frame(m.view), 1000, 700)
+	runPosts()
+	tt.Frame()
+	placeholder := chatPlaceholder(store.Chat(m.chat.chatID), store.BotsIn(store.Chat(m.chat.chatID)))
+	if err := tt.Click(placeholder); err != nil {
+		t.Fatal(err)
+	}
+	s := &m.chat.composer
+
+	picture = png
+	tt.Command("paste")
+	tt.Frame()
+	if len(s.attachments) != 1 || !s.attachments[0].Attachment.IsImage() || s.draft != "" {
+		t.Fatalf("pasting a picture: attachments %+v, draft %q", s.attachments, s.draft)
+	}
+
+	picture, files = nil, []string{copied}
+	tt.SetClipboard("notes.txt")
+	tt.Key(ui.Cmd, ui.KeyV)
+	tt.Frame()
+	if len(s.attachments) != 2 || s.attachments[1].Attachment.Name != "notes.txt" || s.draft != "" {
+		t.Fatalf("pasting a file: attachments %+v, draft %q", s.attachments, s.draft)
+	}
+
+	files = nil
+	tt.SetClipboard("hello")
+	tt.Command("paste")
+	tt.Frame()
+	if len(s.attachments) != 2 || s.draft != "hello" {
+		t.Fatalf("pasting text: attachments %d, draft %q", len(s.attachments), s.draft)
+	}
+	renderTo(t, tt, "composer-pasted")
 }

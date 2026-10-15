@@ -107,13 +107,28 @@ func (m *mainWindow) addFiles(s *composerState, files []fileInfo, problems []str
 	m.invalidate()
 }
 
-// pasteImage takes a picture on the clipboard as an attachment, as a screenshot pasted into the
-// composer is. It reports whether there was one with no text beside it.
-func (m *mainWindow) pasteImage(s *composerState) bool {
-	if mygo.Clipboard.ReadText() != "" {
+// The clipboard's files and picture, which tests stand in for.
+var (
+	clipboardFiles = mygo.Clipboard.ReadFiles
+	clipboardImage = mygo.Clipboard.ReadImage
+)
+
+// pasteAttachments takes what a paste brings that is not text as attachments: files copied in Finder
+// or Explorer, or a picture such as a screenshot. It reports whether it took the paste; `text` is
+// what the paste would insert.
+func (m *mainWindow) pasteAttachments(s *composerState, text string) bool {
+	if paths, err := clipboardFiles(); err == nil && len(paths) > 0 {
+		var files []fileInfo
+		for _, path := range paths {
+			files = append(files, inspect(path))
+		}
+		m.addFiles(s, files, nil)
+		return true
+	}
+	if text != "" {
 		return false
 	}
-	data := mygo.Clipboard.ReadImage()
+	data := clipboardImage()
 	if len(data) == 0 {
 		return false
 	}
@@ -323,6 +338,8 @@ func (m *mainWindow) composerView(c *ui.Context, chat *model.Chat, members []*mo
 				for _, mention := range mentionRuns(runes, mentionable) {
 					input.TextRanges(ui.TextRange{Start: mention.start, End: mention.end, Color: p.accentColor(mention.bot.Accent), Weight: 600})
 				}
+				// A paste by key, the Edit menu or the context menu all come here.
+				input.OnPaste(func(text string) bool { return m.pasteAttachments(s, text) })
 				composing := input.Composing()
 				input.HandleInput(func(ev ui.InputEvent) bool {
 					if ev.Kind != ui.InputKeyDown || composing {
@@ -347,9 +364,6 @@ func (m *mainWindow) composerView(c *ui.Context, chat *model.Chat, members []*mo
 					if ev.Key == ui.KeyEscape && s.reply != nil {
 						s.reply = nil
 						return true
-					}
-					if ev.Key == ui.KeyV && ev.Mods == ui.Cmd {
-						return m.pasteImage(s)
 					}
 					if ev.Key != ui.KeyEnter {
 						return false
