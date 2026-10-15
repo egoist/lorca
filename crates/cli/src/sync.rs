@@ -660,6 +660,7 @@ async fn refresh_presence(app: &Arc<App>, url: &str, token: &str) -> Result<(), 
             tracing::error!(%error, "dropping another Device's turns");
         }
     }
+    app.turns_ended();
     Ok(())
 }
 
@@ -1456,6 +1457,58 @@ mod tests {
         assert_eq!(crate::attention::view(&upgraded.0).unwrap(), crate::attention::view(&sender.0).unwrap(), "records an older build skipped are recovered");
         pull_blobs(&upgraded.0, &url, "test", &upgraded.0.machine_file().unwrap()).await.unwrap();
         assert_eq!(backfills.load(Ordering::Relaxed), 1, "an empty account does not replay on every cycle");
+        server.abort();
+    }
+
+    /// A Runner that leaves the relay mid-turn ends its turns here as soon as the presence
+    /// refresh hears it, without waiting for the rest of the sync round: the turn it lists, and
+    /// the job this Device sent it and still waits on. Back online, it lists the turn again, and
+    /// the result that comes later ends it.
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn a_runner_leaving_the_relay_ends_its_turns_here_at_once() {
+        use axum::{routing::get, Json, Router};
+        use std::sync::atomic::AtomicBool;
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        let online = Arc::new(AtomicBool::new(true));
+        let listed = online.clone();
+        let relay = Router::new().route("/v1/machines", get(move || {
+            let online = listed.load(Ordering::Relaxed);
+            async move { Json(serde_json::json!({ "machines": [{ "machine_pubkey": "mac", "last_seen": 1, "created_at": 1, "online": online }], "now": crate::config::now_unix() })) }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, relay).await.unwrap() });
+        let turn = |job_id: &str| LiveTurn { job_id: job_id.into(), chat_id: "chat".into(), bot_id: "bot".into(), routine_id: None, activity: None };
+        let mut events = app.events.subscribe();
+        let mut heard = |pick: fn(Event) -> Option<String>| -> std::collections::BTreeSet<String> { std::iter::from_fn(|| events.try_recv().ok()).filter_map(pick).collect() };
+        let started = |event: Event| match event { Event::JobStarted { job_id, .. } => Some(job_id), _ => None };
+        let finished = |event: Event| match event { Event::JobFinished { job_id, .. } => Some(job_id), _ => None };
+        let ids = |ids: &[&str]| ids.iter().map(|id| id.to_string()).collect::<std::collections::BTreeSet<_>>();
+
+        app.running_jobs.lock().unwrap().insert(
+            "sent-job".into(),
+            crate::app::RunningJob { chat_id: "chat".into(), bot_id: "bot".into(), routine_id: None, runner_id: Some("mac".into()), cancel: Default::default(), activity: None },
+        );
+        refresh_presence(app, &url, "test").await.unwrap();
+        app.set_device_turns("mac", vec![turn("mac-job"), turn("sent-job")]);
+        assert_eq!(heard(started), ids(&["mac-job", "sent-job"]));
+
+        online.store(false, Ordering::Relaxed);
+        refresh_presence(app, &url, "test").await.unwrap();
+        assert_eq!(heard(finished), ids(&["mac-job", "sent-job"]), "the refresh alone tells the app");
+        assert!(app.running_turns().is_empty());
+        assert!(app.running_jobs.lock().unwrap().contains_key("sent-job"), "the wait for the result goes on");
+
+        online.store(true, Ordering::Relaxed);
+        refresh_presence(app, &url, "test").await.unwrap();
+        app.set_device_turns("mac", vec![turn("sent-job")]);
+        assert_eq!(heard(started), ids(&["sent-job"]));
+        app.set_device_turns("mac", Vec::new());
+        app.running_jobs.lock().unwrap().remove("sent-job");
+        app.turns_changed();
+        assert_eq!(heard(finished), ids(&["sent-job"]));
         server.abort();
     }
 

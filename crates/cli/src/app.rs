@@ -1059,10 +1059,12 @@ impl App {
 
     /// Every turn in flight this Device knows of, by job id: what the other Devices list while
     /// the relay last saw them online, then this Device's own jobs, including one it sent to a
-    /// Runner that has not listed it yet.
+    /// Runner that has not listed it yet. A job sent to a Runner the relay's last machine list
+    /// shows offline is left out, as that Runner's own list is: its wait goes on, so a result
+    /// that comes later still counts.
     fn known_turns(&self) -> std::collections::BTreeMap<String, LiveTurn> {
         let mut turns = std::collections::BTreeMap::new();
-        {
+        let offline_runners: std::collections::HashSet<String> = {
             let state = self.state.lock().unwrap();
             for (device_id, listed) in &state.device_turns {
                 if state.turns_online.contains(device_id) {
@@ -1071,8 +1073,12 @@ impl App {
                     }
                 }
             }
-        }
+            state.listed_machines.keys().filter(|id| !state.turns_online.contains(*id)).cloned().collect()
+        };
         for (id, job) in self.running_jobs.lock().unwrap().iter() {
+            if job.runner_id.as_ref().is_some_and(|runner| offline_runners.contains(runner)) {
+                continue;
+            }
             turns.entry(id.clone()).or_insert_with(|| job.turn(id));
         }
         turns
@@ -1087,11 +1093,7 @@ impl App {
         }
         let mut announced = self.announced_turns.lock().unwrap();
         let known = self.known_turns();
-        for (id, turn) in announced.iter() {
-            if !known.contains_key(id) {
-                self.emit(Event::JobFinished { chat_id: turn.chat_id.clone(), bot_id: turn.bot_id.clone(), job_id: id.clone(), routine_id: turn.routine_id.clone() });
-            }
-        }
+        self.announce_ended(&announced, &known);
         for (id, turn) in &known {
             let before = announced.get(id);
             if before.is_none() {
@@ -1104,6 +1106,28 @@ impl App {
             }
         }
         *announced = known;
+    }
+
+    /// Tells the local app at once which of the turns it was told of this Device no longer
+    /// knows, and announces none: a Device the relay now shows offline lists nothing, and its
+    /// turns end here without waiting for the rest of the sync round, which a relay that drops
+    /// the session may never finish. What starts waits for `turns_changed` after the pull.
+    pub fn turns_ended(&self) {
+        if self.bulk_sync.load(Ordering::Relaxed) {
+            return;
+        }
+        let mut announced = self.announced_turns.lock().unwrap();
+        let known = self.known_turns();
+        self.announce_ended(&announced, &known);
+        announced.retain(|id, _| known.contains_key(id));
+    }
+
+    fn announce_ended(&self, announced: &std::collections::BTreeMap<String, LiveTurn>, known: &std::collections::BTreeMap<String, LiveTurn>) {
+        for (id, turn) in announced.iter() {
+            if !known.contains_key(id) {
+                self.emit(Event::JobFinished { chat_id: turn.chat_id.clone(), bot_id: turn.bot_id.clone(), job_id: id.clone(), routine_id: turn.routine_id.clone() });
+            }
+        }
     }
 
     /// A turn here started, ended, or changed what it is doing: the other Devices hear it

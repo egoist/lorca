@@ -6,6 +6,9 @@ and the update window shows it.
 
 ## [Unreleased]
 
+- A bot no longer shows as working after its turn ended when the Device it runs on drops off the
+  relay: the working row and the dot on its avatar clear at once, without your next message.
+
 ## [0.1.12]
 
 - Right-click a brief in Attention and choose Dismiss to take it off the list on every Device; the
