@@ -14,12 +14,19 @@ and the update window shows it.
   the chat and the bot checks its work and tells you how it went.
 - Settings › Coding Agents turns each agent on or off and sets which one bots try first, and shows
   whether each is installed on this computer.
+
+## [0.1.12]
+
 - Right-click a brief in Attention and choose Dismiss to take it off the list on every Device; the
   coordinator's next brief shows again. A brief also leaves once every item it is about is resolved.
 - A bot resolves an Attention item it alone reported as soon as it sees the work is done, such as a
   run it approved or a pull request that merged, so you no longer clear them by hand.
 - A bot listening on Telegram sees the photos people send it, with a caption or without one, and an
   album's photos together as one message. The photo shows in the conversation on every Device.
+- Several outputs in a row from one bot, such as the proof files a coding agent saves, show as one
+  list with a line each.
+- Auto-review allows an action by default, and holds only one it can name a rule for. A held action
+  goes back to the bot before it reaches you.
 
 ## [0.1.11]
 

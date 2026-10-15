@@ -86,7 +86,6 @@ export const zh: Messages = {
       title: 'Mac',
       body: '和智能体聊天，并在你的 Mac 上运行它们。',
       action: '下载 Mac 版',
-      system: 'macOS {{version}} 或更高版本',
       appleSilicon: 'Apple 芯片',
     },
     windows: {

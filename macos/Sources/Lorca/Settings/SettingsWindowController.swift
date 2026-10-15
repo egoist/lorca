@@ -123,9 +123,8 @@ final class GeneralSettingsViewController: SettingsPaneViewController {
     private let appLanguage = SettingsPopUpButton()
     private let dictationLanguage = SettingsPopUpButton()
     private lazy var version = ActionRow(
-        key: SettingsEntry.version.row, value: "", tint: .secondaryLabelColor, actionTitle: L("Check for Updates…"))
-    private lazy var automaticDownloads = toggle(
-        Updater.shared.automaticallyDownloadsUpdates, #selector(toggleAutomaticDownloads))
+        key: SettingsEntry.version.row, value: Updater.currentVersion, tint: .secondaryLabelColor,
+        actionTitle: L("Check for Updates…"))
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -186,19 +185,9 @@ final class GeneralSettingsViewController: SettingsPaneViewController {
 
         if Updater.isEnabled {
             version.onAction = { Updater.shared.checkForUpdates() }
-            automaticDownloads.isEnabled = Updater.shared.automaticallyChecksForUpdates
             let updates = SectionView(title: L("Updates"))
-            updates.setRows([
-                version,
-                AccessoryRow(
-                    key: SettingsEntry.automaticChecks.row,
-                    accessory: toggle(Updater.shared.automaticallyChecksForUpdates, #selector(toggleAutomaticChecks))),
-                AccessoryRow(key: SettingsEntry.automaticDownloads.row, accessory: automaticDownloads),
-            ])
+            updates.setRows([version])
             addSection(updates)
-            refreshVersion()
-            NotificationCenter.default.addObserver(
-                self, selector: #selector(refreshVersion), name: Updater.didFinishCheck, object: nil)
         }
 
         addFootnote(
@@ -226,19 +215,6 @@ final class GeneralSettingsViewController: SettingsPaneViewController {
 
     @objc private func toggleTimestamps(_ sender: NSSwitch) {
         Preferences.showTimestamps = sender.state == .on
-    }
-
-    @objc private func toggleAutomaticChecks(_ sender: NSSwitch) {
-        Updater.shared.automaticallyChecksForUpdates = sender.state == .on
-        automaticDownloads.isEnabled = sender.state == .on
-    }
-
-    @objc private func toggleAutomaticDownloads(_ sender: NSSwitch) {
-        Updater.shared.automaticallyDownloadsUpdates = sender.state == .on
-    }
-
-    @objc private func refreshVersion() {
-        version.setValue("\(Updater.currentVersion) · \(Updater.shared.lastCheckDescription)")
     }
 
     @objc private func changeDictationLanguage() {

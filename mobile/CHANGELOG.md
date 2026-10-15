@@ -11,10 +11,19 @@ when it offers the update.
   logo instead of a card. Tap one to follow the agent's work: what it thought and said, the files it
   explored, the commands it ran, and its edits. The chat's details list the agents under Coding.
 - Settings › Coding Agents turns each agent on or off and sets which one bots try first.
+
+## [1.0.6]
+
 - Long-press a brief in Attention and choose Dismiss to take it off the list on every Device; the
   coordinator's next brief shows again. A brief also leaves once every item it is about is resolved.
 - A bot resolves an Attention item it alone reported as soon as it sees the work is done, such as a
   run it approved or a pull request that merged, so you no longer clear them by hand.
+- You can scroll up a chat while a reply comes in, without being pulled back to the newest
+  message.
+- Several outputs in a row from one bot, such as the proof files a coding agent saves, show as one
+  list with a line each.
+- Auto-review allows an action by default, and holds only one it can name a rule for. A held action
+  goes back to the bot before it reaches you.
 
 ## [1.0.5]
 

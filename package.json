@@ -1,7 +1,7 @@
 {
   "name": "lorca",
   "private": true,
-  "version": "1.0.16",
+  "version": "1.0.17",
   "workspaces": [
     "web"
   ],
@@ -21,6 +21,7 @@
     "l10n": "bun run scripts/l10n.ts",
     "check:docs": "bun run scripts/check-docs.ts",
     "check:catalog": "bun run scripts/check-catalog.ts",
+    "sync:models": "bun run scripts/sync-models.ts",
     "web": "bun run --cwd web dev",
     "web:build": "bun run --cwd web build",
     "web:deploy": "bun run --cwd web deploy",

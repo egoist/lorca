@@ -171,7 +171,6 @@
 "Check" = "检查";
 "Check actions before they run" = "操作执行前先检查";
 "Check for Updates" = "检查更新";
-"Check for updates automatically" = "自动检查更新";
 "Check for Updates…" = "检查更新…";
 "Checking %@…" = "正在检查 %@…";
 "Checking the key with %@…" = "正在向 %@ 验证密钥…";
@@ -278,7 +277,6 @@
 "Disconnecting…" = "正在断开…";
 "Dismissed" = "已忽略";
 "Done" = "完成";
-"Download and install updates automatically" = "自动下载并安装更新";
 "Drafting a file" = "正在撰写文件";
 "Edit" = "编辑";
 "Edit as" = "编辑方式";
@@ -362,7 +360,6 @@
 "Keys and sign-ins stay on this device." = "密钥和登录信息只保留在这台设备上。";
 "Language" = "语言";
 "language locale english chinese translation" = "语言 中文 英文 翻译 界面 language locale english chinese translation";
-"Last checked %@" = "上次检查：%@";
 "Last run" = "上次运行";
 "Last seen" = "上次在线";
 "Last seen %dd ago" = "%d 天前在线";
@@ -425,7 +422,6 @@
 "Needs a sign-in" = "需要登录";
 "needs a sign-in to %@" = "需要登录 %@";
 "Never" = "从未";
-"Never checked" = "从未检查";
 "New" = "新建";
 "New Bot" = "新建智能体";
 "New Bot…" = "新建智能体…";
@@ -1490,3 +1486,9 @@
 "Paste the chat’s id, such as -1001234567890 for a group. Or message the bot there, and the chat asks here." = "粘贴聊天的 ID，群聊的 ID 形如 -1001234567890。也可以在那里给机器人发条消息，这个聊天就会在这里请求对话。";
 "Paste the channel’s id, such as C0123456789. Or message the bot there, and the chat asks here." = "粘贴 Slack 频道的 ID，形如 C0123456789。也可以在那里给机器人发条消息，这个聊天就会在这里请求对话。";
 "Add…" = "添加…";
+"A new version of Lorca is available" = "Lorca 有新版本了";
+"This version no longer updates itself. Download the new Lorca, quit this one, and drag the new one to Applications to replace it. Your bots and chats stay as they are." = "这个版本不会再自动更新。请下载新版 Lorca，退出当前版本，再把新版拖到“应用程序”文件夹替换它。你的智能体和聊天都会保留。";
+"You’re up to date" = "已是最新版本";
+"Lorca %@ is the newest version." = "Lorca %@ 是最新版本。";
+"Couldn’t check for updates" = "无法检查更新";
+"Download" = "下载";

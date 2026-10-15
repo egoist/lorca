@@ -1,6 +1,6 @@
 /// <reference types="node" />
 
-/// The newest releases of the Windows and Linux app and of the Android app, which the build reads
+/// The newest releases of the desktop app and of the Android app, which the build reads
 /// once and the download page links. Their releases are this repository's, tagged desktop-vX.Y.Z
 /// and mobile-vX.Y.Z; the latest release is the CLI's, so the build reads the list, as the apps'
 /// updaters and install.sh do.
@@ -10,6 +10,9 @@ const ANDROID_TAG = 'mobile-v'
 
 export type DesktopRelease = {
   version: string
+  /// The macOS disk image, for Apple silicon: the download page's Mac link, and the one the
+  /// retired Mac app offers (`/desktop-upgrade-url.txt`).
+  mac: string
   /// The installer, for x64.
   windows: string
   /// Installs the newest release for the user in ~/.local, where the app updates itself.
@@ -46,12 +49,13 @@ export function parseDesktopReleases(releases: GitHubRelease[]): DesktopRelease 
       .flatMap((release) => {
         const file = (test: (name: string) => boolean) =>
           release.assets.find(({ name }) => test(name))?.browser_download_url
+        const mac = file((name) => name.endsWith('.dmg'))
         const windows = file((name) => name.endsWith('.exe'))
         const installScript = file((name) => name === 'install.sh')
         const amd64 = file((name) => name.endsWith('_amd64.deb'))
         const arm64 = file((name) => name.endsWith('_arm64.deb'))
-        if (!windows || !installScript || !amd64 || !arm64) return []
-        return [{ version: release.tag_name.slice(TAG.length), windows, installScript, deb: { amd64, arm64 } }]
+        if (!mac || !windows || !installScript || !amd64 || !arm64) return []
+        return [{ version: release.tag_name.slice(TAG.length), mac, windows, installScript, deb: { amd64, arm64 } }]
       })[0] ?? null
   )
 }
@@ -72,7 +76,7 @@ export function parseAndroidReleases(releases: GitHubRelease[]): AndroidRelease 
 
 /// Reads the newest desktop and Android releases for the build, with `GITHUB_TOKEN` or `GH_TOKEN` when one is
 /// set (the API allows 60 requests an hour from an address without one). A release build stops
-/// when it can't read the desktop release, rather than ship a page with no Windows or Linux
+/// when it can't read the desktop release, rather than ship a page with no Mac, Windows, or Linux
 /// download; the dev server warns and shows the buttons disabled. No Android release leaves its
 /// card coming soon.
 export async function fetchReleases({ required }: { required: boolean }): Promise<Releases> {
@@ -89,7 +93,7 @@ export async function fetchReleases({ required }: { required: boolean }): Promis
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
     const releases: GitHubRelease[] = await response.json()
     const desktop = parseDesktopReleases(releases)
-    if (!desktop) throw new Error(`no published ${TAG} release with a Windows installer, install.sh, and both Debian packages`)
+    if (!desktop) throw new Error(`no published ${TAG} release with a disk image, a Windows installer, install.sh, and both Debian packages`)
     const android = parseAndroidReleases(releases)
     if (!android) console.warn(`no published ${ANDROID_TAG} release with its APK: the Android card stays coming soon`)
     return { desktop, android }

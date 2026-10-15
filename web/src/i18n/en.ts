@@ -84,7 +84,6 @@ export const en = {
       title: 'Mac',
       body: 'Chat with your bots and run them on your Mac.',
       action: 'Download for Mac',
-      system: 'macOS {{version}} or later',
       appleSilicon: 'Apple silicon',
     },
     windows: {
