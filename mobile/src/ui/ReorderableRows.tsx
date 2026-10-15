@@ -83,14 +83,20 @@ function Row({
   const p = usePalette();
   const y = useSharedValue(0);
   const start = useSharedValue(0);
+  const touch = useSharedValue(0);
+  // The row moves as far as the finger has from where it touched down: the pan's translation
+  // leaves out the first few points it waits before it starts, so the row would trail the finger.
   const grip = Gesture.Pan()
+    .onBegin((event) => {
+      touch.value = event.absoluteY;
+    })
     .onStart(() => {
       dragging.value = id;
       start.value = places.value[id] * height;
       y.value = start.value;
     })
     .onUpdate((event) => {
-      y.value = Math.min(Math.max(start.value + event.translationY, 0), (count - 1) * height);
+      y.value = Math.min(Math.max(start.value + event.absoluteY - touch.value, 0), (count - 1) * height);
       const place = Math.round(y.value / height);
       const from = places.value[id];
       if (place === from) return;
