@@ -175,14 +175,26 @@ async fn through_relay(app: &Arc<App>, client: &str, form: &[(&str, &str)]) -> R
     let relay = app.relay_url().ok_or("Lorca's client signs in through the relay, and this Device has none.")?;
     let machine = app.machine_file().and_then(|m| m.machine().ok()).ok_or("This Device isn't paired.")?;
     let token = crate::sync::token_or_register(app, &relay, &machine).await.map_err(|_| unreachable)?;
-    app.relay.oauth_token(&relay, &token, client, form).await.map_err(|error| match error.status {
+    let result = match app.relay.oauth_token(&relay, &token, client, form).await {
+        // A relay that restarted with a new secret refuses the bearer: sign in again once.
+        Err(error) if error.is_unauthorized() => {
+            app.relay.forget_token();
+            let token = crate::sync::token_or_register(app, &relay, &machine).await.map_err(|_| unreachable)?;
+            app.relay.oauth_token(&relay, &token, client, form).await
+        }
+        result => result,
+    };
+    result.map_err(|error| match error.status {
         Some(404) => "This relay does not hold Lorca's client. Set up a client of your own in the account's settings.".into(),
+        Some(429) => "The relay is busy. Try again in a minute.".into(),
+        Some(503) => "The relay could not reach the service. Try again.".into(),
+        _ if error.is_client_error() => "The relay refused the sign-in request. Sign in again.".into(),
         _ => unreachable.into(),
     })
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
