@@ -1,0 +1,61 @@
+# Syncs the model catalog (crates/models/catalog.json) with models.dev and OpenCode's endpoint
+# tables every 12 hours: rates, tiers, windows, output caps, and OpenCode wires of the models it
+# lists. A change goes to the models-sync branch and one open pull request, whose body is the
+# report scripts/sync-models.ts writes, including upstream models the catalog lacks. The run
+# summary carries the report on every run. A pull request opened with GITHUB_TOKEN starts no other
+# workflows, so this one runs the Catalog check and the lorca-models tests itself first.
+name: Models sync
+
+on:
+  schedule:
+    - cron: "17 */12 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: models-sync
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+      - run: bun run sync:models --report "$RUNNER_TEMP/report.md"
+      - run: cat "$RUNNER_TEMP/report.md" >> "$GITHUB_STEP_SUMMARY"
+      - id: diff
+        run: |
+          if git diff --quiet crates/models/catalog.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.diff.outputs.changed == 'true'
+        run: bun run check:catalog
+      - if: steps.diff.outputs.changed == 'true'
+        uses: dtolnay/rust-toolchain@stable
+      - if: steps.diff.outputs.changed == 'true'
+        run: cargo test --locked -p lorca-models
+      - if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -C models-sync
+          git commit -am "Models: sync rates and limits from upstream"
+          git push --force origin models-sync
+          {
+            echo "Synced from models.dev and OpenCode's endpoint tables by the Models sync workflow."
+            echo
+            cat "$RUNNER_TEMP/report.md"
+          } > "$RUNNER_TEMP/body.md"
+          number=$(gh pr list --head models-sync --state open --json number --jq '.[0].number')
+          if [[ -n "$number" ]]; then
+            gh pr edit "$number" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh pr create --base main --head models-sync --title "Models: sync rates and limits from upstream" --body-file "$RUNNER_TEMP/body.md"
+          fi
