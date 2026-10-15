@@ -5,7 +5,6 @@
 //! mutating identity-level request is signed by the identity key.
 
 mod auth;
-mod clients;
 mod db;
 mod hub;
 mod limit;
@@ -158,25 +157,6 @@ struct Args {
     /// The page an install ends on.
     #[usage(long, env = "LORCA_RELAY_GITHUB_DONE_URL", default = "https://lorca.app/github/connected")]
     github_done_url: String,
-
-    /// Lorca's Google OAuth client, a Desktop client that Gmail, Calendar, and Drive sign in
-    /// with. Runners get its id; its secret stays here, and the relay swaps their codes and
-    /// refresh tokens with it. On only when both are given.
-    #[usage(long, env = "LORCA_RELAY_GOOGLE_CLIENT_ID")]
-    google_client_id: Option<String>,
-    #[usage(long, env = "LORCA_RELAY_GOOGLE_CLIENT_SECRET", hide_env_values = true)]
-    google_client_secret: Option<String>,
-}
-
-/// The OAuth clients whose settings are given.
-fn clients(args: &Args) -> anyhow::Result<clients::Clients> {
-    let given = |value: &Option<String>| value.as_deref().map(str::trim).filter(|value| !value.is_empty()).map(str::to_string);
-    let google = match (given(&args.google_client_id), given(&args.google_client_secret)) {
-        (Some(id), Some(secret)) => Some(clients::Client::new(&id, &secret, "https://oauth2.googleapis.com/token")?),
-        (None, None) => None,
-        _ => anyhow::bail!("The Google client needs its id and its secret"),
-    };
-    Ok(clients::Clients { google })
 }
 
 /// The receivers whose settings are given.
@@ -293,8 +273,6 @@ pub struct AppState {
     pub pushes: tokio_util::task::TaskTracker,
     /// The services' webhooks this relay takes for routines.
     pub receivers: Arc<receivers::Receivers>,
-    /// Lorca's OAuth clients, whose secrets the relay keeps for the Runners' sign-ins.
-    pub clients: Arc<clients::Clients>,
 }
 
 /// How long a stopping relay waits for APNs and FCM to take the pushes it already answered
@@ -324,7 +302,6 @@ async fn main() -> anyhow::Result<()> {
     let file_store = Arc::new(file_store(&args)?);
     let pusher = Arc::new(pusher(&args)?);
     let receivers = receivers::shared(receivers(&args)?);
-    let clients = Arc::new(clients(&args)?);
 
     let mut secret = [0u8; 32];
     match &args.secret {
@@ -356,7 +333,6 @@ async fn main() -> anyhow::Result<()> {
         pusher: pusher.clone(),
         pushes: tokio_util::task::TaskTracker::new(),
         receivers: receivers.clone(),
-        clients: clients.clone(),
     };
 
     let ticking = db.clone();
@@ -382,7 +358,6 @@ async fn main() -> anyhow::Result<()> {
         files = %file_store.describe(),
         push = %pusher.describe(),
         receivers = %receivers.describe(),
-        oauth_clients = %clients.describe(),
         "lorca-relay listening"
     );
     let shared = args.db.contains("://");

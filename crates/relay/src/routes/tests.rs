@@ -93,7 +93,6 @@ impl Relay {
             pusher: Arc::new(pusher),
             pushes: tokio_util::task::TaskTracker::new(),
             receivers: Arc::new(crate::receivers::Receivers::default()),
-            clients: Arc::new(crate::clients::Clients::default()),
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());

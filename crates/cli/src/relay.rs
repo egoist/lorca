@@ -318,19 +318,6 @@ impl RelayClient {
         Ok(value["protocol"].as_u64().unwrap_or(0) as u32)
     }
 
-    /// The id of a client Lorca registered with a service (`google`), when this relay holds it.
-    pub async fn oauth_client_id(&self, url: &str, client: &str) -> RelayResult<Option<String>> {
-        let value = Self::check(self.http().get(format!("{url}/v1/health")).send().await?).await?;
-        Ok(value["oauth_clients"][client].as_str().filter(|id| !id.is_empty()).map(str::to_string))
-    }
-
-    /// Swaps a code or refresh token with one of Lorca's clients, whose secret only the relay
-    /// holds. Answers the service's status and body.
-    pub async fn oauth_token(&self, url: &str, token: &str, client: &str, form: &[(&str, &str)]) -> RelayResult<(u16, Value)> {
-        let value = Self::check(self.http().post(format!("{url}/v1/oauth/{client}/token")).bearer_auth(token).form(form).send().await?).await?;
-        Ok((value["status"].as_u64().unwrap_or(0) as u16, value["body"].clone()))
-    }
-
     /// Signed by the identity: registers the identity (idempotent) and attests one machine.
     pub async fn register(&self, url: &str, identity: &Identity, machine_pubkey: &str, box_pubkey: &str) -> RelayResult<()> {
         let payload = json!({

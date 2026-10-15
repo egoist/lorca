@@ -150,11 +150,6 @@ pub enum AuthSpec {
         client_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         client_secret: Option<String>,
-        /// A client Lorca registered with the service (`google`), which signs in when the user
-        /// set no client of their own. The relay holds its secret and swaps the codes and
-        /// refresh tokens with it; the Runner gets its id from the relay.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        lorca_client: Option<String>,
         /// With a client id: sign in with the device flow (RFC 8628) instead of a browser
         /// callback. The card shows a code to enter at the link; nothing has to run on the
         /// Runner's screen, and no client secret ships.
@@ -1218,7 +1213,7 @@ mod tests {
         let app = &scratch.0;
         let mut old = crate::marketplace::bundled().plugins.into_iter().find(|m| m.id == "github").unwrap();
         // As installed before the device flow existed: a bare OAuth entry.
-        old.servers.insert("github".into(), ServerSpec::Http { url: "https://api.githubcopilot.com/mcp/".into(), headers: BTreeMap::new(), auth: Some(AuthSpec::Oauth { scopes: vec![], token_variable: Some("GITHUB_TOKEN".into()), client_id_variable: None, client_secret_variable: None, client_id: None, client_secret: None, lorca_client: None, device_authorization_endpoint: None, token_endpoint: None, authorization_endpoint: None, authorization_params: BTreeMap::new(), optional: false, client_name: None, callback_port: None, callback_url: None, auth_server_metadata_url: None }), timeout: None });
+        old.servers.insert("github".into(), ServerSpec::Http { url: "https://api.githubcopilot.com/mcp/".into(), headers: BTreeMap::new(), auth: Some(AuthSpec::Oauth { scopes: vec![], token_variable: Some("GITHUB_TOKEN".into()), client_id_variable: None, client_secret_variable: None, client_id: None, client_secret: None, device_authorization_endpoint: None, token_endpoint: None, authorization_endpoint: None, authorization_params: BTreeMap::new(), optional: false, client_name: None, callback_port: None, callback_url: None, auth_server_metadata_url: None }), timeout: None });
         install(app, old, "marketplace").unwrap();
         let mut vars = BTreeMap::new();
         vars.insert("GITHUB_TOKEN".to_string(), "ghp-secret".to_string());

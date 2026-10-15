@@ -585,7 +585,6 @@ impl ServerConfig {
                     client_secret_variable: None,
                     client_id: oauth.client_id.clone(),
                     client_secret: oauth.client_secret.clone(),
-                    lorca_client: None,
                     device_authorization_endpoint: None,
                     token_endpoint: None,
                     authorization_endpoint: None,
