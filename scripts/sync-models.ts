@@ -174,23 +174,38 @@ for (const m of catalog.models) {
   }
 }
 
-// Upstream models the catalog lacks, for a person to decide on.
+// Upstream models the catalog lacks, for a person to decide on. The catalog keeps each list to the
+// current generation of paid models, so free and preview models are left out, and so is a model
+// the catalog already lists a same or later version of (gpt-6-sol beside gpt-6.1-sol).
 const listed = new Set(catalog.models.map((m) => `${m.provider}/${m.id}`))
 const since = new Date(Date.now() - NEW_DAYS * 86_400_000).toISOString().slice(0, 10)
+const family = (id: string) => id.replace(/\d+(?:\.\d+)*/g, "#")
+const version = (id: string) => (id.match(/\d+/g) ?? []).map(Number)
+const notOlder = (a: number[], b: number[]) => {
+  for (let i = 0; i < Math.max(a.length, b.length); i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0)
+  return true
+}
+const superseded = (provider: string, id: string) =>
+  catalog.models.some((m) => m.provider === provider && family(m.id) === family(id) && notOlder(version(m.id), version(id)))
 const fresh: string[] = []
 for (const [provider, source] of Object.entries(MODELS_DEV)) {
   for (const [id, e] of Object.entries<any>(modelsDev[source]?.models ?? {})) {
     if (listed.has(`${provider}/${id}`) || e.status === "deprecated" || (e.release_date ?? "") < since || !(e.limit?.output > 0)) continue
+    if (/-free$|preview/.test(id) || !(e.cost?.input || e.cost?.output) || superseded(provider, id)) continue
     const wire = wires[provider]?.get(id)
     if (provider in OPENCODE_DOCS && !wire) continue // not served on a wire Lorca speaks
-    const cost = e.cost ? `$${e.cost.input ?? 0} / $${e.cost.output ?? 0}` : "no price"
-    fresh.push(`${provider}/${id} — ${e.name}, released ${e.release_date}, ${e.limit?.context ?? "?"} window, ${cost}${wire ? `, ${wire}` : ""}`)
+    fresh.push(`${provider}/${id} — ${e.name}, released ${e.release_date}, ${e.limit.context} window, $${e.cost.input ?? 0} / $${e.cost.output ?? 0}${wire ? `, ${wire}` : ""}`)
   }
 }
 if (codex) {
   const visible = (codex.models ?? codex).filter((m: any) => m.visibility === "list").map((m: any) => m.slug)
   const chatgpt = catalog.models.filter((m) => m.provider === "chatgpt").map((m) => m.id)
-  for (const slug of visible) if (!chatgpt.includes(slug)) fresh.push(`chatgpt/${slug} — listed in Codex's models.json`)
+  // Codex still lists the previous generation; only one at least as new as the catalog's counts.
+  const generation = Math.max(...chatgpt.map((id) => version(id)[0] ?? 0))
+  for (const slug of visible) {
+    if (chatgpt.includes(slug) || (version(slug)[0] ?? 0) < generation || superseded("chatgpt", slug)) continue
+    fresh.push(`chatgpt/${slug} — listed in Codex's models.json`)
+  }
   for (const id of chatgpt) if (!visible.includes(id)) notes.push(`chatgpt/${id} is no longer listed in Codex's models.json.`)
 }
 
