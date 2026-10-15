@@ -48,6 +48,7 @@ impl Service for Server {
             "unlabel_thread" => modify(&api, "threads", "threadId", "removeLabelIds", &args).await,
             "list_drafts" => list_drafts(&api, &args).await,
             "create_draft" => create_draft(&api, &args).await,
+            "send_message" => send_message(&api, &args).await,
             _ => Err(format!("Gmail has no tool {tool}.")),
         })
     }
@@ -240,7 +241,17 @@ fn draft(found: &Value) -> Value {
     out
 }
 
-async fn create_draft(api: &Api<'_>, args: &Value) -> Result<Value, Failure> {
+/// An email the call describes, ready to go: the Gmail API's `message` (its raw MIME and, for a
+/// reply, the thread), and how it reads.
+struct Outgoing {
+    message: Value,
+    subject: String,
+    to: Vec<String>,
+    cc: Vec<String>,
+    bcc: Vec<String>,
+}
+
+async fn outgoing(api: &Api<'_>, args: &Value) -> Result<Outgoing, Failure> {
     let to = list(args, "to");
     let cc = list(args, "cc");
     let bcc = list(args, "bcc");
@@ -284,16 +295,40 @@ async fn create_draft(api: &Api<'_>, args: &Value) -> Result<Value, Failure> {
     if let Some(thread) = &thread_id {
         message["threadId"] = json!(thread);
     }
-    let made = api.post(&url("drafts"), &[], json!({ "message": message })).await?;
+    Ok(Outgoing { message, subject, to, cc, bcc })
+}
+
+async fn create_draft(api: &Api<'_>, args: &Value) -> Result<Value, Failure> {
+    let email = outgoing(api, args).await?;
+    let made = api.post(&url("drafts"), &[], json!({ "message": email.message })).await?;
     Ok(json!({
         "id": made["id"],
         "messageId": made["message"]["id"],
         "threadId": made["message"]["threadId"],
-        "subject": subject,
-        "toRecipients": to,
-        "ccRecipients": cc,
-        "bccRecipients": bcc,
+        "subject": email.subject,
+        "toRecipients": email.to,
+        "ccRecipients": email.cc,
+        "bccRecipients": email.bcc,
         "plaintextBody": text(args, "body"),
+    }))
+}
+
+/// Sends an email at once (`messages.send`). Lorca's own tool, beside Google's: in a chat it
+/// waits as a draft card like `create_draft`, and the card's Send makes this call.
+async fn send_message(api: &Api<'_>, args: &Value) -> Result<Value, Failure> {
+    let email = outgoing(api, args).await?;
+    if email.to.is_empty() && email.cc.is_empty() && email.bcc.is_empty() {
+        return Err("An email needs a recipient in to, cc, or bcc.".into());
+    }
+    let sent = api.post(&url("messages/send"), &[], email.message).await?;
+    Ok(json!({
+        "id": sent["id"],
+        "threadId": sent["threadId"],
+        "labelIds": sent["labelIds"],
+        "subject": email.subject,
+        "toRecipients": email.to,
+        "ccRecipients": email.cc,
+        "bccRecipients": email.bcc,
     }))
 }
 

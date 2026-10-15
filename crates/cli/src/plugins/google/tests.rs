@@ -95,6 +95,7 @@ async fn google(State(seen): State<Requests>, method: Method, uri: Uri, headers:
         ("GET", "/gmail/v1/users/me/threads") => json!({ "threads": [{ "id": "t1", "snippet": "Plan attached" }], "nextPageToken": "next", "resultSizeEstimate": 1 }),
         ("GET", "/gmail/v1/users/me/threads/t1") => json!({ "id": "t1", "messages": [message] }),
         ("GET", "/gmail/v1/users/me/messages/m1") => message,
+        ("POST", "/gmail/v1/users/me/messages/send") => json!({ "id": "m3", "threadId": request.json()["threadId"].as_str().unwrap_or("t9"), "labelIds": ["SENT"] }),
         ("POST", "/gmail/v1/users/me/drafts") => json!({ "id": "d1", "message": { "id": "m2", "threadId": request.json()["message"]["threadId"] } }),
         ("POST", "/gmail/v1/users/me/messages/m1/modify") => json!({ "id": "m1" }),
         ("GET", "/gmail/v1/users/me/labels") => json!({ "labels": [{ "id": "INBOX", "name": "INBOX", "type": "system" }, { "id": "Label_1", "name": "Receipts", "type": "user" }] }),
@@ -266,6 +267,36 @@ async fn gmail_searches_reads_drafts_replies_and_labels_with_the_accounts_token(
     assert_eq!(find(&seen, |s| s.path.ends_with("/messages/m1/modify")).json(), json!({ "addLabelIds": ["Label_1"] }));
     let labels = call(&*gmail, app, &id, "list_labels", json!({})).await;
     assert_eq!((ok(&labels)["labels"][1]["labelId"].as_str(), ok(&labels)["labels"][1]["name"].as_str()), (Some("Label_1"), Some("Receipts")));
+}
+
+#[tokio::test]
+async fn send_message_sends_at_once_as_a_reply_and_is_a_message_tool_the_card_sends_itself() {
+    let (seen, _guard) = google_stub().await;
+    let scratch = scratch();
+    let app = &scratch.0;
+    let id = account(app, "gmail", "gmail", "gmail-token");
+    let gmail = super::service("gmail").unwrap();
+
+    let sent = call(&*gmail, app, &id, "send_message", json!({ "to": ["ariel@example.com"], "body": "Shipped.", "replyToMessageId": "m1" })).await;
+    let sent = ok(&sent);
+    assert_eq!((sent["id"].as_str(), sent["threadId"].as_str(), sent["subject"].as_str()), (Some("m3"), Some("t1"), Some("Re: Plan")));
+    let posted = find(&seen, |s| s.path == "/gmail/v1/users/me/messages/send").json();
+    assert_eq!(posted["threadId"], "t1", "a reply goes out in the thread");
+    let raw = String::from_utf8(URL_SAFE_NO_PAD.decode(posted["raw"].as_str().unwrap()).unwrap()).unwrap();
+    assert!(raw.contains("To: ariel@example.com\r\n") && raw.contains("In-Reply-To: <plan@example.com>\r\n"), "{raw}");
+    assert!(!seen.lock().unwrap().iter().any(|s| s.path.ends_with("/drafts")), "no draft is left behind");
+
+    let nobody = call(&*gmail, app, &id, "send_message", json!({ "subject": "Hi", "body": "Hello" })).await;
+    assert_eq!(nobody["isError"], true);
+    assert_eq!(seen.lock().unwrap().iter().filter(|s| s.path.ends_with("/messages/send")).count(), 1, "nothing goes out without a recipient");
+
+    // In a chat it waits as a draft card like create_draft; the card's Send makes this call,
+    // which sends by itself, so nothing sends again after it.
+    let manifest = crate::marketplace::bundled().plugins.into_iter().find(|m| m.id == "gmail").unwrap();
+    let tool = manifest.tools.message("send_message").expect("send_message writes to people");
+    assert_eq!((tool.kind.as_str(), tool.send.as_deref(), tool.reply.as_deref()), ("email", None, Some("replyToMessageId")));
+    assert_eq!(manifest.tools.message("create_draft").and_then(|t| t.send.as_deref()), Some("gmail"));
+    assert!(!manifest.tools.readonly.iter().chain(manifest.tools.draft.iter()).any(|t| t.ends_with("send_message")), "sending is a write");
 }
 
 #[test]

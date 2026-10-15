@@ -89,6 +89,94 @@
    "note": "Tool description says creating drafts with attachments is not supported yet, although the schema has attachments[]."
   },
   {
+   "name": "send_message",
+   "description": "Sends an email from the account now, with the same fields as create_draft; replyToMessageId sends it as a reply in that message's thread. In a chat it first waits as a draft the user sends.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "to": {
+      "description": "The primary recipients of the email.",
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "cc": {
+      "description": "The carbon copy recipients of the email.",
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "bcc": {
+      "description": "The blind carbon copy recipients of the email.",
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "subject": {
+      "description": "The subject line of the email.",
+      "type": "string"
+     },
+     "body": {
+      "description": "The main body content of the email.",
+      "type": "string"
+     },
+     "htmlBody": {
+      "description": "The HTML content of the email.",
+      "type": "string"
+     },
+     "replyToMessageId": {
+      "description": "The ID of the message to reply to.",
+      "type": "string"
+     },
+     "attachments": {
+      "description": "The attachments to include in the email.",
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "id": {
+         "description": "When present, contains the ID of an external attachment that can be retrieved in a separate GetMessageAttachment request.",
+         "type": "string"
+        },
+        "filename": {
+         "description": "The name of the file to be attached, e.g. \"invoice.pdf\".",
+         "type": "string"
+        },
+        "mimeType": {
+         "description": "The field representing a content or media type must use IANA MIME type, https://www.iana.org/assignments/media-types/media-types.xhtml.",
+         "type": "string"
+        },
+        "content": {
+         "description": "The base64-encoded content of the attachment.",
+         "type": "string",
+         "format": "byte"
+        },
+        "inline": {
+         "description": "If true, this attachment is handled as inline.",
+         "type": "boolean"
+        }
+       },
+       "required": [
+        "content"
+       ]
+      }
+     }
+    }
+   },
+   "readOnly": false,
+   "output": "SentMessage { id, threadId, labelIds, subject, toRecipients[], ccRecipients[], bccRecipients[] }",
+   "rest": "gmail users.messages.send",
+   "scopes": [
+    "https://www.googleapis.com/auth/gmail.compose",
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.send"
+   ],
+   "note": "Lorca's own tool; Google's hosted Gmail MCP server has no send tool."
+  },
+  {
    "name": "create_label",
    "description": "Creates a new label in the authenticated user's Gmail account.",
    "inputSchema": {
