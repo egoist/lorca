@@ -14,9 +14,9 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio::sync::oneshot;
 
-use super::driver::{Approval, Driver, Ended, Event, Events};
-use super::lines;
+use super::driver::{Approval, Driver, Event, Events};
 use super::process::{self, Process};
+use super::transcript::{self, Item, PlanEntry, ToolStep};
 
 /// How long Codex has to answer a request.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
@@ -137,7 +137,12 @@ async fn read(
     let mut last_said: Option<String> = None;
     // The files each change it is making touches, for its approval.
     let mut changes: HashMap<String, Vec<String>> = HashMap::new();
+    // When each item it works on began, for how long it thought.
+    let mut began: HashMap<String, tokio::time::Instant> = HashMap::new();
     let mut session_told = false;
+    let item = |item: Item| {
+        let _ = events.send(Event::Item(item));
+    };
     while let Some(message) = messages.recv().await {
         let method = message["method"].as_str();
         let id = message.get("id").filter(|id| !id.is_null()).cloned();
@@ -209,14 +214,14 @@ async fn read(
                         }
                         match params["turn"]["status"].as_str() {
                             Some("interrupted") => {
-                                let _ = events.send(Event::Lines(vec!["  ⎿ Interrupted".into()]));
+                                item(Item::text(uuid::Uuid::new_v4().to_string(), "status", "Interrupted"));
                                 if !cutting_in.load(Ordering::SeqCst) {
                                     let _ = events.send(Event::Idle(last_said.take()));
                                 }
                             }
                             Some("failed") => {
                                 let error = params["turn"]["error"]["message"].as_str().unwrap_or("Codex stopped with an error").to_string();
-                                let _ = events.send(Event::Lines(vec![format!("Error: {error}")]));
+                                item(Item::text(uuid::Uuid::new_v4().to_string(), "error", &error));
                                 let _ = events.send(Event::Idle(Some(error)));
                             }
                             _ => {
@@ -224,26 +229,46 @@ async fn read(
                             }
                         }
                     }
-                    "item/started" if params["item"]["type"] == "fileChange" => {
-                        let item = &params["item"];
-                        let paths = item["changes"].as_array().into_iter().flatten().filter_map(|change| change["path"].as_str().map(str::to_string)).collect();
-                        if let Some(id) = item["id"].as_str() {
-                            changes.insert(id.to_string(), paths);
+                    "item/started" => {
+                        let started = &params["item"];
+                        let id = started["id"].as_str().unwrap_or("").to_string();
+                        if started["type"] == "fileChange" {
+                            let paths = started["changes"].as_array().into_iter().flatten().filter_map(|change| change["path"].as_str().map(str::to_string)).collect();
+                            changes.insert(id.clone(), paths);
+                        }
+                        began.insert(id, tokio::time::Instant::now());
+                        for step in steps(started, &folder, &mut last_said, false, None) {
+                            item(step);
                         }
                     }
                     "item/completed" => {
-                        let item = &params["item"];
-                        let out = item_lines(item, &mut last_said, &folder);
-                        if let Some(id) = item["id"].as_str() {
-                            changes.remove(id);
+                        let done = &params["item"];
+                        let id = done["id"].as_str().unwrap_or("");
+                        changes.remove(id);
+                        let seconds = began.remove(id).map(|at| at.elapsed().as_secs_f64().round());
+                        for step in steps(done, &folder, &mut last_said, true, seconds) {
+                            item(step);
                         }
-                        if !out.is_empty() {
-                            let _ = events.send(Event::Lines(out));
-                        }
+                    }
+                    "turn/plan/updated" => {
+                        let plan = params["plan"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .map(|step| {
+                                let status = match step["status"].as_str() {
+                                    Some("completed") => "completed",
+                                    Some("inProgress") => "in_progress",
+                                    _ => "pending",
+                                };
+                                PlanEntry { text: step["step"].as_str().unwrap_or("").to_string(), status: status.into() }
+                            })
+                            .collect();
+                        item(Item::plan("plan", plan));
                     }
                     "error" => {
                         if let Some(text) = params["error"]["message"].as_str() {
-                            let _ = events.send(Event::Lines(vec![format!("Error: {text}")]));
+                            item(Item::text(uuid::Uuid::new_v4().to_string(), "error", text));
                         }
                     }
                     _ => {}
@@ -254,60 +279,71 @@ async fn read(
     }
     // Whatever Lorca still waits on will not be answered.
     pending.lock().unwrap().clear();
-    let exit = exit.await.ok();
-    let ended = match exit {
-        Some(process::Exit { stopped: true, .. }) => Ended { outcome: "Stopped".into(), failed: false },
-        Some(process::Exit { code: Some(0), .. }) => Ended { outcome: "Codex exited".into(), failed: false },
-        Some(process::Exit { code, said, .. }) => {
-            let code = code.map(|code| format!(" with code {code}")).unwrap_or_default();
-            Ended { outcome: format!("Codex exited{code}{}", said.map(|said| format!(": {said}")).unwrap_or_default()), failed: true }
-        }
-        None => Ended { outcome: "Codex exited".into(), failed: true },
-    };
-    let _ = events.send(Event::Ended(ended));
+    let _ = events.send(Event::Ended(super::driver::ended("Codex", exit.await.ok())));
 }
 
-/// One finished item of a turn, in the transcript, its paths from `folder`.
-fn item_lines(item: &Value, last_said: &mut Option<String>, folder: &Path) -> Vec<String> {
+/// One item of a turn as steps of the transcript, its paths from `folder`: as it starts, and
+/// once it is `done`, `seconds` after it started when Codex said it started.
+fn steps(item: &Value, folder: &Path, last_said: &mut Option<String>, done: bool, seconds: Option<f64>) -> Vec<Item> {
+    let id = item["id"].as_str().unwrap_or("").to_string();
+    let status = match item["status"].as_str() {
+        _ if !done => "running",
+        Some("declined") => "denied",
+        Some("failed") => "failed",
+        _ if item["exitCode"].as_i64().is_some_and(|code| code != 0) => "failed",
+        _ => "done",
+    };
     match item["type"].as_str().unwrap_or("") {
-        "userMessage" => {
+        "userMessage" if done => {
             let text = item["content"].as_array().into_iter().flatten().filter_map(|part| part["text"].as_str()).collect::<Vec<_>>().join("\n");
-            lines::sent(&text)
+            vec![Item::text(id, "prompt", &text)]
         }
-        "agentMessage" => {
+        "agentMessage" if done => {
             let text = item["text"].as_str().unwrap_or("");
-            if !text.trim().is_empty() {
-                *last_said = Some(text.trim().to_string());
+            if text.trim().is_empty() {
+                return Vec::new();
             }
-            lines::said(text)
+            *last_said = Some(text.trim().to_string());
+            vec![Item::text(id, "text", text)]
+        }
+        "reasoning" if done => {
+            let text = item["summary"].as_array().into_iter().flatten().filter_map(Value::as_str).collect::<Vec<_>>().join("\n");
+            vec![Item { seconds, ..Item::text(id, "thought", &text) }]
         }
         "commandExecution" => {
-            let command = item["commandActions"][0]["command"].as_str().or(item["command"].as_str()).unwrap_or("");
-            let mut out = vec![lines::call("Bash", command)];
-            let failed = item["exitCode"].as_i64().is_some_and(|code| code != 0) || item["status"] == "failed" || item["status"] == "declined";
-            let output = item["aggregatedOutput"].as_str().unwrap_or("");
-            if item["status"] == "declined" {
-                out.push("  ⎿ Not allowed".into());
-            } else {
-                out.extend(lines::result(output, failed));
-            }
-            out
+            let action = &item["commandActions"][0];
+            let command = action["command"].as_str().or(item["command"].as_str()).unwrap_or("");
+            let (kind, title, path) = match action["type"].as_str() {
+                Some("read") => ("read", action["path"].as_str().map(|path| transcript::path(path, folder)).unwrap_or_else(|| command.to_string()), action["path"].as_str().map(|path| transcript::path(path, folder))),
+                Some("search") => ("search", action["query"].as_str().unwrap_or(command).to_string(), None),
+                Some("listFiles") => ("search", action["path"].as_str().map(|path| transcript::path(path, folder)).unwrap_or_else(|| command.to_string()), None),
+                _ => ("execute", command.to_string(), None),
+            };
+            let output = item["aggregatedOutput"].as_str().and_then(transcript::output);
+            vec![Item::tool(id, ToolStep { kind: kind.into(), title: transcript::title(&title), path, status: status.into(), output: output.filter(|_| done), ..ToolStep::default() })]
         }
         "fileChange" => item["changes"]
             .as_array()
             .into_iter()
             .flatten()
-            .map(|change| {
-                let name = match change["kind"]["type"].as_str() {
-                    Some("add") => "Write",
-                    Some("delete") => "Delete",
-                    _ => "Edit",
+            .enumerate()
+            .map(|(index, change)| {
+                let path = transcript::path(change["path"].as_str().unwrap_or(""), folder);
+                let diff = change["diff"].as_str().unwrap_or("");
+                // A new or deleted file comes as its content, not as a diff.
+                let (added, removed) = match (change["kind"]["type"].as_str(), transcript::diff_stats(diff)) {
+                    (Some("add"), (0, 0)) => (transcript::line_count(diff), 0),
+                    (Some("delete"), (0, 0)) => (0, transcript::line_count(diff)),
+                    (_, stats) => stats,
                 };
-                lines::call(name, &lines::path(change["path"].as_str().unwrap_or(""), folder))
+                Item::tool(format!("{id}-{index}"), ToolStep { kind: "edit".into(), title: path.clone(), path: Some(path), added: Some(added), removed: Some(removed), status: status.into(), output: None })
             })
             .collect(),
-        "mcpToolCall" => vec![lines::call(&format!("{}.{}", item["server"].as_str().unwrap_or("mcp"), item["tool"].as_str().unwrap_or("tool")), "")],
-        "webSearch" => vec![lines::call("WebSearch", item["query"].as_str().unwrap_or(""))],
+        "mcpToolCall" => {
+            let title = format!("{}: {}", item["server"].as_str().unwrap_or("mcp"), item["tool"].as_str().unwrap_or("tool"));
+            vec![Item::tool(id, ToolStep { kind: "other".into(), title, status: status.into(), ..ToolStep::default() })]
+        }
+        "webSearch" => vec![Item::tool(id, ToolStep { kind: "fetch".into(), title: transcript::title(item["query"].as_str().unwrap_or("")), status: status.into(), ..ToolStep::default() })],
         _ => Vec::new(),
     }
 }
@@ -317,15 +353,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_turns_items_read_as_the_transcript() {
+    fn a_turns_items_read_as_steps() {
+        let folder = Path::new("/tmp/x");
         let mut said = None;
-        let command = json!({ "type": "commandExecution", "command": "/bin/zsh -lc 'git status --short'", "commandActions": [{ "command": "git status --short" }], "aggregatedOutput": "?? hi.txt\n", "exitCode": 0, "status": "completed" });
-        assert_eq!(item_lines(&command, &mut said, Path::new("/tmp/x")), vec!["● Bash(git status --short)", "  ⎿ ?? hi.txt"]);
-        let message = json!({ "type": "agentMessage", "text": "Done.\nAll tests pass." });
-        assert_eq!(item_lines(&message, &mut said, Path::new("/tmp/x")), vec!["Done.", "All tests pass."]);
+        let command = json!({ "type": "commandExecution", "id": "c1", "command": "/bin/zsh -lc 'git status --short'", "commandActions": [{ "type": "unknown", "command": "git status --short" }], "aggregatedOutput": "?? hi.txt\n", "exitCode": 0, "status": "completed" });
+        let running = steps(&command, folder, &mut said, false, None);
+        assert_eq!(running[0].tool.as_ref().unwrap().status, "running");
+        let done = steps(&command, folder, &mut said, true, Some(1.0));
+        let step = done[0].tool.as_ref().unwrap();
+        assert_eq!((step.kind.as_str(), step.title.as_str(), step.status.as_str(), step.output.as_deref()), ("execute", "git status --short", "done", Some("?? hi.txt")));
+        let read = json!({ "type": "commandExecution", "id": "c2", "commandActions": [{ "type": "read", "command": "cat a.rs", "name": "a.rs", "path": "/tmp/x/a.rs" }], "status": "completed" });
+        assert_eq!(steps(&read, folder, &mut said, true, None)[0].tool.as_ref().unwrap().kind, "read");
+        let message = json!({ "type": "agentMessage", "id": "m1", "text": "Done.\nAll tests pass." });
+        assert!(steps(&message, folder, &mut said, false, None).is_empty());
+        assert_eq!(steps(&message, folder, &mut said, true, None)[0].text, "Done.\nAll tests pass.");
         assert_eq!(said.as_deref(), Some("Done.\nAll tests pass."));
-        let change = json!({ "type": "fileChange", "changes": [{ "path": "/tmp/x/hi.txt", "kind": { "type": "add" } }] });
-        assert_eq!(item_lines(&change, &mut said, Path::new("/tmp/x")), vec!["● Write(hi.txt)"]);
-        assert!(item_lines(&json!({ "type": "reasoning" }), &mut said, Path::new("/tmp/x")).is_empty());
+        let change = json!({ "type": "fileChange", "id": "f1", "status": "completed", "changes": [{ "path": "/tmp/x/hi.txt", "kind": { "type": "add" }, "diff": "+hi\n+there\n" }] });
+        let step = steps(&change, folder, &mut said, true, None)[0].tool.clone().unwrap();
+        assert_eq!((step.title.as_str(), step.added, step.removed), ("hi.txt", Some(2), Some(0)));
+        let added = json!({ "type": "fileChange", "id": "f2", "status": "completed", "changes": [{ "path": "/tmp/x/new.txt", "kind": { "type": "add" }, "diff": "hi\n" }] });
+        assert_eq!(steps(&added, folder, &mut said, true, None)[0].tool.as_ref().unwrap().added, Some(1));
+        assert!(steps(&json!({ "type": "reasoning", "id": "r" }), folder, &mut said, false, None).is_empty());
     }
 }

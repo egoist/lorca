@@ -116,8 +116,8 @@ func isOutputCard(message *model.Message) bool {
 
 // buildRows lays the transcript out as rows, after the macOS app's rebuildRows: a day separator
 // after fifteen minutes of silence or a new day, the messages (tool calls only as a sent
-// message's marker or a command's card while it needs the user), and at the end the working row
-// or a status line.
+// message's marker, a coding agent's, or a command's card while it needs the user), and at the
+// end the working row or a status line.
 func buildRows(chat *model.Chat, working []string, stoppedNotice string) []chatRow {
 	var rows []chatRow
 	var previousAuthor *model.Author
@@ -261,8 +261,8 @@ func (m *mainWindow) chatRowView(c *ui.Context, chat *model.Chat, row chatRow, s
 		case model.BodyText:
 			m.messageCell(c, chat, message, row.groupStart, row.stack, showsAvatar, s)
 		case model.BodyTool:
-			if body.Tool.Agent != nil {
-				m.agentCard(c, chat, message, cardAvatar, row.groupStart)
+			if body.Tool.IsAgentMessage() {
+				m.agentRow(c, chat, message, cardAvatar, row.groupStart)
 			} else if body.Tool.Run != nil {
 				m.commandCard(c, chat, message, cardAvatar, row.groupStart)
 			} else {
@@ -280,6 +280,8 @@ func (m *mainWindow) chatRowView(c *ui.Context, chat *model.Chat, row chatRow, s
 				mode = handoffMode{kind: handoffIncoming, from: store.Bot(h.From)}
 			}
 			handoffCell(c, mode, h.Reason, row.groupStart)
+		case model.BodyAgentMessage:
+			m.agentMessageRow(c, chat, message, row.groupStart)
 		case model.BodyNotice:
 			noticeCell(c, body.Text, row.groupStart)
 		case model.BodyPermission:
@@ -865,6 +867,8 @@ func toolActivity(tool *model.ToolInvocation, targetName, pluginName string) str
 			return L("Messaging %@", targetName)
 		}
 		return L("Messaging another bot")
+	case "coding_agent":
+		return L("Writing some code")
 	case "list_teammates":
 		return L("Checking the team")
 	case "create_bot":

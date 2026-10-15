@@ -766,9 +766,6 @@ impl LoopHooks for TurnHooks {
         if let Some(refused) = crate::browser::review_call(&self.app, &self.bot, &self.chat_id, &self.trigger, self.unattended, &ctx).await {
             return Some(refused);
         }
-        if let Some(refused) = crate::coding::review_start(&self.app, &self.bot, &self.chat_id, &self.trigger, self.unattended, &ctx).await {
-            return Some(refused);
-        }
         if let Some(refused) = crate::plugins::mcp::review_call(&self.app, &self.plugin_tools, &self.chat_id, &self.trigger, &self.bot, self.unattended, &ctx).await {
             return Some(refused);
         }
@@ -1293,6 +1290,7 @@ impl TurnState {
                         script_command: None,
                         run: None,
                         agent: None,
+                        target_agent_id: None,
                     },
                 );
                 message.state = MessageState::Streaming;
@@ -1363,29 +1361,43 @@ impl TurnState {
                     state: "running".into(),
                     ..CommandRun::default()
                 });
-                // A coding agent's card shows from the start too: Auto-review's question, the
-                // agent at work, what it asks, how it ended.
+                // A coding agent's start carries the agent from the start: the apps show it as
+                // "Messaged ⬢ Title", and its card follows it from there. A message to one names it.
                 let starts_agent = tool_name == "coding_agent" && args["action"] == "start";
-                let agent = starts_agent.then(|| crate::model::AgentRun {
-                    kind: args["agent"].as_str().filter(|kind| crate::coding::KINDS.contains(kind)).unwrap_or("").to_string(),
-                    task: args["prompt"].as_str().unwrap_or("").lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or("").chars().take(200).collect(),
-                    state: "starting".into(),
-                    started_at: Some(crate::config::now_secs()),
-                    ..crate::model::AgentRun::default()
+                let agent = starts_agent.then(|| {
+                    let task: String = args["prompt"].as_str().unwrap_or("").lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or("").chars().take(200).collect();
+                    crate::model::AgentRun {
+                        kind: args["agent"].as_str().filter(|kind| crate::coding::KINDS.contains(kind)).unwrap_or("").to_string(),
+                        title: args["title"].as_str().map(|title| title.split_whitespace().collect::<Vec<_>>().join(" ")).filter(|title| !title.is_empty()).unwrap_or_else(|| task.clone()),
+                        task,
+                        state: "starting".into(),
+                        started_at: Some(crate::config::now_secs()),
+                        updated_at: Some(crate::config::now_secs()),
+                        ..crate::model::AgentRun::default()
+                    }
                 });
+                let target_agent_id = (tool_name == "coding_agent" && args["action"] == "send")
+                    .then(|| args["id"].as_str().map(str::trim).filter(|id| !id.is_empty()).map(str::to_string))
+                    .flatten();
                 let target_bot_id =
                     if tool_name == "message_bot" { args["bot_id"].as_str().map(str::trim).filter(|id| !id.is_empty()).map(str::to_string) } else { None };
                 // Waiting on a command that asks leaves the question to the user.
                 let waits_on = (tool_name == "bash_output" && args["wait_seconds"].as_f64().is_some_and(|wait| wait > 0.0))
                     .then(|| args["session_id"].as_str().map(|id| id.trim().to_string()))
                     .flatten();
+                // A coding agent's row shows what the bot wrote it from the start.
+                let detail = match (&agent, &target_agent_id) {
+                    (Some(_), _) => args["prompt"].as_str().unwrap_or("").to_string(),
+                    (None, Some(_)) => args["message"].as_str().unwrap_or("").to_string(),
+                    (None, None) => serde_json::to_string_pretty(&args).unwrap_or_default(),
+                };
                 let mut message = Message::new(
                     &self.chat_id,
                     Author::Bot { bot_id: self.bot_id.clone() },
                     Body::Tool {
                         name: tool_name.clone(),
                         summary,
-                        detail: serde_json::to_string_pretty(&args).unwrap_or_default(),
+                        detail,
                         is_running: true,
                         call_id: tool_call_id.clone(),
                         arguments: args,
@@ -1396,6 +1408,7 @@ impl TurnState {
                         script_command: None,
                         run,
                         agent,
+                        target_agent_id,
                     },
                 );
                 message.state = MessageState::Streaming;
@@ -1453,9 +1466,12 @@ impl TurnState {
                 };
                 let summary = if is_error && tool_name != CODEMODE_TOOL_NAME { format!("{} failed", tool_label(&tool_name)) } else { summary };
                 let finish = |message: &mut Message| {
-                    if let Body::Tool { summary: s, detail, is_running, result: r, is_error: e, description, script_command, name, .. } = &mut message.body {
+                    if let Body::Tool { summary: s, detail, is_running, result: r, is_error: e, description, script_command, name, arguments, agent, target_agent_id, .. } = &mut message.body {
                         *s = summary;
-                        *detail = text.clone();
+                        // A coding agent's start or message keeps what the bot wrote it, which the
+                        // apps show in its "Messaged ⬢ Title" marker.
+                        let wrote = (agent.is_some() || target_agent_id.is_some()).then(|| arguments["message"].as_str().or(arguments["prompt"].as_str())).flatten();
+                        *detail = wrote.map(str::to_string).unwrap_or_else(|| text.clone());
                         *is_running = false;
                         *r = Some(text.clone());
                         *e = is_error;
@@ -1860,9 +1876,10 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
     if job.kind != crate::workflows::SAMPLE_JOB {
         prompt.push_str(
             "\nFor a larger coding job in a repository on this Runner (a feature, a fix with tests, a refactor), or when the user \
-             asks for Claude Code or Codex, hand it to a coding agent with coding_agent: it works on its own in a git worktree \
-             while you supervise. Say what proof you expect back, check its work against the request when you hear it is done, \
-             send it follow-ups, and report to the user with its outputs. Its commands go through Auto-review as yours do.\n",
+             asks for Claude Code, Codex, OpenCode, or pi, hand it to a coding agent with coding_agent: it works on its own in a \
+             git worktree while you supervise. Give it a short title and a full brief, tell the user you started it, and end your \
+             turn; when its message arrives, check its work against the request, send it follow-ups, and tell the user how it \
+             went, with its pull request when it opened one. Its commands go through Auto-review as yours do.\n",
         );
     }
     if let Some(runner) = runner {
@@ -2214,6 +2231,12 @@ fn transcript_bounded(app: &App, chat: &Chat, bot: &Bot, workdir: &std::path::Pa
             // maybe with the user's changes.
             (Author::Bot { bot_id }, Body::Draft { state, draft, .. }) if bot_id == &bot.id => {
                 out.push(user(&crate::drafts::history_line(state, draft), timestamp));
+            }
+            // What a coding agent said when it was done, or why it ended.
+            (Author::Bot { bot_id }, Body::AgentMessage { agent_id, agent_kind, title, text, failed }) => {
+                let whose = if bot_id == &bot.id { "your".to_string() } else { format!("{}'s", name_of(app, bot_id)) };
+                let what = if *failed { "ended" } else { "says" };
+                out.push(user(&format!("[{} ({agent_id}), {whose} coding agent on “{title}”, {what}]: {text}", crate::model::coding_agent_name(agent_kind)), timestamp));
             }
             (Author::Bot { bot_id }, Body::Handoff { to, reason, .. }) if bot_id != &bot.id => {
                 let from = name_of(app, bot_id);
@@ -4665,6 +4688,7 @@ mod tests {
                 arguments: json!({}), result: Some("…".into()), is_error: false, description: None, target_bot_id: None, script_command: None,
                 run: Some(CommandRun { session_id: Some(format!("bash-{}", bot.id)), command: "sudo -v".into(), state: state.into(), prompt: Some("Password:".into()), ..CommandRun::default() }),
                 agent: None,
+                target_agent_id: None,
             });
             message.state = MessageState::Complete;
             app.upsert_message(message.clone(), false);

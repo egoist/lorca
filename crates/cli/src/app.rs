@@ -81,6 +81,7 @@ pub struct State {
     pub routines: Vec<Routine>,
     pub workflows: Vec<crate::workflows::Setup>,
     pub auto_review: AutoReview,
+    pub coding_agents: crate::model::CodingAgents,
     pub shared_links: Vec<crate::templates::links::SharedLink>,
     /// The names the account gives its Devices, by machine pubkey, from the roster.
     pub device_names: std::collections::BTreeMap<String, String>,
@@ -781,6 +782,7 @@ impl App {
                 sections: state.sections.clone(),
                 routines: state.routines.clone(),
                 auto_review: state.auto_review.clone(),
+                coding_agents: state.coding_agents.clone(),
                 shared_links: state.shared_links.clone(),
                 device_names: state.device_names.clone(),
                 unpaired: state.unpaired.clone(),
@@ -1172,6 +1174,7 @@ impl App {
             sections: state.sections.clone(),
             routines: self.routines_out(&state),
             auto_review: state.auto_review.clone(),
+            coding_agents: state.coding_agents.clone().normalized(),
             shared_links: state.shared_links.iter().map(crate::templates::links::SharedLink::out).collect(),
             providers: self.credentials.lock().unwrap().statuses(),
             models: models_out(),
@@ -1181,6 +1184,17 @@ impl App {
 
     pub fn auto_review(&self) -> AutoReview {
         self.state.lock().unwrap().auto_review.clone()
+    }
+
+    /// The coding agents bots may start, in the account's order.
+    pub fn coding_agents_settings(&self) -> crate::model::CodingAgents {
+        self.state.lock().unwrap().coding_agents.clone()
+    }
+
+    /// Replaces the account's coding agents and publishes the roster.
+    pub fn set_coding_agents(&self, coding_agents: crate::model::CodingAgents) {
+        self.state.lock().unwrap().coding_agents = coding_agents;
+        self.roster_changed(true);
     }
 
     /// Replaces the Auto-review setting and publishes the roster.
@@ -2213,6 +2227,7 @@ impl App {
             "reviews": crate::review_queue::list(self).unwrap_or_default(),
             "tasks": crate::tasks::list(self).unwrap_or_default(),
             "auto_review": state.auto_review,
+            "coding_agents": state.coding_agents.clone().normalized(),
             "shared_links": state.shared_links.iter().map(crate::templates::links::SharedLink::out).collect::<Vec<_>>(),
             "providers": self.credentials.lock().unwrap().statuses(),
             "models": models_out(),

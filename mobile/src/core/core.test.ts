@@ -4,10 +4,15 @@
 import { describe, expect, test } from "bun:test";
 import {
   addModelRow,
+  agentIsOpen,
   agentIsRunning,
   agentName,
-  agentPlace,
+  agentStartRow,
   agentStarted,
+  agentTitle,
+  agentWrote,
+  isAgentRow,
+  pullRequestLabel,
   type AgentRun,
   attachmentSummary,
   connectedProviders,
@@ -116,25 +121,35 @@ describe("model", () => {
     expect(showsCard({ kind: "tool", name: "read", summary: "", detail: "", is_running: false })).toBe(false);
   });
 
-  test("a coding agent's card offers Stop while it runs and its transcript once it started", () => {
-    const agent = (state: AgentRun["state"], question?: AgentRun["question"]): AgentRun => ({ id: "agent-1", kind: "claude", task: "Fix it", folder: "~/.lorca/worktrees/site-1a2b3c/fix-it", branch: "fix-it", state, question });
-    expect(agentName(agent("working"))).toBe("Claude Code");
-    expect(agentName({ ...agent("working"), kind: "codex" })).toBe("Codex");
-    expect(agentPlace(agent("working"))).toBe("fix-it");
-    expect(agentPlace({ ...agent("working"), branch: undefined })).toBe("fix-it");
-    expect(agentIsRunning(agent("working"))).toBe(true);
-    expect(agentIsRunning(agent("asking", { kind: "command", command: "git push" }))).toBe(true);
-    // Before it starts there is nothing to stop or read; done, it waits for a follow-up.
-    expect(agentIsRunning(agent("asking", { kind: "start" }))).toBe(false);
-    expect(agentStarted(agent("asking", { kind: "start" }))).toBe(false);
-    expect(agentIsRunning(agent("checking"))).toBe(false);
-    expect(agentIsRunning(agent("idle"))).toBe(false);
-    expect(agentStarted(agent("idle"))).toBe(true);
-    for (const state of ["exited", "failed", "stopped"] as const) {
-      expect(agentIsRunning(agent(state))).toBe(false);
-      expect(agentStarted(agent(state))).toBe(true);
-    }
-    expect(agentStarted(agent("denied"))).toBe(false);
+  test("a coding agent stops while it runs and has a page once it started", () => {
+    const agent = (state: AgentRun["state"], more: Partial<AgentRun> = {}): AgentRun => ({ id: "agent-1", kind: "claude", title: "Fix the login", task: "Fix it", folder: "~/.lorca/worktrees/site-1a2b3c/fix-it", branch: "fix-it", state, ...more });
+    expect(agentName("claude")).toBe("Claude Code");
+    expect(agentName("codex")).toBe("Codex");
+    expect(agentName("opencode")).toBe("OpenCode");
+    expect(agentName("pi")).toBe("pi");
+    expect(agentTitle(agent("working"))).toBe("Fix the login");
+    expect(agentTitle(agent("working", { title: "" }))).toBe("Fix it");
+    for (const state of ["starting", "working", "asking"] as const) expect(agentIsRunning(agent(state))).toBe(true);
+    // Done, it waits for a follow-up; ended, it takes none.
+    for (const state of ["idle", "failed", "stopped"] as const) expect(agentIsRunning(agent(state))).toBe(false);
+    expect(agentIsOpen(agent("idle"))).toBe(true);
+    expect(agentIsOpen(agent("failed"))).toBe(false);
+    expect(agentStarted(agent("working"))).toBe(true);
+    // A start that failed before the agent had an id has no page.
+    expect(agentStarted(agent("failed", { id: "" }))).toBe(false);
+    expect(pullRequestLabel("https://github.com/acme/shop/pull/7")).toBe("#7");
+  });
+
+  test("a coding agent's start and the messages sent to it show; its other calls don't", () => {
+    const start: Body = { kind: "tool", name: "coding_agent", summary: "", detail: "Fix the login form", is_running: false, agent: { id: "agent-1", kind: "codex", title: "Login", task: "Fix", state: "working" } };
+    const sent: Body = { kind: "tool", name: "coding_agent", summary: "", detail: "Also the tests", is_running: false, target_agent_id: "agent-1" };
+    const read: Body = { kind: "tool", name: "coding_agent", summary: "", detail: "{}", is_running: false };
+    expect([start, sent, read].map(isAgentRow)).toEqual([true, true, false]);
+    // While the call runs its detail is the arguments; the marker reads the prompt from them.
+    expect(agentWrote({ ...(sent as Extract<Body, { kind: "tool" }>), is_running: true, detail: "{…}", arguments: { action: "send", id: "agent-1", message: "Also the tests" } })).toBe("Also the tests");
+    const messages = [start, sent].map((body, i) => ({ id: `m${i}`, chat_id: "c", author: { kind: "bot" as const, bot_id: "b" }, body, state: { kind: "complete" as const }, created_at: i }));
+    expect(agentStartRow(messages, "agent-1")?.id).toBe("m0");
+    expect(agentStartRow(messages, "")).toBeUndefined();
   });
 
   test("a command runs in its terminal from its session's start to its end", () => {
@@ -603,6 +618,13 @@ describe("format", () => {
     // A handoff's report reaches the requesting bot's group from outside it.
     const report = msg({ kind: "bot", bot_id: "b2" }, { kind: "handoff", from: "b2", to: "b1", reason: "done" });
     expect(preview({ ...chat("group", [report]), bot_ids: ["b1", "b3"] }, bots)).toBe("Message from Scout: done");
+    // A coding agent, by the title the bot gave its job.
+    const started = msg({ kind: "bot", bot_id: "b1" }, { kind: "tool", name: "coding_agent", summary: "", detail: "Fix the login form\nand its tests", is_running: false, agent: { id: "agent-1", kind: "claude", title: "Login fix", task: "Fix", state: "working" } });
+    expect(preview(chat("dm", [started]), bots)).toBe("Messaged Login fix: Fix the login form and its tests");
+    const followUp = msg({ kind: "bot", bot_id: "b1" }, { kind: "tool", name: "coding_agent", summary: "", detail: "Run them too", is_running: false, target_agent_id: "agent-1" });
+    expect(preview(chat("dm", [started, followUp]), bots)).toBe("Messaged Login fix: Run them too");
+    const said = msg({ kind: "bot", bot_id: "b1" }, { kind: "agent_message", agent_id: "agent-1", agent_kind: "claude", title: "Login fix", text: "Done, PR #7" });
+    expect(preview(chat("dm", [started, said]), bots)).toBe("Message from Login fix: Done, PR #7");
   });
 
   test("the working row reads what the one bot at work is doing", () => {
@@ -625,6 +647,7 @@ describe("format", () => {
     // Between calls the row keeps the last one.
     expect(activity([you, tool("bash", { is_running: false })])).toBe("Running commands…");
     expect(activity([you, tool("memory_update")])).toBe("Taking a note…");
+    expect(activity([you, tool("coding_agent")])).toBe("Writing some code…");
     expect(activity([you, tool("message_bot", { target_bot_id: "b2" })])).toBe("Messaging Scout…");
     expect(activity([you, tool("message_bot", { summary: "Messaged Scout", is_running: false })])).toBeNull();
     expect(activity([you, tool("github__create_issue")])).toBe("Using Github…");

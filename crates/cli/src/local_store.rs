@@ -59,6 +59,10 @@ impl LocalStore {
                  machine_blob_hash        TEXT,
                  credentials_uploaded     INTEGER NOT NULL
              );
+             CREATE TABLE IF NOT EXISTS account_settings (
+                 key  TEXT PRIMARY KEY NOT NULL,
+                 json TEXT NOT NULL
+             );
              CREATE TABLE IF NOT EXISTS devices (
                  id       TEXT PRIMARY KEY NOT NULL,
                  position INTEGER NOT NULL,
@@ -253,6 +257,8 @@ impl LocalStore {
             ),
             None => (Default::default(), 0, None, false),
         };
+        let coding_agents: Option<String> = connection.query_row("SELECT json FROM account_settings WHERE key = 'coding_agents'", [], |row| row.get(0)).optional()?;
+        let coding_agents = coding_agents.and_then(|json| serde_json::from_str(&json).ok()).unwrap_or_default();
         Ok(State {
             devices: load_json_table(&connection, "devices")?,
             bots: load_json_table(&connection, "bots")?,
@@ -261,6 +267,7 @@ impl LocalStore {
             routines: load_json_table(&connection, "routines")?,
             workflows: load_json_table(&connection, "workflow_setups")?,
             auto_review,
+            coding_agents,
             shared_links: load_json_table(&connection, "shared_links")?,
             device_names: load_device_names(&connection)?,
             unpaired: load_id_set(&connection, "unpaired_machines")?,
@@ -1533,6 +1540,10 @@ fn save_metadata_tx(tx: &Transaction<'_>, state: &State) -> anyhow::Result<()> {
             state.credentials_uploaded,
         ],
     )?;
+    tx.execute(
+        "INSERT INTO account_settings (key, json) VALUES ('coding_agents', ?1) ON CONFLICT(key) DO UPDATE SET json = excluded.json",
+        params![serde_json::to_string(&state.coding_agents)?],
+    )?;
     Ok(())
 }
 
@@ -1559,6 +1570,7 @@ fn message_search_text(message: &Message) -> Option<String> {
             format!("{text} {names}")
         }
         Body::Handoff { reason, .. } => reason.clone(),
+        Body::AgentMessage { title, text, .. } => format!("{title} {text}"),
         Body::Notice { text, .. } => text.clone(),
         Body::Permission { summary, .. } => summary.clone(),
         Body::Draft { draft, .. } => format!("{} {} {}", draft.to.join(" "), draft.subject, draft.body),
@@ -1818,6 +1830,7 @@ fn body_kind(body: &Body) -> &'static str {
         Body::Text { .. } => "text",
         Body::Tool { .. } => "tool",
         Body::Handoff { .. } => "handoff",
+        Body::AgentMessage { .. } => "agent_message",
         Body::Notice { .. } => "notice",
         Body::Permission { .. } => "permission",
         Body::Draft { .. } => "draft",

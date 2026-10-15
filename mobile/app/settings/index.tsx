@@ -7,7 +7,7 @@ import { ActivityIndicator, Alert, Platform, ScrollView, StyleSheet, Text, View 
 import { engine } from "../../src/core/engine";
 import { loadPrefs } from "../../src/core/prefs";
 import { checkForUpdates, installedVersion, installUpdate, setDailyChecks, updatesSupported, useUpdates, type Updates } from "../../src/core/updates";
-import { CUSTOM_PRESETS, customProviderNamed, deviceName, isCustomProvider, isRunner, presetGroup, providerLabel, reviewModelRows, reviewPicker, withCustomModels, type ReviewModelRow } from "../../src/core/model";
+import { agentName, CUSTOM_PRESETS, customProviderNamed, deviceName, isCustomProvider, isRunner, presetGroup, providerLabel, reviewModelRows, reviewPicker, withCustomModels, type ReviewModelRow } from "../../src/core/model";
 import { deviceIsOnline, useStore } from "../../src/core/store";
 import { deviceLanguage, languageNames, languages, setAppLanguage, t, useLanguage } from "../../src/i18n";
 import { FieldRow, MenuRow, Row, Section, ToggleRow, type MenuChoice } from "../../src/ui/forms";
@@ -55,6 +55,8 @@ export default function SettingsScreen() {
   const autoReview = useStore((s) => s.auto_review);
   const providers = useStore((s) => s.providers);
   const sharedLinks = useStore((s) => s.shared_links);
+  // The agent a bot uses when it names none, if its Runner has it installed.
+  const codingAgent = useStore((s) => s.coding_agents.agents.find((choice) => choice.enabled));
   const catalog = withCustomModels(useStore((s) => s.models), providers);
   const thisDevice = devices.find((d) => d.is_this_device);
   const [name, setName] = useState(thisDevice?.name ?? "");
@@ -369,6 +371,7 @@ export default function SettingsScreen() {
         )}
 
         <Section>
+          <Row title={t("Coding Agents")} detail={codingAgent ? agentName(codingAgent.kind) : t("Off")} chevron onPress={() => router.push("/settings/coding-agents")} />
           <Row title={t("Shared Links")} detail={sharedLinks.length ? String(sharedLinks.length) : undefined} chevron onPress={() => router.push("/settings/shared-links")} />
         </Section>
 

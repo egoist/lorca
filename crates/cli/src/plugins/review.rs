@@ -724,6 +724,10 @@ fn transcript_lines(app: &App, messages: &[Message]) -> Vec<String> {
                 proposal = None;
                 lines.push(format!("[teammate] {} to {}: {}", name(from), name(to), clipped(reason, REQUEST_CHARS)));
             }
+            (Author::Bot { bot_id }, Body::AgentMessage { agent_kind, title, text, .. }) => {
+                proposal = None;
+                lines.push(format!("[coding agent] {}'s {} on “{title}”: {}", name(bot_id), crate::model::coding_agent_name(agent_kind), clipped(text, REQUEST_CHARS)));
+            }
             (Author::System, Body::Notice { routine_id: Some(_), text }) => {
                 proposal = None;
                 lines.push(format!("({}: a scheduled run started, with nobody watching)", one_line(text)));
@@ -1083,6 +1087,7 @@ mod tests {
             arguments: serde_json::json!({ "command": command }), result: None, is_error: false, description: None, target_bot_id: None, script_command: None,
             run: Some(CommandRun { command: command.into(), state: state.into(), decision: decision.map(str::to_string), held, ..Default::default() }),
             agent: None,
+            target_agent_id: None,
         };
         let at = |message_id: &str| Trigger { message_id: message_id.into(), routine: None, event: None };
 
@@ -1115,12 +1120,13 @@ mod tests {
         say(6.0, devops_said(), Body::Tool {
             name: "coding_agent".into(), summary: "Claude Code".into(), detail: String::new(), is_running: false, call_id: String::new(),
             arguments: serde_json::Value::Null, result: None, is_error: false, description: None, target_bot_id: None, script_command: None, run: None,
-            agent: Some(AgentRun { kind: "claude".into(), task: "Fix the relay's memory leak".into(), folder: "~/.lorca/worktrees/relay-1a2b/fix-leak".into(), branch: Some("fix-leak".into()), state: "idle".into(), ..Default::default() }),
+            agent: Some(AgentRun { kind: "claude".into(), title: "Fix the relay's memory leak".into(), task: "Fix the relay's memory leak".into(), folder: "~/.lorca/worktrees/relay-1a2b/fix-leak".into(), branch: Some("fix-leak".into()), state: "idle".into(), ..Default::default() }),
+            target_agent_id: None,
         });
         say(5.5, devops_said(), Body::Tool {
             name: "github__create_issue".into(), summary: "create_issue · repo: relay".into(), detail: String::new(), is_running: false, call_id: String::new(),
             arguments: serde_json::Value::Null, result: Some(format!("{HELD}, so it did not run: It posts an issue.")), is_error: true, description: None,
-            target_bot_id: None, script_command: None, run: None, agent: None,
+            target_bot_id: None, script_command: None, run: None, agent: None, target_agent_id: None,
         });
         let steps = "DevOps ran: railway status → ok\nDevOps ran: git worktree add /tmp/relay-fix → failed\n\
                      DevOps ran: railway redeploy -s relay → user allowed; ok\nDevOps ran: railway down -s relay → user did not allow\n\

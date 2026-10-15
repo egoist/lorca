@@ -175,6 +175,11 @@ pub(crate) mod tests_support {
         programs.push((name.to_string(), path));
     }
 
+    /// Has [`super::find`] look on `PATH` for `name` again.
+    pub fn uninstall(name: &str) {
+        PROGRAMS.lock().unwrap().retain(|(known, _)| known != name);
+    }
+
     pub fn overridden(name: &str) -> Option<PathBuf> {
         PROGRAMS.lock().unwrap().iter().find(|(known, _)| known == name).map(|(_, path)| path.clone())
     }

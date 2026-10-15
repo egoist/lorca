@@ -10,7 +10,7 @@ import { t } from "../i18n";
 import { exactAnswer, ExactNumber, ExactObject, stringifyExact } from "./exactJson";
 import { reviewEditParams } from "./reviewEdit";
 import { hostFacts } from "./host";
-import { orderProjectEntries, providerConnectMethod, sectionName, withReviewModel, sameDraft, type Section, type PlaybookContent, type PlaybookRecord, type PlaybookScope, type ProjectContext, type ProjectEntry, type ProjectKind, type ProjectSource, type Attachment, type AutoReview, type Bot, type BrowserProfile, type BudgetLimits, type BudgetState, type CallLimits, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type DurableTask, type Message, type MessageDraft, type ReviewItem, type PluginDetail, type PluginStatus, type ProviderKind, type ProviderStatus, type SavedSecret, routinesAwaitingSetup } from "./model";
+import { orderProjectEntries, providerConnectMethod, sectionName, withReviewModel, sameDraft, type Section, type PlaybookContent, type PlaybookRecord, type PlaybookScope, type ProjectContext, type ProjectEntry, type ProjectKind, type ProjectSource, type Attachment, type AgentItem, type AgentRun, type AutoReview, type Bot, type CodingAgents, type BrowserProfile, type BudgetLimits, type BudgetState, type CallLimits, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type DurableTask, type Message, type MessageDraft, type ReviewItem, type PluginDetail, type PluginStatus, type ProviderKind, type ProviderStatus, type SavedSecret, routinesAwaitingSetup } from "./model";
 import { coreHome, loadPrefs, pathOf, wipePrefs } from "./prefs";
 import type { SharedLink, TemplateContents, TemplateImportPreview, TemplateSelection } from "./templates";
 import { clearPushes, installPushHandlers, registerForPushes } from "./push";
@@ -887,9 +887,15 @@ class Engine {
   /// answer did not reach the Runner, such as it being offline, and the card asks again.
   async answerPermission(chatId: string, messageId: string, decision: "allow" | "always" | "deny") {
     const decided: "always" | "denied" | "allowed" = decision === "always" ? "always" : decision === "deny" ? "denied" : "allowed";
-    // A permission card shows the answer; a command's card moves on to running, or ends.
+    // A permission card shows the answer; a command's card moves on to running, or ends; a coding
+    // agent's question goes.
     const answered = (m: Message): Message => {
       if (m.body.kind === "permission") return { ...m, body: { ...m.body, decision: decided } };
+      if (m.body.kind === "tool" && m.body.agent?.state === "asking") {
+        // Answered either way, it goes back to work: a denied command is the agent's to deal with.
+        const agent = { ...m.body.agent, state: "working" as const, question: undefined };
+        return { ...m, body: { ...m.body, agent } };
+      }
       if (m.body.kind === "tool" && m.body.run?.state === "asking") {
         const run = { ...m.body.run, decision: decided, state: decided === "denied" ? ("denied" as const) : ("running" as const), rule: decided === "always" ? m.body.run.rule : undefined };
         return { ...m, body: { ...m.body, run } };
@@ -1033,26 +1039,29 @@ class Engine {
 
   // MARK: - Coding agents
 
-  /// Stops a coding agent on its bot's Runner; its card says so once the Runner has.
+  /// Stops a coding agent on its bot's Runner; its row says so once the Runner has.
   async stopAgent(chatId: string, messageId: string) {
     await core.request("coding.stop", { chat_id: chatId, message_id: messageId });
   }
 
-  /// Answers what a coding agent's pane asks with one of the choices it offers.
-  async answerAgentChoice(chatId: string, messageId: string, choice: number) {
-    await core.request("coding.answer", { chat_id: chatId, message_id: messageId, choice });
+  /// A coding agent's transcript, from its bot's Runner, here or sealed to another: its steps
+  /// in order and its card as the Runner has it now. `messageId` is the row that started it.
+  async agentTranscript(chatId: string, messageId: string): Promise<{ items: AgentItem[]; card: AgentRun }> {
+    return core.request<{ items: AgentItem[]; card: AgentRun }>("coding.transcript", { chat_id: chatId, message_id: messageId });
   }
 
-  /// Types an answer into what a coding agent's pane asks, then Return.
-  async answerAgentText(chatId: string, messageId: string, text: string) {
-    await core.request("coding.answer", { chat_id: chatId, message_id: messageId, text });
-  }
-
-  /// A coding agent's transcript, from its Runner: what it was sent, said, and did, or what its
-  /// pane shows.
-  async agentTranscript(chatId: string, messageId: string): Promise<string> {
-    const answer = await core.request<{ text: string }>("coding.transcript", { chat_id: chatId, message_id: messageId });
-    return answer.text;
+  /// Sets the account's order of coding agents and which are on, the whole list at once. The
+  /// list shows the change at once and goes back to what it was when the core refuses it.
+  async setCodingAgents(value: CodingAgents) {
+    const held = useStore.getState().coding_agents;
+    useStore.setState({ coding_agents: value });
+    try {
+      const answer = await core.request<{ coding_agents: CodingAgents }>("coding_agents.set", { agents: value.agents });
+      useStore.setState({ coding_agents: answer.coding_agents });
+    } catch (error) {
+      if (useStore.getState().coding_agents === value) useStore.setState({ coding_agents: held });
+      throw error;
+    }
   }
 
   // MARK: - Routines

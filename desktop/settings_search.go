@@ -78,6 +78,16 @@ func autoReviewRulesEntry() settingsEntry {
 	return entry(model.PaneAutoReview, L("Auto-review Rules"), "", L("rule allow automatically ask first always allow"))
 }
 
+func codingAgentsEntry() settingsEntry {
+	return entry(model.PaneCodingAgents, L("Coding Agents"), "", L("coding agent code worktree pull request order preference"))
+}
+
+// codingAgentEntry is an agent's row, by its product's name.
+func codingAgentEntry(kind string) settingsEntry {
+	keywords := map[string]string{"claude": "anthropic", "codex": "openai"}
+	return entry(model.PaneCodingAgents, model.CodingAgentName(kind), "", keywords[kind], L("coding agent installed version"))
+}
+
 func relayURLEntry() settingsEntry {
 	return entry(model.PaneAdvanced, L("Relay URL"), "", L("server self-host sync pairing connection"))
 }
@@ -167,6 +177,12 @@ func entriesIn(pane model.SettingsPane, device *model.Device) []settingsEntry {
 		return out
 	case model.PaneAutoReview:
 		return []settingsEntry{autoReviewSwitchEntry(), autoReviewProviderEntry(), autoReviewRulesEntry()}
+	case model.PaneCodingAgents:
+		out := []settingsEntry{codingAgentsEntry()}
+		for _, choice := range store.CodingAgents {
+			out = append(out, codingAgentEntry(choice.Kind))
+		}
+		return out
 	case model.PaneSharedLinks:
 		return nil
 	case model.PaneAdvanced:

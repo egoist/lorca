@@ -1193,6 +1193,7 @@ fn apply_roster(app: &Arc<App>, mut roster: RosterBlob) {
         state.bots = roster.bots;
         state.routines = roster.routines;
         state.auto_review = roster.auto_review;
+        state.coding_agents = roster.coding_agents;
         state.shared_links = roster.shared_links;
         state.device_names = roster.device_names;
         state.sections = roster.sections;

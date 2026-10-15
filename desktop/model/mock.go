@@ -468,36 +468,112 @@ func quoted(text string) string {
 	return string(data)
 }
 
+// developerThread has three coding agents: Claude Code done with a pull request and the message
+// it left, Claude Code at work on the docs link with a follow-up from the bot, and Codex asking
+// before a push.
 func developerThread() []*Message {
+	docsBrief := "Update the launcher examples in the docs to read mygo.json instead of the old flags.\n\n" +
+		"- docs/launcher.md and docs/launcher.zh.md have four examples between them.\n" +
+		"- Keep each example runnable: check it against `mygo dev --help`.\n" +
+		"- Open a pull request when the docs build passes."
+	linkBrief := "Fix the broken docs link on the download page, with a test.\n\n" +
+		"The \"Install the CLI\" link points at /docs/install, which moved to /docs/cli/install. " +
+		"Add a test in tests/links.test.ts that fails on any link to a page the site doesn't build."
+	pushBrief := "Add a dark mode toggle to the Settings page, after the Appearance row. Follow the existing switch style, and push the branch when it builds."
 	return []*Message{
+		mockMessage(You, textBody("Update the launcher examples in the docs to use mygo.json."), minutesAgo(130)),
+		mockMessage(BotAuthor("bot-patch"), Body{Kind: BodyTool, Tool: &ToolInvocation{
+			Name: "coding_agent", Summary: "Started Claude Code", Detail: docsBrief,
+			Agent: &AgentRun{
+				ID: "agent-7d21e0b4", Kind: "claude", Title: "Docs: use mygo.json in the launcher examples",
+				Task:   "Update the launcher examples in the docs to read mygo.json instead of the old flags.",
+				Folder: "~/.lorca/worktrees/site-1a2b3c/docs-use-mygo-json-1f2e", Branch: "docs-use-mygo-json-1f2e", State: AgentIdle,
+				PullRequest: "https://github.com/lorca-app/site/pull/7", Changes: &AgentChanges{Files: 4, Added: 12, Removed: 3},
+				Device: "Studio", StartedAt: minutesAgo(129), UpdatedAt: minutesAgo(101),
+			},
+		}}, minutesAgo(129)),
+		mockMessage(BotAuthor("bot-patch"), textBody("Claude Code is updating the examples in a worktree of its own."), minutesAgo(129)),
+		mockMessage(BotAuthor("bot-patch"), Body{Kind: BodyAgentMessage, AgentMessage: &AgentMessage{
+			AgentID: "agent-7d21e0b4", AgentKind: "claude", Title: "Docs: use mygo.json in the launcher examples",
+			Text: "Updated the four launcher examples to read mygo.json, in English and Chinese. The docs build passes.\n\nOpened https://github.com/lorca-app/site/pull/7.",
+		}}, minutesAgo(101)),
+		mockMessage(BotAuthor("bot-patch"), textBody("Claude Code opened #7: the four launcher examples now read mygo.json, and the docs build passes."), minutesAgo(100)),
 		mockMessage(You, textBody("Check the getting-started page and make sure every download link works."), minutesAgo(55)),
 		mockMessage(BotAuthor("bot-patch"), textBody("The Windows and Linux downloads and the CLI install links work. I also checked the docs links in both languages."), minutesAgo(28)),
 		mockMessage(BotAuthor("bot-patch"), textBody("The website build passes. I've left the changes ready for review."), minutesAgo(27)),
 		mockMessage(You, textBody("Have Claude Code fix the broken docs link on the download page, with a test."), minutesAgo(12)),
 		mockMessage(BotAuthor("bot-patch"), Body{Kind: BodyTool, Tool: &ToolInvocation{
-			Name: "coding_agent", Summary: "Started Claude Code",
+			Name: "coding_agent", Summary: "Started Claude Code", Detail: linkBrief,
 			Agent: &AgentRun{
-				ID: "agent-3f9a2c1d", Kind: "claude", Task: "Fix the broken docs link on the download page, with a test",
+				ID: "agent-3f9a2c1d", Kind: "claude", Title: "Fix the broken docs link on the download page",
+				Task:   "Fix the broken docs link on the download page, with a test.",
 				Folder: "~/.lorca/worktrees/site-1a2b3c/fix-docs-link", Branch: "fix-docs-link", State: AgentWorking,
-				Output: "● Read(src/pages/download.astro)\n● Edit(src/pages/download.astro)\n  ⎿ Updated 1 line\n● Bash(bun test links)\n  ⎿ 14 pass\n    0 fail",
-				Device: "Workbench",
+				Device: "Studio", StartedAt: minutesAgo(11), UpdatedAt: minutesAgo(10),
 			},
 		}}, minutesAgo(11)),
 		mockMessage(BotAuthor("bot-patch"), textBody("Claude Code is fixing the link in a worktree of its own. I'll check its test when it's done."), minutesAgo(11)),
+		mockMessage(You, textBody("The Chinese download page has the same link. And have Codex add a dark mode toggle to Settings."), minutesAgo(6)),
+		mockMessage(BotAuthor("bot-patch"), Body{Kind: BodyTool, Tool: &ToolInvocation{
+			Name: "coding_agent", Summary: "Messaged Claude Code", Detail: "Fix the same link on the Chinese download page too, and cover it in the test.",
+			TargetAgentID: "agent-3f9a2c1d",
+		}}, minutesAgo(5)),
+		mockMessage(BotAuthor("bot-patch"), Body{Kind: BodyTool, Tool: &ToolInvocation{
+			Name: "coding_agent", Summary: "Started Codex", Detail: pushBrief,
+			Agent: &AgentRun{
+				ID: "agent-b85e4f10", Kind: "codex", Title: "Settings: add a dark mode toggle",
+				Task:   "Add a dark mode toggle to the Settings page, after the Appearance row.",
+				Folder: "~/.lorca/worktrees/site-1a2b3c/dark-mode-toggle", Branch: "dark-mode-toggle", State: AgentAsking,
+				Question: &AgentQuestion{Command: "git push -u origin dark-mode-toggle", Reason: "Pushing sends the branch to GitHub, where others can see it.", Rule: "push coding agents' branches to GitHub", HasRule: true},
+				Device:   "Studio", StartedAt: minutesAgo(5), UpdatedAt: minutesAgo(1),
+			},
+		}}, minutesAgo(5)),
+		mockMessage(BotAuthor("bot-patch"), textBody("I asked Claude Code to fix the Chinese page too. Codex is adding the dark mode toggle on a branch of its own."), minutesAgo(5)),
 	}
 }
 
-// MockAgentTranscript is what `coding.transcript` answers in the demo.
-const MockAgentTranscript = `> Fix the broken docs link on the download page, with a test.
-I'll find the link first.
-● Grep(docs/install)
-  ⎿ src/pages/download.astro:42
-● Read(src/pages/download.astro)
-● Edit(src/pages/download.astro)
-  ⎿ Updated 1 line
-● Bash(bun test links)
-  ⎿ 14 pass
-    0 fail`
+// MockAgentTranscript is what `coding.transcript` answers in the demo: a step of every kind.
+func MockAgentTranscript() []AgentItem {
+	at := float64(minutesAgo(11).Unix())
+	n := func(value int) *int { return &value }
+	thought := 3.0
+	tool := func(id, kind, title, status, output string) AgentItem {
+		return AgentItem{ID: id, Kind: "tool", At: at, Tool: &AgentToolStep{Kind: kind, Title: title, Status: status, Output: output}}
+	}
+	edit := tool("t6", "edit", "src/pages/download.astro", "done", "")
+	edit.Tool.Path, edit.Tool.Added, edit.Tool.Removed = "src/pages/download.astro", n(1), n(1)
+	test := tool("t9", "edit", "tests/links.test.ts", "done", "")
+	test.Tool.Path, test.Tool.Added, test.Tool.Removed = "tests/links.test.ts", n(24), n(0)
+	return []AgentItem{
+		{ID: "p1", Kind: "prompt", At: at, Text: "Fix the broken docs link on the download page, with a test.\n\n" +
+			"The \"Install the CLI\" link points at /docs/install, which moved to /docs/cli/install. " +
+			"Add a test in tests/links.test.ts that fails on any link to a page the site doesn't build.\n\n" +
+			"You work in ~/.lorca/worktrees/site-1a2b3c/fix-docs-link, a worktree of ~/Projects/site on the branch fix-docs-link. " +
+			"Commit your work there when it is done; don't push unless asked.\n\n" +
+			"When you are done, say in a few lines what you changed and how you checked it."},
+		{ID: "s1", Kind: "status", At: at, Text: "Worktree ready on fix-docs-link"},
+		{ID: "th1", Kind: "thought", At: at, Seconds: &thought, Text: "The link is probably in the download page's install section. I'll search for the old path, then read the page and the existing link tests."},
+		{ID: "x1", Kind: "text", At: at, Text: "I'll find where the old `/docs/install` path is used first."},
+		tool("t1", "search", "/docs/install", "done", "src/pages/download.astro:42\nsrc/pages/zh/download.astro:40"),
+		tool("t2", "read", "src/pages/download.astro", "done", ""),
+		tool("t3", "read", "src/pages/zh/download.astro", "done", ""),
+		tool("t4", "search", "links.test", "done", "tests/links.test.ts"),
+		tool("t5", "read", "tests/links.test.ts", "done", ""),
+		{ID: "pl1", Kind: "plan", At: at, Plan: []AgentPlanEntry{
+			{Text: "Point the link at /docs/cli/install", Status: "completed"},
+			{Text: "Add a test for links to pages the site doesn't build", Status: "in_progress"},
+			{Text: "Run the link tests", Status: "pending"},
+		}},
+		edit,
+		tool("t7", "fetch", "https://lorca.app/docs/cli/install", "done", ""),
+		tool("t8", "execute", "git push origin fix-docs-link", "denied", ""),
+		test,
+		tool("t10", "execute", "bun test links", "failed", "tests/links.test.ts:\n✗ every link points at a page the site builds\n  /docs/install in src/pages/zh/download.astro:40\n\n0 pass\n1 fail"),
+		{ID: "e1", Kind: "error", At: at, Text: "The link test failed: the Chinese page still links to /docs/install."},
+		{ID: "x2", Kind: "text", At: at, Text: "The Chinese page has the same link. I'll fix it there too and run the tests again."},
+		tool("t11", "other", "github: create_issue", "done", ""),
+		tool("t12", "execute", "bun test links", "running", ""),
+	}
+}
 
 func researcherThread() []*Message {
 	return []*Message{

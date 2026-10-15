@@ -30,7 +30,9 @@ type inspectorState struct {
 	scroll    ui.ScrollState
 	// tasksShowingAll is the chat whose Tasks section shows every task rather than the first few.
 	tasksShowingAll string
-	project         projectInspectorState
+	// codingShowingAll is the chat whose Coding section shows every agent.
+	codingShowingAll string
+	project          projectInspectorState
 	// skillsShowingAll is the bot or group whose Skills section shows every skill.
 	skillsShowingAll model.PlaybookScope
 }
@@ -146,6 +148,7 @@ func (m *mainWindow) inspectorView(c *ui.Context, chatID string) {
 			}
 			m.inspectorReviews(c, chat)
 			m.inspectorOutputs(c, chat)
+			m.inspectorCoding(c, chat)
 			if single != nil {
 				m.inspectorProfile(c, single)
 				m.inspectorRuntime(c, single, chat)
@@ -164,6 +167,60 @@ func (m *mainWindow) inspectorView(c *ui.Context, chatID string) {
 			m.inspectorRouting(c, members)
 		})
 	})
+}
+
+// inspectorCoding lists the coding agents the chat's bots started, what needs the user and what
+// works first, as rows that open the agent's page; past five the rest wait behind Show More. The
+// section hides while there are none.
+func (m *mainWindow) inspectorCoding(c *ui.Context, chat *model.Chat) {
+	rows := model.CodingAgentsIn(chat, model.Now())
+	if len(rows) == 0 {
+		return
+	}
+	p := colors(c)
+	shown := rows
+	if m.inspector.codingShowingAll != chat.ID && len(rows) > 5 {
+		shown = rows[:5]
+	}
+	chatID := chat.ID
+	section(c.Key("coding"), L("Coding"), sectionCaption, nil, func(k *card) {
+		for _, row := range shown {
+			agent := model.AgentOf(row)
+			messageID := row.ID
+			ui.Box(c.Key(row.ID)).Children(func() {
+				if codingAgentRow(c, k, agent) {
+					m.presentAgentPage(chatID, messageID)
+				}
+			})
+		}
+		if len(shown) < len(rows) {
+			ui.Box(c.Key("all")).Children(func() {
+				if taskRow(c, k, "ellipsis", p.Label3, L("Show %d More", len(rows)-len(shown)), "") {
+					m.inspector.codingShowingAll = chatID
+				}
+			})
+		}
+	})
+}
+
+// codingAgentRow is a coding agent in Details: how it stands as a mark, its title, its status with
+// its pull request or branch, and a chevron. It answers a click.
+func codingAgentRow(c *ui.Context, k *card, agent *model.AgentRun) bool {
+	p := colors(c)
+	r := k.row(rowBox(c).MinHeight(44).Label(agent.Label()).Tooltip(agent.Label()).Cursor(ui.CursorPointer).Role(ui.RoleButton))
+	if r.Hovered() {
+		r.Background(p.RowHover)
+	}
+	clicked := r.Clicked()
+	r.Children(func() {
+		ui.Row(c).Width(18).Justify(ui.Center).Children(func() { agentStatusMark(c, agent) })
+		ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(1).Children(func() {
+			ui.Text(c, agent.Label()).FontSize(12.5).FontWeight(500).MaxLines(2)
+			ui.Text(c, agentRowDetail(agent)).FontSize(textCaption).TextColor(p.Label2).SingleLine()
+		})
+		ui.Row(c).Shrink(0).TextColor(p.Label3).Margin(0, -4, 0, 0).Children(func() { symbol(c, "chevron.right", 12, 2.2) })
+	})
+	return clicked
 }
 
 func (m *mainWindow) inspectorParticipants(c *ui.Context, chat *model.Chat, members []*model.Bot) {

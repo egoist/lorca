@@ -1547,9 +1547,11 @@ type ToolInvocation struct {
 	// Run is a shell command's card, which the transcript shows only while the command needs the
 	// user (IsShown). Every `bash` row has one.
 	Run *CommandRun
-	// Agent is the card of the coding agent a `coding_agent` call started, which the transcript
-	// shows from the start.
+	// Agent is the coding agent a `coding_agent` start started, which the transcript shows as
+	// "Messaged ⬢ Title" from the start.
 	Agent *AgentRun
+	// TargetAgentID is the coding agent a `coding_agent` send wrote to: "Messaged ⬢ Title" too.
+	TargetAgentID string
 }
 
 // IsSentMessage is a finished message_bot call: the one tool the transcript shows, as
@@ -1558,10 +1560,28 @@ func (t *ToolInvocation) IsSentMessage() bool {
 	return t.Name == "message_bot" && !t.IsRunning && strings.HasPrefix(t.Summary, "Messaged ")
 }
 
-// IsShown is whether the transcript shows the row: a sent message's marker, or a command's card
-// while the command needs the user.
+// IsAgentMessage is a coding agent's start, or a message the bot sent one once the call returned:
+// the transcript shows both as "Messaged ⬢ Title".
+func (t *ToolInvocation) IsAgentMessage() bool {
+	return t.Agent != nil || (t.TargetAgentID != "" && !t.IsRunning)
+}
+
+// AgentText is what the bot wrote a coding agent: the prompt or the message once the call
+// returned, and before that the start's first line.
+func (t *ToolInvocation) AgentText() string {
+	if t.IsRunning {
+		if t.Agent != nil {
+			return t.Agent.Task
+		}
+		return ""
+	}
+	return t.Detail
+}
+
+// IsShown is whether the transcript shows the row: a sent message's marker, a coding agent's, or
+// a command's card while the command needs the user.
 func (t *ToolInvocation) IsShown() bool {
-	if t.Agent != nil {
+	if t.IsAgentMessage() {
 		return true
 	}
 	run := t.Run
@@ -1574,36 +1594,40 @@ func (t *ToolInvocation) IsShown() bool {
 type AgentState string
 
 const (
-	AgentChecking  AgentState = "checking"
-	AgentAsking    AgentState = "asking"
-	AgentStarting  AgentState = "starting"
-	AgentWorking   AgentState = "working"
-	AgentIdle      AgentState = "idle"
-	AgentExited    AgentState = "exited"
-	AgentFailed    AgentState = "failed"
-	AgentStopped   AgentState = "stopped"
-	AgentDenied    AgentState = "denied"
-	AgentExpired   AgentState = "expired"
-	AgentDismissed AgentState = "dismissed"
+	AgentStarting AgentState = "starting"
+	AgentWorking  AgentState = "working"
+	AgentAsking   AgentState = "asking"
+	AgentIdle     AgentState = "idle"
+	AgentFailed   AgentState = "failed"
+	AgentStopped  AgentState = "stopped"
 )
 
-// AgentQuestion is what a coding agent's card asks: whether it may start (`start`) or run a
-// command (`command`), answered like a command's; or what its pane asks, with a menu of choices
-// (`choices`) or for text (`text`), answered with `coding.answer`.
+// CodingAgentKinds are the coding agents a bot can run, in the account's default order.
+var CodingAgentKinds = []string{"claude", "codex", "opencode", "pi"}
+
+// CodingAgentName is a coding agent's product name, which is not translated.
+func CodingAgentName(kind string) string {
+	switch kind {
+	case "codex":
+		return "Codex"
+	case "opencode":
+		return "OpenCode"
+	case "pi":
+		return "pi"
+	}
+	return "Claude Code"
+}
+
+// AgentQuestion is what a coding agent asks the user when Auto-review asks: whether it may run a
+// command, answered as a command card's question is (`chats.permission`).
 type AgentQuestion struct {
-	Kind    string
-	Text    string
 	Command string
-	Choices []string
 	Reason  string
 	Rule    string
 	HasRule bool
 }
 
-// IsPermission is a question answered with Allow once and Deny, and Always allow with a rule.
-func (q *AgentQuestion) IsPermission() bool { return q.Kind == "start" || q.Kind == "command" }
-
-// Decisions are the buttons a permission offers.
+// Decisions are the buttons it offers. Always allow only with a rule to add.
 func (q *AgentQuestion) Decisions() []Answer {
 	if !q.HasRule {
 		return []Answer{{L("Allow once"), "allow"}, {L("Deny"), "deny"}}
@@ -1611,119 +1635,262 @@ func (q *AgentQuestion) Decisions() []Answer {
 	return []Answer{{L("Allow once"), "allow"}, {L("Always allow"), "always"}, {L("Deny"), "deny"}}
 }
 
-// AgentRun is a coding agent a bot runs on its Runner, Claude Code or Codex, as the card of the
-// call that started it shows it: Auto-review's question before it starts, what it works on and
-// where, how it stands, its last lines, and what it asks.
+// AgentChanges is what a coding agent's work changed against the commit it started from.
+type AgentChanges struct {
+	Files   int `json:"files"`
+	Added   int `json:"added"`
+	Removed int `json:"removed"`
+}
+
+// AgentRun is a coding agent a bot runs on its Runner, as the row of the `coding_agent` call that
+// started it carries it: the bot's title for the job, where it works, how it stands, what it asks,
+// and what came of it.
 type AgentRun struct {
+	// ID is the bot's handle for it, empty until it started (and for good when the start failed).
 	ID string
-	// Kind is `claude` or `codex`.
-	Kind string
-	// Host is `herdr` or `luvus` when it runs in a pane of that terminal host on its Runner.
-	Host    string
-	Task    string
-	Folder  string
-	Branch  string
-	State   AgentState
-	Stalled bool
-	// Held is set when Auto-review held its start and told the bot why, without asking: it is
-	// AgentDenied.
-	Held     bool
-	Question *AgentQuestion
-	Output   string
-	Outcome  string
-	Device   string
+	// Kind is `claude`, `codex`, `opencode`, or `pi`; empty before the start picked one.
+	Kind        string
+	Title       string
+	Task        string
+	Folder      string
+	Branch      string
+	State       AgentState
+	Question    *AgentQuestion
+	Outcome     string
+	PullRequest string
+	Changes     *AgentChanges
+	Device      string
+	StartedAt   time.Time
+	UpdatedAt   time.Time
 }
 
-// Name is its product's name, which is not translated.
-func (a *AgentRun) Name() string {
-	if a.Kind == "codex" {
-		return "Codex"
-	}
-	return "Claude Code"
-}
+// Name is its product's name.
+func (a *AgentRun) Name() string { return CodingAgentName(a.Kind) }
 
-func (a *AgentRun) HostName() string {
-	switch a.Host {
-	case "herdr":
-		return "Herdr"
-	case "luvus":
-		return "Luvus"
-	}
-	return ""
-}
+// Label is what names it wherever it shows: the bot's title for the job, else what it was asked.
+func (a *AgentRun) Label() string { return firstNonEmpty(a.Title, a.Task, a.Name()) }
 
-// IsOpen is an agent that has not ended.
+// IsOpen is an agent that has not ended: it may still work, ask, or take a follow-up.
 func (a *AgentRun) IsOpen() bool {
 	switch a.State {
-	case AgentChecking, AgentAsking, AgentStarting, AgentWorking, AgentIdle:
+	case AgentStarting, AgentWorking, AgentAsking, AgentIdle:
 		return true
 	}
 	return false
 }
 
-// IsRunning is an agent Stop ends: not while Auto-review decides whether it may start, and not
-// once it is done, waiting for a follow-up.
+// IsRunning is an agent Stop ends: not once it is done, waiting for a follow-up.
 func (a *AgentRun) IsRunning() bool {
-	return a.IsOpen() && a.State != AgentChecking && a.State != AgentIdle && (a.Question == nil || a.Question.Kind != "start")
+	return a.State == AgentStarting || a.State == AgentWorking || a.State == AgentAsking
 }
 
-// Started is an agent with a transcript to read.
-func (a *AgentRun) Started() bool {
-	switch a.State {
-	case AgentChecking, AgentDenied, AgentExpired, AgentDismissed:
-		return false
-	}
-	return a.Question == nil || a.Question.Kind != "start"
-}
+// Started is an agent with a page to open: it got an id.
+func (a *AgentRun) Started() bool { return a.ID != "" }
 
 // Place is where it works, in a word: its branch, else its folder's name.
 func (a *AgentRun) Place() string {
 	if a.Branch != "" {
 		return a.Branch
 	}
-	if i := strings.LastIndex(a.Folder, "/"); i >= 0 {
+	if i := strings.LastIndexAny(a.Folder, "/\\"); i >= 0 {
 		return a.Folder[i+1:]
 	}
 	return a.Folder
 }
 
+// PullNumber is its pull request's number as "#7", or the link itself when it names no number.
+func (a *AgentRun) PullNumber() string {
+	if a.PullRequest == "" {
+		return ""
+	}
+	parts := strings.Split(strings.TrimRight(a.PullRequest, "/"), "/")
+	if n := len(parts); n >= 2 && (parts[n-2] == "pull" || parts[n-2] == "merge_requests" || parts[n-2] == "pulls") && parts[n-1] != "" {
+		return "#" + parts[n-1]
+	}
+	return a.PullRequest
+}
+
 // Status is how it stands, in a word or two.
 func (a *AgentRun) Status() string {
 	switch a.State {
-	case AgentChecking, AgentStarting:
-		return Lc("Starting", "coding agent")
-	case AgentAsking:
-		return Lc("Needs you", "coding agent")
-	case AgentWorking:
-		if a.Stalled {
-			return Lc("Quiet", "coding agent")
-		}
+	case AgentStarting, AgentWorking:
 		return Lc("Working", "coding agent")
+	case AgentAsking:
+		return Lc("Needs attention", "coding agent")
 	case AgentIdle:
-		return Lc("Done", "coding agent")
-	case AgentExited:
-		return Lc("Ended", "coding agent")
-	case AgentFailed:
-		return Lc("Failed", "coding agent")
-	case AgentDenied:
-		if a.Held {
-			return Lc("Held by Auto-review", "coding agent")
+		if a.PullRequest != "" {
+			return Lc("Ready for review", "coding agent")
 		}
-		return Lc("Not allowed", "coding agent")
-	case AgentExpired:
-		return Lc("No answer", "coding agent")
-	case AgentDismissed:
-		return Lc("Dismissed", "coding agent")
+		return Lc("Finished", "coding agent")
+	case AgentFailed:
+		return Lc("Run failed", "coding agent")
 	}
 	return Lc("Stopped", "coding agent")
 }
 
-// AgentOf is the coding agent card `m` shows, if it is one.
+// AgentOf is the coding agent the row of a `coding_agent` start carries, if it is one.
 func AgentOf(m *Message) *AgentRun {
 	if m == nil || m.Body.Kind != BodyTool || m.Body.Tool == nil {
 		return nil
 	}
 	return m.Body.Tool.Agent
+}
+
+// AgentRowOf is the row of the start of the agent with id `agentID` in `chat`.
+func AgentRowOf(chat *Chat, agentID string) *Message {
+	if chat == nil || agentID == "" {
+		return nil
+	}
+	for i := len(chat.Messages) - 1; i >= 0; i-- {
+		if agent := AgentOf(chat.Messages[i]); agent != nil && agent.ID == agentID {
+			return chat.Messages[i]
+		}
+	}
+	return nil
+}
+
+// CodingAgentsIn are the start rows of the coding agents `chat`'s bots started, as Details lists
+// them: the open ones (starting, working, asking) first, then the latest change first, leaving
+// out those that ended or sat idle for more than three days, and starts that failed.
+func CodingAgentsIn(chat *Chat, now time.Time) []*Message {
+	var rows []*Message
+	for _, message := range chat.Messages {
+		agent := AgentOf(message)
+		if agent == nil || !agent.Started() {
+			continue
+		}
+		if !agent.IsRunning() && now.Sub(agentUpdatedAt(message)) > 3*24*time.Hour {
+			continue
+		}
+		rows = append(rows, message)
+	}
+	slices.SortStableFunc(rows, func(a, b *Message) int {
+		if aOpen, bOpen := AgentOf(a).IsRunning(), AgentOf(b).IsRunning(); aOpen != bOpen {
+			if aOpen {
+				return -1
+			}
+			return 1
+		}
+		return agentUpdatedAt(b).Compare(agentUpdatedAt(a))
+	})
+	return rows
+}
+
+// agentUpdatedAt is when a start row's agent last changed, or when it started for a row that
+// does not say.
+func agentUpdatedAt(row *Message) time.Time {
+	if agent := AgentOf(row); agent != nil && !agent.UpdatedAt.IsZero() {
+		return agent.UpdatedAt
+	}
+	return row.CreatedAt
+}
+
+// MessagedAgent is the coding agent a start or send row is about: the start's own, or the one the
+// send names, from its start row in `chat`; nil once the chat no longer has that row.
+func MessagedAgent(chat *Chat, tool *ToolInvocation) *AgentRun {
+	if tool.Agent != nil {
+		return tool.Agent
+	}
+	return AgentOf(AgentRowOf(chat, tool.TargetAgentID))
+}
+
+// AgentLabel names the coding agent a start or send row is about.
+func AgentLabel(chat *Chat, tool *ToolInvocation) string {
+	if agent := MessagedAgent(chat, tool); agent != nil {
+		return agent.Label()
+	}
+	return L("a coding agent")
+}
+
+// AgentMessage is what a coding agent said when it was done with what it was asked, or why it
+// ended on its own (Failed). The bot that runs it is its author.
+type AgentMessage struct {
+	AgentID string
+	// AgentKind is `claude`, `codex`, `opencode`, or `pi`.
+	AgentKind string
+	Title     string
+	Text      string
+	Failed    bool
+}
+
+// MARK: - A coding agent's transcript
+
+// AgentTranscript is what `coding.transcript` answers: the agent's steps, and its row's agent as
+// it stands now.
+type AgentTranscript struct {
+	Items []AgentItem
+	Card  *AgentRun
+}
+
+// AgentItem is one step of a coding agent's transcript: what it was sent (`prompt`), Lorca's own
+// line (`status`), a `thought`, what it said (`text`), a `tool` it used, its `plan`, or an
+// `error`.
+type AgentItem struct {
+	ID   string `json:"id"`
+	Kind string `json:"kind"`
+	// At is when it happened, in Unix seconds.
+	At   float64 `json:"at"`
+	Text string  `json:"text"`
+	// Seconds is how long a thought took, when the agent says.
+	Seconds *float64         `json:"seconds"`
+	Tool    *AgentToolStep   `json:"tool"`
+	Plan    []AgentPlanEntry `json:"plan"`
+}
+
+// AgentToolStep is a tool the agent used: what it did in a line, and how it went.
+type AgentToolStep struct {
+	// Kind is `read`, `search`, `edit`, `execute`, `fetch`, or `other`.
+	Kind    string `json:"kind"`
+	Title   string `json:"title"`
+	Path    string `json:"path"`
+	Added   *int   `json:"added"`
+	Removed *int   `json:"removed"`
+	// Status is `running`, `done`, `failed`, or `denied`.
+	Status string `json:"status"`
+	Output string `json:"output"`
+}
+
+// Explores is a read or a search, which the transcript folds into one line with its neighbors.
+func (t *AgentToolStep) Explores() bool { return t.Kind == "read" || t.Kind == "search" }
+
+type AgentPlanEntry struct {
+	Text string `json:"text"`
+	// Status is `pending`, `in_progress`, or `completed`.
+	Status string `json:"status"`
+}
+
+// MARK: - Coding agent settings
+
+// CodingAgentChoice is one agent in the account's order of preference, on or off.
+type CodingAgentChoice struct {
+	Kind    string `json:"kind"`
+	Enabled bool   `json:"enabled"`
+}
+
+// NormalizedCodingAgents is every agent once, in the order given, with any it leaves out on at
+// the end, as the CLI keeps them.
+func NormalizedCodingAgents(choices []CodingAgentChoice) []CodingAgentChoice {
+	out := make([]CodingAgentChoice, 0, len(CodingAgentKinds))
+	for _, choice := range choices {
+		if slices.Contains(CodingAgentKinds, choice.Kind) && !slices.ContainsFunc(out, func(each CodingAgentChoice) bool { return each.Kind == choice.Kind }) {
+			out = append(out, choice)
+		}
+	}
+	for _, kind := range CodingAgentKinds {
+		if !slices.ContainsFunc(out, func(each CodingAgentChoice) bool { return each.Kind == kind }) {
+			out = append(out, CodingAgentChoice{Kind: kind, Enabled: true})
+		}
+	}
+	return out
+}
+
+// InstalledCodingAgent is what `coding.agents` says of an agent on this Device.
+type InstalledCodingAgent struct {
+	Kind      string `json:"kind"`
+	Name      string `json:"name"`
+	Enabled   bool   `json:"enabled"`
+	Installed bool   `json:"installed"`
+	Version   string `json:"version"`
 }
 
 // Attachment is a file sent with a message. The bytes live under `~/.lorca/files/<id>` once this
@@ -1807,6 +1974,7 @@ const (
 	BodyNotice
 	BodyPermission
 	BodyDraft
+	BodyAgentMessage
 )
 
 type Handoff struct {
@@ -1815,15 +1983,17 @@ type Handoff struct {
 	Reason string
 }
 
-// Body is what a message says: text, a tool call, a handoff, a notice, or a question.
+// Body is what a message says: text, a tool call, a handoff, a notice, a question, a draft, or
+// what a coding agent said.
 type Body struct {
 	Kind BodyKind
 	// Text of a text body or a notice.
-	Text    string
-	Tool    *ToolInvocation
-	Handoff Handoff
-	Request *PermissionRequest
-	Draft   *DraftCard
+	Text         string
+	Tool         *ToolInvocation
+	Handoff      Handoff
+	Request      *PermissionRequest
+	Draft        *DraftCard
+	AgentMessage *AgentMessage
 }
 
 // DraftFields are the parts of a message a bot wrote, as its draft card shows and edits them.
@@ -2027,6 +2197,8 @@ func MessageText(m *Message) string {
 		return m.Body.Request.Summary
 	case BodyDraft:
 		return m.Body.Draft.Fields.Body
+	case BodyAgentMessage:
+		return m.Body.AgentMessage.Text
 	}
 	return ""
 }
@@ -2303,18 +2475,19 @@ func (u ChatUsage) SpendNote() string {
 type SettingsPane string
 
 const (
-	PaneGeneral     SettingsPane = "general"
-	PaneProviders   SettingsPane = "providers"
-	PaneAutoReview  SettingsPane = "auto-review"
-	PaneSharedLinks SettingsPane = "shared-links"
-	PanePlugins     SettingsPane = "plugins"
-	PaneSecrets     SettingsPane = "secrets"
-	PaneBots        SettingsPane = "bots"
-	PaneDevice      SettingsPane = "device"
-	PaneAdvanced    SettingsPane = "advanced"
+	PaneGeneral      SettingsPane = "general"
+	PaneProviders    SettingsPane = "providers"
+	PaneAutoReview   SettingsPane = "auto-review"
+	PaneCodingAgents SettingsPane = "coding-agents"
+	PaneSharedLinks  SettingsPane = "shared-links"
+	PanePlugins      SettingsPane = "plugins"
+	PaneSecrets      SettingsPane = "secrets"
+	PaneBots         SettingsPane = "bots"
+	PaneDevice       SettingsPane = "device"
+	PaneAdvanced     SettingsPane = "advanced"
 )
 
-var SettingsPanes = []SettingsPane{PaneGeneral, PaneProviders, PaneAutoReview, PaneSharedLinks, PanePlugins, PaneSecrets, PaneBots, PaneDevice, PaneAdvanced}
+var SettingsPanes = []SettingsPane{PaneGeneral, PaneProviders, PaneAutoReview, PaneCodingAgents, PaneSharedLinks, PanePlugins, PaneSecrets, PaneBots, PaneDevice, PaneAdvanced}
 
 // IsDeviceScoped is a pane that shows one Device, picked at the top of the page: bots and plugins
 // live on a Runner. The others hold this computer's settings and the account's.
@@ -2328,6 +2501,8 @@ func (p SettingsPane) Title() string {
 		return L("General")
 	case PaneAutoReview:
 		return L("Auto-review")
+	case PaneCodingAgents:
+		return L("Coding Agents")
 	case PaneSharedLinks:
 		return L("Shared Links")
 	case PaneAdvanced:
@@ -2352,6 +2527,8 @@ func (p SettingsPane) Symbol() string {
 		return "gearshape"
 	case PaneAutoReview:
 		return "checkmark.shield"
+	case PaneCodingAgents:
+		return "chevron.left.forwardslash.chevron.right"
 	case PaneSharedLinks:
 		return "link"
 	case PaneAdvanced:

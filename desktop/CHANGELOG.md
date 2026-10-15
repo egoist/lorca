@@ -6,6 +6,14 @@ and the update window shows it.
 
 ## [Unreleased]
 
+- Coding agents work the way Grok Bot's do. A bot hands a job to Claude Code, Codex, OpenCode, or
+  pi under a short title, and the chat shows "Messaged" and "Message from" markers with the agent's
+  logo instead of a card. Click one to follow the agent's work as Cursor shows it: what it thought
+  and said, the files it explored, the commands it ran, and its edits with lines added and removed.
+  The chat's details list the agents under Coding, and when an agent finishes, its message lands in
+  the chat and the bot checks its work and tells you how it went.
+- Settings › Coding Agents turns each agent on or off and sets which one bots try first, and shows
+  whether each is installed on this computer.
 - Right-click a brief in Attention and choose Dismiss to take it off the list on every Device; the
   coordinator's next brief shows again. A brief also leaves once every item it is about is resolved.
 - A bot resolves an Attention item it alone reported as soon as it sees the work is done, such as a

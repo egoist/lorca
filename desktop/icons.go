@@ -66,3 +66,31 @@ func pluginMark(id string) *ui.SVG {
 	marks.Store(id, svg)
 	return svg
 }
+
+var agentLogos sync.Map // agent kind → *ui.SVG
+
+// agentMark is a coding agent's mark, or nil for a kind without one.
+func agentMark(kind string) *ui.SVG {
+	if found, ok := agentLogos.Load(kind); ok {
+		return found.(*ui.SVG)
+	}
+	source, ok := agentMarks[kind]
+	if !ok {
+		return nil
+	}
+	svg, err := ui.ParseSVG([]byte(source))
+	if err != nil {
+		return nil
+	}
+	agentLogos.Store(kind, svg)
+	return svg
+}
+
+// agentLogo is a coding agent's mark `size` DIPs square, or the code symbol for an agent not
+// picked yet.
+func agentLogo(c *ui.Context, kind string, size float32) ui.Element {
+	if mark := agentMark(kind); mark != nil {
+		return ui.Image(c, mark).Size(size, size)
+	}
+	return symbol(c, "chevron.left.forwardslash.chevron.right", size, 2)
+}

@@ -131,10 +131,9 @@ async fn answer(app: &Arc<App>, from: &str, request: &Request) -> Result<Value, 
         verb if verb.starts_with("secrets.") => crate::secrets::serve(app, verb, body),
         #[cfg(feature = "runner")]
         "bash.stdin" | "bash.stop" | "bash.background" => crate::shell::serve(app, &request.verb, body).await,
-        // A coding agent's card on another Device: its transcript, Stop, and an answer to what
-        // its pane asks. Showing its pane happens only at the Runner.
+        // A coding agent's transcript and Stop, from another Device.
         #[cfg(feature = "runner")]
-        "coding.transcript" | "coding.stop" | "coding.answer" => crate::coding::serve(app, &request.verb, body).await,
+        "coding.transcript" | "coding.stop" => crate::coding::serve(app, &request.verb, body).await,
         #[cfg(feature = "runner")]
         "routines.regenerate_key" => {
             let id = body["id"].as_str().ok_or("missing id")?;

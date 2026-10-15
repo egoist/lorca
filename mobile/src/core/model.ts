@@ -313,9 +313,14 @@ export type Body =
       script_command?: string;
       /** A bash call's card, from Auto-review's question to how the command ended. */
       run?: CommandRun;
-      /** The card of the coding agent a coding_agent call started, shown from the start. */
+      /** The coding agent a coding_agent call started: the row shows as "Messaged ⬢ Title". */
       agent?: AgentRun;
+      /** The coding agent a coding_agent call wrote to, by id: "Messaged ⬢ Title" too. */
+      target_agent_id?: string;
     }
+  /// What a coding agent said when it was done with what it was asked, or why it ended on its own
+  /// (`failed`): "Message from ⬢ Title". Its author is the bot that runs the agent.
+  | { kind: "agent_message"; agent_id: string; agent_kind: string; title: string; text: string; failed?: boolean }
   | { kind: "handoff"; from: string; to: string; reason: string }
   | { kind: "notice"; text: string; routine_id?: string }
   /// The bot asks before a plugin or shell action, or before installing a plugin (`tool` is `install`).
@@ -397,67 +402,147 @@ export interface CommandRun {
   rule?: string;
 }
 
-/// A coding agent a bot runs on its Runner, Claude Code or Codex, as the card of the call that
-/// started it shows it: Auto-review's question before it starts, what it works on and where, how it
-/// stands, its last lines, and what it asks. A question about starting it or a command it wants to
-/// run is answered like a command's (`chats.permission`); one its pane asks, with a choice or text
-/// (`coding.answer`). Stop is `coding.stop`; its transcript, `coding.transcript`.
+/// A coding agent a bot runs on its Runner, as the row of the `coding_agent` call that started it
+/// carries it: what the bot titled the job and where it works, how it stands, what it asks the user,
+/// and what came of it. The transcript shows the row as "Messaged ⬢ Title", Details lists it under
+/// Coding, and its page reads `coding.transcript`. A question is answered like a command's
+/// (`chats.permission`); Stop is `coding.stop`.
 export interface AgentRun {
+  /** The bot's handle for it, `agent-3f9a2c1d`; empty until it started, and for good when the start failed. */
   id: string;
-  /** `claude` or `codex`. */
+  /** `claude`, `codex`, `opencode`, or `pi`; empty before the start picked one. */
   kind: string;
-  /** `herdr` or `luvus` when it runs in a pane of that terminal host on its Runner. */
-  host?: string;
+  /** What the bot calls the job, which names the agent wherever it shows. */
+  title: string;
+  /** The prompt's first line. */
   task: string;
   /** Where it works, from the home folder. */
   folder?: string;
   branch?: string;
-  state: "checking" | "asking" | "starting" | "working" | "idle" | "exited" | "failed" | "stopped" | "denied" | "expired" | "dismissed";
-  /** Working, with nothing new for a while. */
-  stalled?: boolean;
-  /** Auto-review held its start and told the bot why, without asking: it is `denied`. */
-  held?: boolean;
+  /** `idle`: done with what it was asked, it takes a follow-up. */
+  state: "starting" | "working" | "asking" | "idle" | "failed" | "stopped";
+  /** Only while it asks. */
   question?: AgentQuestion;
-  output?: string;
+  /** Why it ended, in words. */
   outcome?: string;
+  pull_request?: string;
+  /** What its work changed against the commit it started from. */
+  changes?: { files: number; added: number; removed: number };
+  /** Its Runner's name. */
   device?: string;
+  /** Unix seconds. */
   started_at?: number;
+  /** Unix seconds: its last change of state. */
+  updated_at?: number;
 }
 
-/// What a coding agent's card asks: whether it may start (`start`) or run a command (`command`),
-/// or what its pane asks, with a menu of choices (`choices`) or for text (`text`).
+/// What a coding agent asks the user when Auto-review asks: whether it may run `command`.
 export interface AgentQuestion {
-  kind: "start" | "command" | "choices" | "text";
-  text?: string;
+  kind: "command";
   command?: string;
-  choices?: string[];
   reason?: string;
+  /** The rule Always allow adds. */
   rule?: string;
 }
 
-/// Its product's name, which is not translated.
-export function agentName(agent: AgentRun): string {
-  return agent.kind === "codex" ? "Codex" : "Claude Code";
+/// The coding agents Lorca knows, in the account's default order of preference.
+export const CODING_AGENT_KINDS = ["claude", "codex", "opencode", "pi"] as const;
+
+/// Which coding agents bots may start, in the order the account prefers them, from the roster.
+export type CodingAgents = { agents: { kind: string; enabled: boolean }[] };
+
+export function defaultCodingAgents(): CodingAgents {
+  return { agents: CODING_AGENT_KINDS.map((kind) => ({ kind, enabled: true })) };
 }
 
+/// A coding agent's product name, which is not translated.
+export function agentName(kind: string): string {
+  switch (kind) {
+    case "codex":
+      return "Codex";
+    case "opencode":
+      return "OpenCode";
+    case "pi":
+      return "pi";
+    default:
+      return "Claude Code";
+  }
+}
+
+/// It has not ended: it may still ask, work, or take a follow-up.
 export function agentIsOpen(agent: AgentRun): boolean {
-  return ["checking", "asking", "starting", "working", "idle"].includes(agent.state);
+  return agent.state === "starting" || agent.state === "working" || agent.state === "asking" || agent.state === "idle";
 }
 
-/// Stop ends it: not while Auto-review decides whether it may start, and not once it is done,
-/// waiting for a follow-up.
+/// Stop ends it: while it starts, works, or asks.
 export function agentIsRunning(agent: AgentRun): boolean {
-  return agentIsOpen(agent) && agent.state !== "checking" && agent.state !== "idle" && agent.question?.kind !== "start";
+  return agent.state === "starting" || agent.state === "working" || agent.state === "asking";
 }
 
-/// It started, so it has a transcript to read.
+/// It started, so it has a page to read.
 export function agentStarted(agent: AgentRun): boolean {
-  return !["checking", "denied", "expired", "dismissed"].includes(agent.state) && agent.question?.kind !== "start";
+  return agent.id !== "";
 }
 
-/// Where it works, in a word: its branch, else its folder's name.
-export function agentPlace(agent: AgentRun): string {
-  return agent.branch ?? (agent.folder ?? "").split("/").filter(Boolean).pop() ?? "";
+/// What the job is called: the bot's title, else what it was asked.
+export function agentTitle(agent: AgentRun): string {
+  return agent.title || agent.task;
+}
+
+/// "#7" for a pull request's URL, or its URL when it names no number.
+export function pullRequestLabel(url: string): string {
+  const number = /\/pull\/(\d+)/.exec(url)?.[1] ?? /\/merge_requests\/(\d+)/.exec(url)?.[1];
+  return number ? `#${number}` : url;
+}
+
+/// A `coding_agent` row the transcript shows: the start (it carries the agent) or a message the
+/// bot sent an agent (`target_agent_id`). Other calls of the tool stay hidden.
+export function isAgentRow(body: Body): boolean {
+  return body.kind === "tool" && (!!body.agent || !!body.target_agent_id);
+}
+
+/// What the bot wrote the agent: the row's `detail` once the call returned, its arguments' prompt
+/// or message while it runs.
+export function agentWrote(body: Extract<Body, { kind: "tool" }>): string {
+  if (!body.is_running) return body.detail;
+  const args = body.arguments as { prompt?: unknown; message?: unknown } | null | undefined;
+  const text = args?.prompt ?? args?.message;
+  return typeof text === "string" ? text : "";
+}
+
+/// The row that started agent `agentId` among `messages`, when it is loaded.
+export function agentStartRow(messages: Message[], agentId: string): Message | undefined {
+  if (!agentId) return undefined;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const body = messages[i].body;
+    if (body.kind === "tool" && body.agent?.id === agentId) return messages[i];
+  }
+  return undefined;
+}
+
+/// One step of a coding agent's transcript (`coding.transcript`), in order; each id once.
+export interface AgentItem {
+  id: string;
+  /** `status` is Lorca's own line: where it works, an interrupt. */
+  kind: "prompt" | "status" | "thought" | "text" | "tool" | "plan" | "error";
+  at: number;
+  text?: string;
+  /** How long it thought, for a `thought`. */
+  seconds?: number;
+  tool?: AgentToolStep;
+  plan?: { text: string; status: "pending" | "in_progress" | "completed" }[];
+}
+
+export interface AgentToolStep {
+  kind: "read" | "search" | "edit" | "execute" | "fetch" | "other";
+  /** The command, the file, the pattern, or the URL. */
+  title: string;
+  path?: string;
+  added?: number;
+  removed?: number;
+  status: "running" | "done" | "failed" | "denied";
+  /** The first lines of what came back. */
+  output?: string;
 }
 
 export function isLive(run: CommandRun): boolean {
