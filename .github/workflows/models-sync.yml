@@ -1,18 +1,21 @@
 # Syncs the model catalog (crates/models/catalog.json) with models.dev and OpenCode's endpoint
-# tables every 12 hours: rates, tiers, windows, output caps, and OpenCode wires of the models it
-# lists. A change goes to the models-sync branch and one open pull request, whose body is the
-# report scripts/sync-models.ts writes, including upstream models the catalog lacks. The run
-# summary carries the report on every run. A pull request opened with GITHUB_TOKEN starts no other
-# workflows, so this one runs the Catalog check and the lorca-models tests itself first.
+# tables every day at 00:00 UTC: rates, tiers, windows, output caps, and OpenCode wires of the
+# models it lists. A change goes to the models-sync branch and one open pull request, whose body is
+# the report scripts/sync-models.ts writes. Upstream models the catalog lacks, which a person adds
+# by hand, keep one issue open: it is opened when there are any, gets a comment naming each model
+# that joins the list, and is closed once the catalog lists them all. The run summary carries the
+# report on every run. A pull request opened with GITHUB_TOKEN starts no other workflows, so this
+# one runs the Catalog check and the lorca-models tests itself first.
 name: Models sync
 
 on:
   schedule:
-    - cron: "17 */12 * * *"
+    - cron: "0 0 * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
+  issues: write
   pull-requests: write
 
 concurrency:
@@ -24,8 +27,38 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
-      - run: bun run sync:models --report "$RUNNER_TEMP/report.md"
+      - run: bun run sync:models --report "$RUNNER_TEMP/report.md" --new "$RUNNER_TEMP/new.md"
       - run: cat "$RUNNER_TEMP/report.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Keep the new-models issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: "Models: upstream models the catalog lacks"
+        run: |
+          new="$RUNNER_TEMP/new.md"
+          issue=$(gh issue list --state open --author "app/github-actions" --search "\"$TITLE\" in:title" --json number,title --jq "map(select(.title == env.TITLE)) | .[0].number // empty")
+          if [[ ! -s "$new" ]]; then
+            [[ -n "$issue" ]] && gh issue close "$issue" --comment "The catalog lists them all now."
+            exit 0
+          fi
+          {
+            echo "Released upstream and not in \`crates/models/catalog.json\`. Add the ones Lorca should offer by hand (levels, order, and review models are a person's call); the Models sync workflow keeps this list current and closes this issue once it is empty."
+            echo
+            cat "$new"
+          } > "$RUNNER_TEMP/issue.md"
+          if [[ -z "$issue" ]]; then
+            gh issue create --title "$TITLE" --body-file "$RUNNER_TEMP/issue.md"
+            exit 0
+          fi
+          # Models are matched by provider/id, so a changed price or window comments nothing.
+          keys() { grep -o '^- [^ ]*' | sort -u; }
+          gh issue view "$issue" --json body --jq .body > "$RUNNER_TEMP/old.md"
+          joined=$(comm -13 <(keys < "$RUNNER_TEMP/old.md") <(keys < "$new"))
+          if [[ -n "$joined" ]]; then
+            grep -F -f <(awk '{ print $0 " " }' <<< "$joined") "$new" > "$RUNNER_TEMP/comment.md"
+            gh issue comment "$issue" --body "New upstream models:
+          $(cat "$RUNNER_TEMP/comment.md")"
+          fi
+          gh issue edit "$issue" --body-file "$RUNNER_TEMP/issue.md"
       - id: diff
         run: |
           if git diff --quiet crates/models/catalog.json; then

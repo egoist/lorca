@@ -2,9 +2,11 @@
 // each listed model's rates, long-context tiers, window, and output cap, and OpenCode's Zen and Go
 // endpoint tables for each OpenCode model's wire. Which models are listed, their names, thinking
 // levels, and review models stay curated: upstream models the catalog lacks, Codex's ChatGPT
-// lineup, and listed models upstream no longer has go into the report for a person to act on.
-// A change moves "updated" to now. `bun run sync:models [--report <file>]`; the Models sync
-// workflow runs it every 12 hours and opens a pull request with the report.
+// lineup, and listed models upstream no longer has go into the report for a person to act on. A
+// change moves "updated" to now. `bun run sync:models [--report <file>] [--new <file>]`, where
+// --new writes just the upstream models the catalog lacks, one per line; the Models sync workflow
+// runs it every day at 00:00 UTC, opens a pull request with the report on a change, and keeps an
+// issue open with the new models while there are any.
 
 import { join } from "node:path"
 
@@ -59,7 +61,9 @@ type Model = {
 }
 
 const args = process.argv.slice(2)
-const reportPath = args.includes("--report") ? args[args.indexOf("--report") + 1] : undefined
+const option = (name: string) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined)
+const reportPath = option("--report")
+const newPath = option("--new")
 
 async function json(url: string) {
   const res = await fetch(url)
@@ -228,3 +232,4 @@ const report = [
   .join("\n")
 console.log(report || "The catalog matches upstream.")
 if (reportPath) await Bun.write(reportPath, report)
+if (newPath) await Bun.write(newPath, fresh.map((line) => `- ${line}\n`).join(""))
