@@ -1,12 +1,12 @@
 // Syncs the model catalog (crates/models/catalog.json) with its upstream sources: models.dev for
-// each listed model's rates, long-context tiers, window, and output cap, and OpenCode's Zen and Go
-// endpoint tables for each OpenCode model's wire. Which models are listed, their names, thinking
-// levels, and review models stay curated: upstream models the catalog lacks, Codex's ChatGPT
-// lineup, and listed models upstream no longer has go into the report for a person to act on. A
-// change moves "updated" to now. `bun run sync:models [--report <file>] [--new <file>]`, where
-// --new writes just the upstream models the catalog lacks, one per line; the Models sync workflow
-// runs it every day at 00:00 UTC, opens a pull request with the report on a change, and keeps an
-// issue open with the new models while there are any.
+// each listed model's rates, long-context tiers, window, and output cap (and an OpenCode model's
+// thinking levels), and OpenCode's Zen and Go endpoint tables for each OpenCode model's wire. Which
+// models are listed, their names, thinking levels, and review models stay curated: upstream models
+// the catalog lacks, Codex's ChatGPT lineup, and listed models upstream no longer has go into the
+// report for a person to act on. A change moves "updated" to now. `bun run sync:models [--report
+// <file>] [--new <file>]`, where --new writes just the upstream models the catalog lacks, one per
+// line; the Models sync workflow runs it every day at 00:00 UTC, opens a pull request with the
+// report on a change, and keeps an issue open with the new models while there are any.
 
 import { join } from "node:path"
 
@@ -24,10 +24,16 @@ const MODELS_DEV: Record<string, string> = {
 }
 
 /// Fields kept as written although models.dev says otherwise: the Grok sign-in caps output at 64k,
-/// and DeepSeek documents its cap as 384K.
+/// DeepSeek documents its cap as 384K and takes every effort on its Anthropic endpoint, Lorca turns
+/// thinking off on Claude models models.dev lists no toggle for (Sonnet 5.5's off is
+/// between_tools), and the ChatGPT sign-in's levels are Codex's, which have no none.
 const KEEP: Record<string, string[]> = {
   "grok/*": ["max_output"],
-  "deepseek/*": ["max_output"],
+  "deepseek/*": ["max_output", "levels"],
+  "anthropic/claude-opus-5": ["levels"],
+  "anthropic/claude-opus-4-8": ["levels"],
+  "anthropic/claude-sonnet-5-5": ["levels"],
+  "chatgpt/*": ["levels"],
 }
 
 /// OpenCode's endpoint tables, by provider.
@@ -57,8 +63,36 @@ type Model = {
   max_output: number
   rates: Rates
   tiers?: Tier[]
+  levels?: string[]
   wire?: string
 }
+
+/// Providers whose models take their thinking levels from models.dev. The others' levels follow
+/// how Lorca drives them (the ChatGPT sign-in's from Codex, Sonnet 5.5's off as between_tools),
+/// so a difference there is only reported.
+const SYNC_LEVELS = ["opencode", "opencode-go"]
+
+/// Lorca's thinking levels, lowest first.
+const LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
+
+/// A model's levels from models.dev's `reasoning_options`: a toggle, or an effort of `none`, is
+/// Lorca's `off`, and each other effort it knows is itself. Undefined when models.dev says nothing
+/// or offers only a token budget, which no level maps to.
+function levelsFrom(options: unknown): string[] | undefined {
+  if (!Array.isArray(options)) return undefined
+  if (options.length && options.every((o) => o?.type === "budget_tokens")) return undefined
+  const levels = new Set<string>()
+  for (const option of options) {
+    if (option?.type === "toggle") levels.add("off")
+    if (option?.type === "effort")
+      for (const value of option.values ?? []) {
+        const level = value === "none" || value === null ? "off" : value
+        if (LEVELS.includes(level)) levels.add(level)
+      }
+  }
+  return LEVELS.filter((level) => levels.has(level))
+}
+const levelsText = (levels: string[]) => `[${levels.map((level) => `"${level}"`).join(", ")}]`
 
 const args = process.argv.slice(2)
 const option = (name: string) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined)
@@ -149,6 +183,16 @@ for (const m of catalog.models) {
   }
   if (upstream.status === "deprecated") notes.push(`${name} is deprecated on models.dev.`)
 
+  const levels = levelsFrom(upstream.reasoning_options)
+  if (levels && m.levels && levelsText(levels) !== levelsText(m.levels)) {
+    if (SYNC_LEVELS.includes(m.provider)) {
+      setField(m, "levels", levelsText(levels))
+      changes.push(`${name}: levels ${levelsText(m.levels)} → ${levelsText(levels)}`)
+    } else if (!kept(m, "levels")) {
+      notes.push(`${name} takes ${levelsText(m.levels)}; models.dev says ${levelsText(levels)}.`)
+    }
+  }
+
   for (const [field, value] of [
     ["context_window", upstream.limit?.context],
     ["max_output", upstream.limit?.output],
@@ -198,7 +242,10 @@ for (const [provider, source] of Object.entries(MODELS_DEV)) {
     if (/-free$|preview/.test(id) || !(e.cost?.input || e.cost?.output) || superseded(provider, id)) continue
     const wire = wires[provider]?.get(id)
     if (provider in OPENCODE_DOCS && !wire) continue // not served on a wire Lorca speaks
-    fresh.push(`${provider}/${id} — ${e.name}, released ${e.release_date}, ${e.limit.context} window, $${e.cost.input ?? 0} / $${e.cost.output ?? 0}${wire ? `, ${wire}` : ""}`)
+    const levels = levelsFrom(e.reasoning_options)
+    fresh.push(
+      `${provider}/${id} — ${e.name}, released ${e.release_date}, ${e.limit.context} window, $${e.cost.input ?? 0} / $${e.cost.output ?? 0}${wire ? `, ${wire}` : ""}${levels ? `, levels ${levelsText(levels)}` : ""}`,
+    )
   }
 }
 if (codex) {
