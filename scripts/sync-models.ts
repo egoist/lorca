@@ -222,9 +222,9 @@ for (const m of catalog.models) {
   }
 }
 
-// Upstream models the catalog lacks, for a person to decide on. The catalog keeps each list to the
-// current generation of paid models, so free and preview models are left out, and so is a model
-// the catalog already lists a same or later version of (gpt-6-sol beside gpt-6.1-sol).
+// Upstream models the catalog lacks, for a person to decide on, free, preview, and stealth models
+// included. A model the catalog already lists a same or later version of (gpt-6-sol beside
+// gpt-6.1-sol) is left out, as the catalog keeps each list to the current generation.
 const listed = new Set(catalog.models.map((m) => `${m.provider}/${m.id}`))
 const since = new Date(Date.now() - NEW_DAYS * 86_400_000).toISOString().slice(0, 10)
 const family = (id: string) => id.replace(/\d+(?:\.\d+)*/g, "#")
@@ -239,12 +239,12 @@ const fresh: string[] = []
 for (const [provider, source] of Object.entries(MODELS_DEV)) {
   for (const [id, e] of Object.entries<any>(modelsDev[source]?.models ?? {})) {
     if (listed.has(`${provider}/${id}`) || e.status === "deprecated" || (e.release_date ?? "") < since || !(e.limit?.output > 0)) continue
-    if (/-free$|preview/.test(id) || !(e.cost?.input || e.cost?.output) || superseded(provider, id)) continue
+    if (superseded(provider, id)) continue
     const wire = wires[provider]?.get(id)
     if (provider in OPENCODE_DOCS && !wire) continue // not served on a wire Lorca speaks
     const levels = levelsFrom(e.reasoning_options)
     fresh.push(
-      `${provider}/${id} — ${e.name}, released ${e.release_date}, ${e.limit.context} window, $${e.cost.input ?? 0} / $${e.cost.output ?? 0}${wire ? `, ${wire}` : ""}${levels ? `, levels ${levelsText(levels)}` : ""}`,
+      `${provider}/${id} — ${e.name}, released ${e.release_date}, ${e.limit.context} window, $${e.cost?.input ?? 0} / $${e.cost?.output ?? 0}${wire ? `, ${wire}` : ""}${levels ? `, levels ${levelsText(levels)}` : ""}`,
     )
   }
 }
