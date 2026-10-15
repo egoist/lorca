@@ -56,13 +56,77 @@ Slack、Gmail、Google Calendar、Google Drive 和 Telegram 可以在同一台 R
 
 这几个服务在第一次登录前，需要你自己的应用：
 
-- **Gmail、Google Calendar、Google Drive：** 一个 Google Cloud 项目里的桌面版 OAuth 客户端，项目里打开对应服务的 API。填入它的客户端 ID，有密钥的话也填上。
+- **Gmail、Google Calendar、Google Drive：** 你自己在 Google Cloud 里创建的桌面版 OAuth 客户端。一个客户端三个服务都能用，步骤见[你自己的 Google 客户端](#你自己的-google-客户端)。
 - **Slack：** 一个开启了 PKCE 的 Slack 应用，回调地址为 `http://localhost:3118/callback`，并且工作区已批准它使用 MCP。填入它的客户端 ID。要用[频道](/zh/docs/channels)的话，还要填它的机器人 token 和应用 token。
 - **Telegram：** BotFather 给的机器人 token。Telegram 用于[频道](/zh/docs/channels)。
 
 显示 **需要更多权限** 的账号，是登录时缺了某个工具需要的授权：重新 **登录** 即可补上。登录过期或被撤销时，会提示你重新登录。
 
 智能体写的邮件和 Slack 消息会先作为[草稿](/zh/docs/reviews#邮件和-slack-草稿)，由你发送。
+
+## 你自己的 Google 客户端
+
+Gmail、Google Calendar 和 Google Drive 用你在自己的 Google Cloud 项目里创建的 OAuth 客户端登录。大约五分钟就能设置好，一个客户端三个服务都能用。
+
+<Steps>
+<Step>
+
+### 创建项目
+
+在 [Google Cloud 控制台](https://console.cloud.google.com)打开项目选择器，选择**新建项目**，随便起个名字（比如 Lorca），点**创建**。
+
+</Step>
+<Step>
+
+### 打开 API
+
+在 **API 和服务 › 库** 里，打开你要用的 API：**Gmail API**、**Google Calendar API** 和 **Google Drive API**。
+
+</Step>
+<Step>
+
+### 设置同意屏幕
+
+在 **Google Auth Platform** 里点**开始**。填一个应用名称（比如 My Lorca），用户支持邮箱填你的邮箱，受众选**外部**，联系邮箱也填你的邮箱，同意 Google 的政策后点**创建**。
+
+</Step>
+<Step>
+
+### 发布应用
+
+在 **Google Auth Platform › 受众群体** 里点**发布应用**并确认。如果一直停在"测试"状态，只有你在那里列出的测试用户能登录，而且 Google 每七天会让他们重新登录一次。
+
+</Step>
+<Step>
+
+### 创建客户端
+
+在 **Google Auth Platform › 客户端** 里点**创建客户端**，应用类型选**桌面应用**，随便起个名字，点**创建**。复制**客户端 ID** 和**客户端密钥**，或者点**下载 JSON**：密钥只显示这一次。
+
+</Step>
+<Step>
+
+### 在 Lorca 里添加账号
+
+在市场里打开 **Gmail**（或 **Google Calendar**、**Google Drive**），点**添加**，给账号起个名字（比如"工作"）。在账号面板里把客户端 ID 填进 `GOOGLE_CLIENT_ID`，密钥填进 `GOOGLE_CLIENT_SECRET`，点**保存**。
+
+</Step>
+<Step>
+
+### 登录
+
+点**登录**，选择你的 Google 账号。Google 会提示**此应用未经 Google 验证**：这是你自己的应用，点**高级**，再点**转至 My Lorca（不安全）**，然后点**允许**。
+
+</Step>
+</Steps>
+
+Calendar 和 Drive 用同样的方法添加账号，填同一个客户端 ID 和密钥。
+
+遇到问题时：
+
+- **"已阻止访问"或"不是测试用户"：** 应用还在测试状态。发布它，或者在**受众群体 › 测试用户**里加上你自己。
+- **提示某个 API "has not been used in project"：** 到 **API 和服务 › 库** 里打开这个 API，等一分钟再试。
+- **每周都要重新登录：** 应用还在测试状态，发布它即可。
 
 ## 插件可以做什么
 

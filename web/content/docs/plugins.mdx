@@ -56,13 +56,77 @@ Bots use each account by its name and ask you when it isn't clear which one you 
 
 These services ask for an app of your own before the first sign-in:
 
-- **Gmail, Google Calendar, Google Drive:** a Desktop OAuth client in a Google Cloud project with the service's API turned on. Fill in its client ID, and its secret if it has one.
+- **Gmail, Google Calendar, Google Drive:** a Desktop OAuth client of your own in Google Cloud. One client covers all three: [Your own Google client](#your-own-google-client) walks through it.
 - **Slack:** a Slack app with PKCE, the redirect `http://localhost:3118/callback`, and MCP access its workspace approved. Fill in its client ID. For [channels](/docs/channels), its bot and app tokens too.
 - **Telegram:** a bot's token from BotFather. Telegram is for [channels](/docs/channels).
 
 An account that reads **Needs more access** was signed in without something a tool needs: **Sign in** again grants it. A sign-in that expired or was revoked asks for a new one.
 
 Bots write emails and Slack messages as [drafts](/docs/reviews#email-and-slack-drafts) that you send.
+
+## Your own Google client
+
+Gmail, Google Calendar, and Google Drive sign in with a Google OAuth client you create in your own Google Cloud project. It takes about five minutes, and one client covers all three services.
+
+<Steps>
+<Step>
+
+### Create a project
+
+In the [Google Cloud console](https://console.cloud.google.com), open the project picker, choose **New project**, name it anything (Lorca, say), and click **Create**.
+
+</Step>
+<Step>
+
+### Turn on the APIs
+
+In **APIs & Services › Library**, turn on the ones you'll use: **Gmail API**, **Google Calendar API**, and **Google Drive API**.
+
+</Step>
+<Step>
+
+### Set up the consent screen
+
+In **Google Auth Platform**, click **Get started**. Give the app a name (My Lorca) and your email as the support email, choose **External** as the audience, enter your email as the contact, agree to Google's policy, and click **Create**.
+
+</Step>
+<Step>
+
+### Publish it
+
+In **Google Auth Platform › Audience**, click **Publish app** and confirm. An app left in Testing signs in only the test users you list there, and Google signs them out every seven days.
+
+</Step>
+<Step>
+
+### Create the client
+
+In **Google Auth Platform › Clients**, click **Create client**, choose **Desktop app** as the application type, name it anything, and click **Create**. Copy the **Client ID** and **Client secret**, or click **Download JSON**: Google shows the secret only once.
+
+</Step>
+<Step>
+
+### Add the account in Lorca
+
+In the marketplace, open **Gmail** (or **Google Calendar**, or **Google Drive**), click **Add**, and name the account (Work, say). In its sheet, paste the client ID into `GOOGLE_CLIENT_ID` and the secret into `GOOGLE_CLIENT_SECRET`, then click **Save**.
+
+</Step>
+<Step>
+
+### Sign in
+
+Click **Sign in** and pick your Google account. Google says it **hasn't verified this app**: it's your own app, so click **Advanced**, then **Go to My Lorca (unsafe)**, then **Allow**.
+
+</Step>
+</Steps>
+
+For Calendar and Drive, add their accounts the same way, with the same client ID and secret.
+
+If something goes wrong:
+
+- **Access blocked, or not a test user:** the app is still in Testing. Publish it, or add yourself under **Audience › Test users**.
+- **An API "has not been used in project":** turn that API on under **APIs & Services › Library**, wait a minute, and try again.
+- **Signed out every week:** the app is in Testing. Publish it.
 
 ## What a plugin may do
 
