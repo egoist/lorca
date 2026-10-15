@@ -3285,7 +3285,7 @@ impl Tool for SearchPlugins {
                     "description": m.description,
                     "installed_here": status.is_some(),
                     "state": status.as_ref().map(|s| s.state.clone()),
-                    "signs_in": m.servers.values().any(|s| matches!(s, crate::plugins::ServerSpec::Http { auth: Some(crate::plugins::AuthSpec::Oauth { .. }), .. })),
+                    "signs_in": m.servers.values().any(|s| s.oauth().is_some()),
                 })
             })
             .collect();

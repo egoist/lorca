@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated": "2026-10-15T17:30:28Z",
+  "updated": "2026-10-15T17:32:43Z",
   "plugins": [
     {
       "id": "slack",
@@ -162,7 +162,7 @@
       "author": "Google",
       "version": "1",
       "icon": "envelope",
-      "homepage": "https://developers.google.com/workspace/gmail/api/guides/configure-mcp-server",
+      "homepage": "https://developers.google.com/workspace/gmail/api/guides",
       "tags": [
         "google",
         "workspace",
@@ -170,6 +170,9 @@
         "personal",
         "gmail"
       ],
+      "builtin_servers": {
+        "gmail": "gmail"
+      },
       "servers": {
         "gmail": {
           "type": "http",
@@ -195,7 +198,7 @@
       "variables": [
         {
           "name": "GOOGLE_CLIENT_ID",
-          "description": "The client ID of a Desktop OAuth client in a Google Cloud project enrolled in the Google Workspace MCP preview, with this service’s API turned on.",
+          "description": "The client ID of a Desktop OAuth client in a Google Cloud project with this service’s API turned on.",
           "secret": false,
           "required": true
         },
@@ -208,6 +211,8 @@
       ],
       "tools": {
         "readonly": [
+          "get_message",
+          "gmail.get_message",
           "get_thread",
           "gmail.get_thread",
           "list_drafts",
@@ -244,7 +249,7 @@
       "author": "Google",
       "version": "1",
       "icon": "calendar",
-      "homepage": "https://developers.google.com/workspace/calendar/api/guides/configure-mcp-server",
+      "homepage": "https://developers.google.com/workspace/calendar/api/guides/overview",
       "tags": [
         "google",
         "workspace",
@@ -252,6 +257,9 @@
         "personal",
         "calendar"
       ],
+      "builtin_servers": {
+        "calendar": "google-calendar"
+      },
       "servers": {
         "calendar": {
           "type": "http",
@@ -277,7 +285,7 @@
       "variables": [
         {
           "name": "GOOGLE_CLIENT_ID",
-          "description": "The client ID of a Desktop OAuth client in a Google Cloud project enrolled in the Google Workspace MCP preview, with this service’s API turned on.",
+          "description": "The client ID of a Desktop OAuth client in a Google Cloud project with this service’s API turned on.",
           "secret": false,
           "required": true
         },
@@ -296,6 +304,8 @@
           "calendar.list_calendars",
           "list_events",
           "calendar.list_events",
+          "search_events",
+          "calendar.search_events",
           "suggest_time",
           "calendar.suggest_time"
         ]
@@ -318,7 +328,7 @@
       "author": "Google",
       "version": "1",
       "icon": "externaldrive",
-      "homepage": "https://developers.google.com/workspace/drive/api/guides/configure-mcp-server",
+      "homepage": "https://developers.google.com/workspace/drive/api/guides/about-sdk",
       "tags": [
         "google",
         "workspace",
@@ -326,6 +336,9 @@
         "personal",
         "drive"
       ],
+      "builtin_servers": {
+        "drive": "google-drive"
+      },
       "servers": {
         "drive": {
           "type": "http",
@@ -350,7 +363,7 @@
       "variables": [
         {
           "name": "GOOGLE_CLIENT_ID",
-          "description": "The client ID of a Desktop OAuth client in a Google Cloud project enrolled in the Google Workspace MCP preview, with this service’s API turned on.",
+          "description": "The client ID of a Desktop OAuth client in a Google Cloud project with this service’s API turned on.",
           "secret": false,
           "required": true
         },

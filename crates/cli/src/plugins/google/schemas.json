@@ -1,0 +1,1504 @@
+{
+ "gmail": [
+  {
+   "name": "create_draft",
+   "description": "Creates a new draft email in the authenticated user's Gmail account.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "to": {
+      "description": "The primary recipients of the email draft.",
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "cc": {
+      "description": "The carbon copy recipients of the email draft.",
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "bcc": {
+      "description": "The blind carbon copy recipients of the email draft.",
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "subject": {
+      "description": "The subject line of the email.",
+      "type": "string"
+     },
+     "body": {
+      "description": "The main body content of the email draft.",
+      "type": "string"
+     },
+     "htmlBody": {
+      "description": "The HTML content of the email draft.",
+      "type": "string"
+     },
+     "replyToMessageId": {
+      "description": "The ID of the message to reply to.",
+      "type": "string"
+     },
+     "attachments": {
+      "description": "The attachments to include in the email.",
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "id": {
+         "description": "When present, contains the ID of an external attachment that can be retrieved in a separate GetMessageAttachment request.",
+         "type": "string"
+        },
+        "filename": {
+         "description": "The name of the file to be attached, e.g. \"invoice.pdf\".",
+         "type": "string"
+        },
+        "mimeType": {
+         "description": "The field representing a content or media type must use IANA MIME type, https://www.iana.org/assignments/media-types/media-types.xhtml.",
+         "type": "string"
+        },
+        "content": {
+         "description": "The base64-encoded content of the attachment.",
+         "type": "string",
+         "format": "byte"
+        },
+        "inline": {
+         "description": "If true, this attachment is handled as inline.",
+         "type": "boolean"
+        }
+       },
+       "required": [
+        "content"
+       ]
+      }
+     }
+    }
+   },
+   "readOnly": false,
+   "output": "Draft { id, subject, threadId, toRecipients[], ccRecipients[], bccRecipients[], plaintextBody, date, htmlBody }",
+   "rest": "gmail v1 users.drafts.create (RFC 2822 MIME built client-side; threadId/In-Reply-To from users.messages.get for replyToMessageId)",
+   "scopes": [
+    "https://mail.google.com/",
+    "https://www.googleapis.com/auth/gmail.compose",
+    "https://www.googleapis.com/auth/gmail.modify"
+   ],
+   "note": "Tool description says creating drafts with attachments is not supported yet, although the schema has attachments[]."
+  },
+  {
+   "name": "create_label",
+   "description": "Creates a new label in the authenticated user's Gmail account.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "displayName": {
+      "description": "The display name of the label to create.",
+      "type": "string"
+     },
+     "color": {
+      "description": "The color of the label.",
+      "type": "object",
+      "properties": {
+       "textColor": {
+        "description": "The text color of the label, represented as a hex string (e.g., \"#000000\").",
+        "type": "string"
+       },
+       "backgroundColor": {
+        "description": "The background color of the label, represented as a hex string (e.g., \"#ffffff\").",
+        "type": "string"
+       }
+      }
+     }
+    },
+    "required": [
+     "displayName"
+    ]
+   },
+   "readOnly": false,
+   "output": "Label { labelId, name, color, threadsTotal, threadsUnread }; LabelColor { textColor, backgroundColor }",
+   "rest": "gmail v1 users.labels.create",
+   "scopes": null,
+   "note": "Reference page lists no OAuth scopes."
+  },
+  {
+   "name": "get_message",
+   "description": "Retrieves a specific email message from the authenticated user's Gmail account by its unique message ID.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "messageId": {
+      "description": "The unique identifier of the message to fetch.",
+      "type": "string"
+     },
+     "messageFormat": {
+      "description": "Specifies the format of the message returned.",
+      "type": "string",
+      "enum": [
+       "MESSAGE_FORMAT_UNSPECIFIED",
+       "MINIMAL",
+       "FULL_CONTENT",
+       "METADATA_ONLY"
+      ]
+     }
+    },
+    "required": [
+     "messageId"
+    ]
+   },
+   "readOnly": true,
+   "output": "Message { id, snippet, subject, sender, toRecipients[], ccRecipients[], date, plaintextBody, attachmentIds[], htmlBody, attachments[], labelIds[] }; AttachmentMetadata { id, mimeType, filename }",
+   "rest": "gmail v1 users.messages.get (format full/metadata/minimal)",
+   "scopes": [
+    "https://mail.google.com/",
+    "https://www.googleapis.com/auth/gmail.metadata",
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.readonly"
+   ]
+  },
+  {
+   "name": "get_thread",
+   "description": "Retrieves a specific email thread from the authenticated user's Gmail account, including a list of its messages.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "threadId": {
+      "description": "The unique identifier of the thread to fetch.",
+      "type": "string"
+     },
+     "messageFormat": {
+      "description": "Specifies the format of the messages returned within the thread.",
+      "type": "string",
+      "enum": [
+       "MESSAGE_FORMAT_UNSPECIFIED",
+       "MINIMAL",
+       "FULL_CONTENT",
+       "METADATA_ONLY"
+      ]
+     }
+    },
+    "required": [
+     "threadId"
+    ]
+   },
+   "readOnly": true,
+   "output": "Thread { id, messages[] }; Message { id, snippet, subject, sender, toRecipients[], ccRecipients[], date, plaintextBody, attachmentIds[], htmlBody, attachments[], labelIds[] }",
+   "rest": "gmail v1 users.threads.get",
+   "scopes": [
+    "https://mail.google.com/",
+    "https://www.googleapis.com/auth/gmail.metadata",
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.readonly"
+   ]
+  },
+  {
+   "name": "label_message",
+   "description": "Adds one or more labels to a specific message in the authenticated user's Gmail account.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "messageId": {
+      "description": "The ID of the message to add the labels to.",
+      "type": "string"
+     },
+     "labelIds": {
+      "description": "The IDs of the labels to add.",
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     }
+    },
+    "required": [
+     "messageId",
+     "labelIds"
+    ]
+   },
+   "readOnly": false,
+   "output": "Empty object on success.",
+   "rest": "gmail v1 users.messages.modify (addLabelIds)",
+   "scopes": [
+    "https://mail.google.com/",
+    "https://www.googleapis.com/auth/gmail.modify"
+   ]
+  },
+  {
+   "name": "label_thread",
+   "description": "Adds labels to an entire thread in the authenticated user's Gmail account.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "threadId": {
+      "description": "The unique identifier of the thread to add labels to.",
+      "type": "string"
+     },
+     "labelIds": {
+      "description": "The unique identifiers of the labels to add.",
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     }
+    },
+    "required": [
+     "threadId",
+     "labelIds"
+    ]
+   },
+   "readOnly": false,
+   "output": "Empty object on success.",
+   "rest": "gmail v1 users.threads.modify (addLabelIds)",
+   "scopes": [
+    "https://mail.google.com/",
+    "https://www.googleapis.com/auth/gmail.modify"
+   ]
+  },
+  {
+   "name": "list_drafts",
+   "description": "Lists draft emails from the authenticated user's Gmail account.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "pageSize": {
+      "description": "The maximum number of drafts to return.",
+      "type": "integer"
+     },
+     "pageToken": {
+      "description": "A token received from a previous list_drafts call to retrieve the next page of results.",
+      "type": "string"
+     },
+     "query": {
+      "description": "Gmail search query to filter drafts (for example: subject:Update from:a@b.com newer_than:7d is:unread).",
+      "type": "string"
+     },
+     "view": {
+      "description": "Controls the fields populated for drafts in the draft list.",
+      "type": "string",
+      "enum": [
+       "DRAFT_VIEW_UNSPECIFIED",
+       "DRAFT_VIEW_METADATA_ONLY",
+       "DRAFT_VIEW_FULL"
+      ]
+     }
+    }
+   },
+   "readOnly": true,
+   "output": "ListDraftsResponse { drafts[], nextPageToken }; Draft { id, subject, threadId, toRecipients[], ccRecipients[], bccRecipients[], plaintextBody, date, htmlBody }",
+   "rest": "gmail v1 users.drafts.list + users.drafts.get per draft",
+   "scopes": [
+    "https://mail.google.com/",
+    "https://www.googleapis.com/auth/gmail.compose",
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.readonly"
+   ]
+  },
+  {
+   "name": "list_labels",
+   "description": "Lists all user-defined labels available in the authenticated user's Gmail account.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "pageSize": {
+      "description": "The maximum number of labels to return.",
+      "type": "integer"
+     },
+     "pageToken": {
+      "description": "Page token to retrieve a specific page of results in the list.",
+      "type": "string"
+     }
+    }
+   },
+   "readOnly": true,
+   "output": "ListLabelsResponse { labels[], nextPageToken }; Label { labelId, name, color, threadsTotal, threadsUnread }",
+   "rest": "gmail v1 users.labels.list (+ users.labels.get for counts)",
+   "scopes": [
+    "https://mail.google.com/",
+    "https://www.googleapis.com/auth/gmail.labels",
+    "https://www.googleapis.com/auth/gmail.metadata",
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.readonly"
+   ]
+  },
+  {
+   "name": "search_threads",
+   "description": "Lists email threads from the authenticated user's Gmail account.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "pageSize": {
+      "description": "The maximum number of threads to return.",
+      "type": "integer"
+     },
+     "pageToken": {
+      "description": "Page token to retrieve a specific page of results in the list.",
+      "type": "string"
+     },
+     "query": {
+      "description": "A query string to filter the threads.",
+      "type": "string"
+     },
+     "includeTrash": {
+      "description": "Include threads from TRASH in the results.",
+      "type": "boolean"
+     },
+     "view": {
+      "description": "Controls the fields populated for threads in the thread list.",
+      "type": "string",
+      "enum": [
+       "THREAD_VIEW_UNSPECIFIED",
+       "THREAD_VIEW_METADATA_ONLY",
+       "THREAD_VIEW_MINIMAL"
+      ]
+     }
+    }
+   },
+   "readOnly": true,
+   "output": "SearchThreadsResponse { threads[], nextPageToken, resultCountEstimate }; Thread { id, messages[] }",
+   "rest": "gmail v1 users.threads.list (q, includeSpamTrash) + users.threads.get per thread",
+   "scopes": [
+    "https://mail.google.com/",
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.readonly"
+   ]
+  },
+  {
+   "name": "unlabel_message",
+   "description": "Removes one or more labels from a specific message in the authenticated user's Gmail account.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "messageId": {
+      "description": "The ID of the message to remove the labels from.",
+      "type": "string"
+     },
+     "labelIds": {
+      "description": "The IDs of the labels to remove.",
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     }
+    },
+    "required": [
+     "messageId",
+     "labelIds"
+    ]
+   },
+   "readOnly": false,
+   "output": "Empty object on success.",
+   "rest": "gmail v1 users.messages.modify (removeLabelIds)",
+   "destructive": true,
+   "scopes": [
+    "https://mail.google.com/",
+    "https://www.googleapis.com/auth/gmail.modify"
+   ]
+  },
+  {
+   "name": "unlabel_thread",
+   "description": "Removes labels from an entire thread in the authenticated user's Gmail account.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "threadId": {
+      "description": "The unique identifier of the thread to remove labels from.",
+      "type": "string"
+     },
+     "labelIds": {
+      "description": "The unique identifiers of the labels to remove.",
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     }
+    },
+    "required": [
+     "threadId",
+     "labelIds"
+    ]
+   },
+   "readOnly": false,
+   "output": "Empty object on success.",
+   "rest": "gmail v1 users.threads.modify (removeLabelIds)",
+   "destructive": true,
+   "scopes": [
+    "https://mail.google.com/",
+    "https://www.googleapis.com/auth/gmail.modify"
+   ]
+  }
+ ],
+ "calendar": [
+  {
+   "name": "create_event",
+   "description": "Creates an event on the given calendar.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "summary": {
+      "description": "Title.",
+      "type": "string"
+     },
+     "startTime": {
+      "description": "Start time (ISO 8601, for example '2026-04-30T10:00:00Z').",
+      "type": "string"
+     },
+     "endTime": {
+      "description": "End time (ISO 8601, for example '2026-04-30T11:00:00Z').",
+      "type": "string"
+     },
+     "attendeeEmails": {
+      "description": "Deprecated: use attendees instead.",
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "deprecated": true
+     },
+     "attendees": {
+      "description": "Attendees of the event.",
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "id": {
+         "description": "Profile ID.",
+         "type": "string"
+        },
+        "email": {
+         "description": "Attendee's email address.",
+         "type": "string"
+        },
+        "displayName": {
+         "description": "Name.",
+         "type": "string"
+        },
+        "organizer": {
+         "description": "Whether attendee is the organizer.",
+         "type": "boolean"
+        },
+        "self": {
+         "description": "Whether this entry represents the calendar on which this copy of the event appears.",
+         "type": "boolean"
+        },
+        "resource": {
+         "description": "Whether attendee is a resource (for example, room).",
+         "type": "boolean"
+        },
+        "optionalAttendee": {
+         "description": "Whether attendee is optional.",
+         "type": "boolean"
+        },
+        "responseStatus": {
+         "description": "Response status. Values: needsAction, declined, tentative, accepted.",
+         "type": "string"
+        },
+        "comment": {
+         "description": "Response comment.",
+         "type": "string"
+        },
+        "additionalGuests": {
+         "description": "Number of additional guests.",
+         "type": "integer"
+        }
+       },
+       "required": [
+        "email"
+       ]
+      }
+     },
+     "recurrenceData": {
+      "description": "Recurrence rules as RRULE, RDATE, or EXDATE strings (per RFC 5545).",
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "overrideReminders": {
+      "description": "Reminders override calendar defaults.",
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "method": {
+         "description": "Delivery method. Values: email, popup.",
+         "type": "string"
+        },
+        "minutes": {
+         "description": "Minutes in advance that the reminder is triggered.",
+         "type": "integer"
+        }
+       },
+       "required": [
+        "method",
+        "minutes"
+       ]
+      }
+     },
+     "attachments": {
+      "description": "File attachments.",
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "fileUrl": {
+         "description": "URL link to the attachment.",
+         "type": "string"
+        },
+        "title": {
+         "description": "Attachment title.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "fileUrl"
+       ]
+      }
+     },
+     "calendarId": {
+      "description": "ID of the calendar to create the event on.",
+      "type": "string"
+     },
+     "description": {
+      "description": "Description.",
+      "type": "string"
+     },
+     "location": {
+      "description": "Location.",
+      "type": "string"
+     },
+     "allDay": {
+      "description": "Whether the event spans the entire day.",
+      "type": "boolean"
+     },
+     "timeZone": {
+      "description": "IANA Time Zone Database name (for example, America/Los_Angeles).",
+      "type": "string"
+     },
+     "notificationLevel": {
+      "description": "Which email notification should be sent for this event update.",
+      "type": "string",
+      "enum": [
+       "NOTIFICATION_LEVEL_UNSPECIFIED",
+       "NONE",
+       "EXTERNAL_ONLY",
+       "ALL"
+      ]
+     },
+     "addGoogleMeetUrl": {
+      "description": "Create and add a Google Meet URL.",
+      "type": "boolean"
+     },
+     "visibility": {
+      "description": "Visibility of the event. Values: default, public, private.",
+      "type": "string"
+     },
+     "colorId": {
+      "description": "The color of the event.",
+      "type": "string"
+     },
+     "googleMeetUrl": {
+      "description": "Specific Google Meet URL or meeting ID.",
+      "type": "string"
+     },
+     "guestPermissions": {
+      "description": "Guest permissions.",
+      "type": "object",
+      "properties": {
+       "guestsCanInviteOthers": {
+        "description": "Whether guests can invite others.",
+        "type": "boolean"
+       },
+       "guestsCanModify": {
+        "description": "Whether guests can modify the event.",
+        "type": "boolean"
+       },
+       "guestsCanSeeGuests": {
+        "description": "Whether guests can see other guests.",
+        "type": "boolean"
+       }
+      }
+     },
+     "availability": {
+      "description": "Availability setting.",
+      "type": "string",
+      "enum": [
+       "AVAILABILITY_UNSPECIFIED",
+       "AVAILABILITY_BUSY",
+       "AVAILABILITY_FREE"
+      ]
+     },
+     "eventType": {
+      "description": "Type of the event.",
+      "type": "string",
+      "enum": [
+       "EVENT_TYPE_UNSPECIFIED",
+       "DEFAULT",
+       "OUT_OF_OFFICE",
+       "FOCUS_TIME",
+       "WORKING_LOCATION",
+       "BIRTHDAY",
+       "FROM_GMAIL"
+      ]
+     },
+     "workingLocationProperties": {
+      "description": "Working location properties (if eventType is WORKING_LOCATION).",
+      "type": "object",
+      "properties": {
+       "type": {
+        "description": "Working location type.",
+        "type": "string",
+        "enum": [
+         "WORKING_LOCATION_TYPE_UNSPECIFIED",
+         "HOME_OFFICE",
+         "CUSTOM_LOCATION"
+        ]
+       },
+       "customLocationLabel": {
+        "description": "The label for a custom location.",
+        "type": "string"
+       }
+      }
+     }
+    },
+    "required": [
+     "summary",
+     "startTime",
+     "endTime"
+    ]
+   },
+   "readOnly": false,
+   "output": "Event { id, status, htmlLink, created, updated, summary, description, location, creator, organizer, start, end, recurrence[], recurringEventId, originalStartTime, transparency, visibility, attendees[], conferenceUrl, colorId, overrideReminders[], attachments[], guestPermissions, eventType, workingLocationProperties, availability }; Principal { email, displayName, self }; DateOrDateTime { date, dateTime, timeZone }; Attendee { id, email, displayName, organizer, self, resource, optionalAttendee, responseStatus, comment, additionalGuests }; Reminder { method, minutes }; Attachment { fileUrl, title }; GuestPermissions { guestsCanInviteOthers, guestsCanModify, guestsCanSeeGuests }; WorkingLocationProperties { type, customLocationLabel }",
+   "rest": "calendar v3 events.insert (conferenceDataVersion=1 for addGoogleMeetUrl)",
+   "scopes": [
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/calendar.events"
+   ]
+  },
+  {
+   "name": "delete_event",
+   "description": "Deletes an event on the given calendar.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "eventId": {
+      "description": "The ID of the event to delete.",
+      "type": "string"
+     },
+     "calendarId": {
+      "description": "ID of the calendar containing the event.",
+      "type": "string"
+     },
+     "notificationLevel": {
+      "description": "Which email notification should be sent for this event update.",
+      "type": "string",
+      "enum": [
+       "NOTIFICATION_LEVEL_UNSPECIFIED",
+       "NONE",
+       "EXTERNAL_ONLY",
+       "ALL"
+      ]
+     }
+    },
+    "required": [
+     "eventId"
+    ]
+   },
+   "readOnly": false,
+   "output": "Event { id, status, htmlLink, created, updated, summary, description, location, creator, organizer, start, end, recurrence[], recurringEventId, originalStartTime, transparency, visibility, attendees[], conferenceUrl, colorId, overrideReminders[], attachments[], guestPermissions, eventType, workingLocationProperties, availability }; Principal { email, displayName, self }; DateOrDateTime { date, dateTime, timeZone }; Attendee { id, email, displayName, organizer, self, resource, optionalAttendee, responseStatus, comment, additionalGuests }; Reminder { method, minutes }; Attachment { fileUrl, title }; GuestPermissions { guestsCanInviteOthers, guestsCanModify, guestsCanSeeGuests }; WorkingLocationProperties { type, customLocationLabel }",
+   "rest": "calendar v3 events.delete (sendUpdates from notificationLevel)",
+   "destructive": true,
+   "scopes": [
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/calendar.events"
+   ]
+  },
+  {
+   "name": "get_event",
+   "description": "Returns a single event on the given calendar.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "eventId": {
+      "description": "Event ID.",
+      "type": "string"
+     },
+     "calendarId": {
+      "description": "ID of the calendar containing the event.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "eventId"
+    ]
+   },
+   "readOnly": true,
+   "output": "Event { id, status, htmlLink, created, updated, summary, description, location, creator, organizer, start, end, recurrence[], recurringEventId, originalStartTime, transparency, visibility, attendees[], conferenceUrl, colorId, overrideReminders[], attachments[], guestPermissions, eventType, workingLocationProperties, availability }; Principal { email, displayName, self }; DateOrDateTime { date, dateTime, timeZone }; Attendee { id, email, displayName, organizer, self, resource, optionalAttendee, responseStatus, comment, additionalGuests }; Reminder { method, minutes }; Attachment { fileUrl, title }; GuestPermissions { guestsCanInviteOthers, guestsCanModify, guestsCanSeeGuests }; WorkingLocationProperties { type, customLocationLabel }",
+   "rest": "calendar v3 events.get",
+   "scopes": [
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/calendar.events.readonly",
+    "https://www.googleapis.com/auth/calendar.readonly"
+   ]
+  },
+  {
+   "name": "list_calendars",
+   "description": "Returns the calendars this user has access to (their calendar list).",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "pageSize": {
+      "description": "Max results per page.",
+      "type": "integer"
+     },
+     "pageToken": {
+      "description": "Token specifying which result page to return.",
+      "type": "string"
+     }
+    }
+   },
+   "readOnly": true,
+   "output": "ListCalendarsResponse { calendars[], nextPageToken }; CalendarListItem { id, summary, description, timeZone }",
+   "rest": "calendar v3 calendarList.list",
+   "scopes": [
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/calendar.calendarlist",
+    "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+    "https://www.googleapis.com/auth/calendar.readonly"
+   ]
+  },
+  {
+   "name": "list_events",
+   "description": "Returns events on the given calendar matching all specified constraints.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "eventTypeFilter": {
+      "description": "Deprecated: use event_type instead.",
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "deprecated": true
+     },
+     "eventType": {
+      "description": "The event types to return.",
+      "type": "array",
+      "items": {
+       "type": "string",
+       "enum": [
+        "EVENT_TYPE_UNSPECIFIED",
+        "DEFAULT",
+        "OUT_OF_OFFICE",
+        "FOCUS_TIME",
+        "WORKING_LOCATION",
+        "BIRTHDAY",
+        "FROM_GMAIL"
+       ]
+      }
+     },
+     "calendarId": {
+      "description": "ID of the calendar containing the events.",
+      "type": "string"
+     },
+     "pageSize": {
+      "description": "Max events per page (default 100, max 250).",
+      "type": "integer"
+     },
+     "pageToken": {
+      "description": "Next page token.",
+      "type": "string"
+     },
+     "startTime": {
+      "description": "The lower bound of a time range.",
+      "type": "string"
+     },
+     "endTime": {
+      "description": "The upper bound of a time range.",
+      "type": "string"
+     },
+     "timeZone": {
+      "description": "Time zone (IANA ID, for example Europe/Zurich) used to resolve timezone-less dates.",
+      "type": "string"
+     },
+     "orderBy": {
+      "description": "The order in which events should be returned. Values: default, startTime, startTimeDesc, lastModified.",
+      "type": "string"
+     },
+     "fullText": {
+      "description": "Free-form case-insensitive search matching title, description, location, or attendees.",
+      "type": "string"
+     }
+    }
+   },
+   "readOnly": true,
+   "output": "ListEventsResponse { summary, description, updated, timeZone, accessRole, defaultReminders[], events[], nextPageToken }; Reminder { method, minutes }; Event { id, status, htmlLink, created, updated, summary, description, location, creator, organizer, start, end, recurrence[], recurringEventId, originalStartTime, transparency, visibility, attendees[], conferenceUrl, colorId, overrideReminders[], attachments[], guestPermissions, eventType, workingLocationProperties, availability }",
+   "rest": "calendar v3 events.list (timeMin/timeMax, orderBy, q=fullText, eventTypes, singleEvents)",
+   "scopes": [
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/calendar.events.readonly",
+    "https://www.googleapis.com/auth/calendar.readonly"
+   ]
+  },
+  {
+   "name": "respond_to_event",
+   "description": "Responds to an event on a calendar.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "eventId": {
+      "description": "The ID of the event to respond to.",
+      "type": "string"
+     },
+     "responseStatus": {
+      "description": "The new user's response status of the event. Values: declined, tentative, accepted.",
+      "type": "string"
+     },
+     "calendarId": {
+      "description": "ID of the calendar containing the event.",
+      "type": "string"
+     },
+     "notificationLevel": {
+      "description": "Which email notification should be sent for this event update.",
+      "type": "string",
+      "enum": [
+       "NOTIFICATION_LEVEL_UNSPECIFIED",
+       "NONE",
+       "EXTERNAL_ONLY",
+       "ALL"
+      ]
+     },
+     "responseComment": {
+      "description": "The user's comment attached to the response.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "eventId",
+     "responseStatus"
+    ]
+   },
+   "readOnly": false,
+   "output": "Event { id, status, htmlLink, created, updated, summary, description, location, creator, organizer, start, end, recurrence[], recurringEventId, originalStartTime, transparency, visibility, attendees[], conferenceUrl, colorId, overrideReminders[], attachments[], guestPermissions, eventType, workingLocationProperties, availability }; Principal { email, displayName, self }; DateOrDateTime { date, dateTime, timeZone }; Attendee { id, email, displayName, organizer, self, resource, optionalAttendee, responseStatus, comment, additionalGuests }; Reminder { method, minutes }; Attachment { fileUrl, title }; GuestPermissions { guestsCanInviteOthers, guestsCanModify, guestsCanSeeGuests }; WorkingLocationProperties { type, customLocationLabel }",
+   "rest": "calendar v3 events.get + events.patch (self attendee responseStatus/comment)",
+   "scopes": [
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/calendar.events"
+   ]
+  },
+  {
+   "name": "search_events",
+   "description": "Searches events on the user's primary calendar using semantic search.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "description": "Query string to search for events (case-insensitive).",
+      "type": "string"
+     },
+     "pageSize": {
+      "description": "Maximum number of entries returned on one result page.",
+      "type": "integer"
+     },
+     "pageToken": {
+      "description": "Token specifying which result page to return.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "query"
+    ]
+   },
+   "readOnly": true,
+   "output": "SearchEventsResponse { events[], nextPageToken }; Event { id, status, htmlLink, created, updated, summary, description, location, creator, organizer, start, end, recurrence[], recurringEventId, originalStartTime, transparency, visibility, attendees[], conferenceUrl, colorId, overrideReminders[], attachments[], guestPermissions, eventType, workingLocationProperties, availability }",
+   "rest": "no direct REST equivalent (semantic search on primary calendar); closest is calendar v3 events.list with q",
+   "scopes": [
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/calendar.events.readonly",
+    "https://www.googleapis.com/auth/calendar.readonly"
+   ]
+  },
+  {
+   "name": "suggest_time",
+   "description": "Suggests time periods across one or more calendars.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "attendeeEmails": {
+      "description": "Attendee emails to find free time for.",
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "startTime": {
+      "description": "Query interval start (ISO 8601).",
+      "type": "string"
+     },
+     "endTime": {
+      "description": "Query interval end (ISO 8601).",
+      "type": "string"
+     },
+     "timeZone": {
+      "description": "Time zone for search times (IANA ID, for example Europe/Zurich).",
+      "type": "string"
+     },
+     "durationMinutes": {
+      "description": "Min duration of free slot in minutes.",
+      "type": "integer"
+     },
+     "preferences": {
+      "description": "Preferences to find suggested time.",
+      "type": "object",
+      "properties": {
+       "startHour": {
+        "description": "Preferred start hour as \"HH:mm\" (24-hour format).",
+        "type": "string"
+       },
+       "endHour": {
+        "description": "Preferred end hour as \"HH:mm\" (24-hour format).",
+        "type": "string"
+       },
+       "excludeWeekends": {
+        "description": "Exclude weekends.",
+        "type": "boolean"
+       },
+       "pageSize": {
+        "description": "Max number of slots to return.",
+        "type": "integer"
+       }
+      }
+     }
+    },
+    "required": [
+     "attendeeEmails",
+     "startTime",
+     "endTime"
+    ]
+   },
+   "readOnly": true,
+   "output": "SuggestTimeResponse { timeSlots[] }; TimeSlot { startTime, endTime, durationMinutes, start, end }",
+   "rest": "calendar v3 freebusy.query + client-side free-slot computation",
+   "scopes": [
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/calendar.events.freebusy",
+    "https://www.googleapis.com/auth/calendar.freebusy",
+    "https://www.googleapis.com/auth/calendar.readonly"
+   ]
+  },
+  {
+   "name": "update_event",
+   "description": "Updates an event on the given calendar.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "eventId": {
+      "description": "Event ID.",
+      "type": "string"
+     },
+     "addedAttendeeEmails": {
+      "description": "Deprecated: use added_attendees instead.",
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "deprecated": true
+     },
+     "addedAttendees": {
+      "description": "Attendees to add to the event.",
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "id": {
+         "description": "Profile ID.",
+         "type": "string"
+        },
+        "email": {
+         "description": "Attendee's email address.",
+         "type": "string"
+        },
+        "displayName": {
+         "description": "Name.",
+         "type": "string"
+        },
+        "organizer": {
+         "description": "Whether attendee is the organizer.",
+         "type": "boolean"
+        },
+        "self": {
+         "description": "Whether this entry represents the calendar on which this copy of the event appears.",
+         "type": "boolean"
+        },
+        "resource": {
+         "description": "Whether attendee is a resource (for example, room).",
+         "type": "boolean"
+        },
+        "optionalAttendee": {
+         "description": "Whether attendee is optional.",
+         "type": "boolean"
+        },
+        "responseStatus": {
+         "description": "Response status. Values: needsAction, declined, tentative, accepted.",
+         "type": "string"
+        },
+        "comment": {
+         "description": "Response comment.",
+         "type": "string"
+        },
+        "additionalGuests": {
+         "description": "Number of additional guests.",
+         "type": "integer"
+        }
+       },
+       "required": [
+        "email"
+       ]
+      }
+     },
+     "removedAttendeeEmails": {
+      "description": "The attendees of the event to remove, as email addresses.",
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "overrideReminders": {
+      "description": "If set, replaces all existing reminders for the event.",
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "method": {
+         "description": "Delivery method. Values: email, popup.",
+         "type": "string"
+        },
+        "minutes": {
+         "description": "Minutes in advance that the reminder is triggered.",
+         "type": "integer"
+        }
+       },
+       "required": [
+        "method",
+        "minutes"
+       ]
+      }
+     },
+     "addedAttachments": {
+      "description": "File attachments to add to the event.",
+      "type": "array",
+      "items": {
+       "type": "object",
+       "properties": {
+        "fileUrl": {
+         "description": "URL link to the attachment.",
+         "type": "string"
+        },
+        "title": {
+         "description": "Attachment title.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "fileUrl"
+       ]
+      }
+     },
+     "removedAttachmentFileUrls": {
+      "description": "File attachments to remove from the event.",
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "calendarId": {
+      "description": "ID of the calendar containing the event.",
+      "type": "string"
+     },
+     "summary": {
+      "description": "New title.",
+      "type": "string"
+     },
+     "description": {
+      "description": "New description.",
+      "type": "string"
+     },
+     "location": {
+      "description": "New location.",
+      "type": "string"
+     },
+     "startTime": {
+      "description": "New start time (ISO 8601).",
+      "type": "string"
+     },
+     "endTime": {
+      "description": "New end time (ISO 8601).",
+      "type": "string"
+     },
+     "allDay": {
+      "description": "Changes the event to all-day.",
+      "type": "boolean"
+     },
+     "timeZone": {
+      "description": "IANA Time Zone Database name (for example, America/Los_Angeles).",
+      "type": "string"
+     },
+     "notificationLevel": {
+      "description": "Email notification to send for this event update.",
+      "type": "string",
+      "enum": [
+       "NOTIFICATION_LEVEL_UNSPECIFIED",
+       "NONE",
+       "EXTERNAL_ONLY",
+       "ALL"
+      ]
+     },
+     "addGoogleMeetUrl": {
+      "description": "If true, creates or updates a Google Meet URL for the event.",
+      "type": "boolean"
+     },
+     "visibility": {
+      "description": "New visibility of the event. Values: default, public, private.",
+      "type": "string"
+     },
+     "colorId": {
+      "description": "New color of the event.",
+      "type": "string"
+     },
+     "googleMeetUrl": {
+      "description": "Allows attaching an existing Google Meet URL or meeting ID to the event.",
+      "type": "string"
+     },
+     "guestPermissions": {
+      "description": "Guest permission settings for this event.",
+      "type": "object",
+      "properties": {
+       "guestsCanInviteOthers": {
+        "description": "Whether guests can invite others.",
+        "type": "boolean"
+       },
+       "guestsCanModify": {
+        "description": "Whether guests can modify the event.",
+        "type": "boolean"
+       },
+       "guestsCanSeeGuests": {
+        "description": "Whether guests can see other guests.",
+        "type": "boolean"
+       }
+      }
+     },
+     "availability": {
+      "description": "Whether the event blocks time on the calendar.",
+      "type": "string",
+      "enum": [
+       "AVAILABILITY_UNSPECIFIED",
+       "AVAILABILITY_BUSY",
+       "AVAILABILITY_FREE"
+      ]
+     }
+    },
+    "required": [
+     "eventId"
+    ]
+   },
+   "readOnly": false,
+   "output": "Event { id, status, htmlLink, created, updated, summary, description, location, creator, organizer, start, end, recurrence[], recurringEventId, originalStartTime, transparency, visibility, attendees[], conferenceUrl, colorId, overrideReminders[], attachments[], guestPermissions, eventType, workingLocationProperties, availability }; Principal { email, displayName, self }; DateOrDateTime { date, dateTime, timeZone }; Attendee { id, email, displayName, organizer, self, resource, optionalAttendee, responseStatus, comment, additionalGuests }; Reminder { method, minutes }; Attachment { fileUrl, title }; GuestPermissions { guestsCanInviteOthers, guestsCanModify, guestsCanSeeGuests }; WorkingLocationProperties { type, customLocationLabel }",
+   "rest": "calendar v3 events.get + events.patch",
+   "scopes": [
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/calendar.events"
+   ]
+  }
+ ],
+ "drive": [
+  {
+   "name": "copy_file",
+   "description": "Call this tool to copy an existing File in Google Drive.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "fileId": {
+      "description": "The ID of the file to copy.",
+      "type": "string"
+     },
+     "title": {
+      "description": "The title of the newly created file.",
+      "type": "string"
+     },
+     "parentId": {
+      "description": "The parent id of the newly created file.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "fileId"
+    ]
+   },
+   "readOnly": false,
+   "output": "File { id, title, parentId, mimeType, fileSize, description, fileExtension, contentSnippet, viewUrl, sharedWithMeTime, createdTime, modifiedTime, viewedByMeTime, owner, canAddChildren }",
+   "rest": "drive v3 files.copy",
+   "scopes": [
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/drive.appdata",
+    "https://www.googleapis.com/auth/drive.file"
+   ]
+  },
+  {
+   "name": "create_file",
+   "description": "Call this tool to create or upload a File to Google Drive.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "title": {
+      "description": "The title of the file.",
+      "type": "string"
+     },
+     "mimeType": {
+      "description": "DEPRECATED.",
+      "type": "string"
+     },
+     "contentMimeType": {
+      "description": "The mime type of the content being uploaded.",
+      "type": "string"
+     },
+     "content": {
+      "description": "The content of the file encoded as base64.",
+      "type": "string"
+     },
+     "base64Content": {
+      "description": "The base64 encoded content to upload.",
+      "type": "string"
+     },
+     "textContent": {
+      "description": "The (UTF-8) text content to upload.",
+      "type": "string"
+     },
+     "parentId": {
+      "description": "The parent id of the file.",
+      "type": "string"
+     },
+     "disableConversionToGoogleType": {
+      "description": "Set to true to retain the passed in content mime type and not convert to a Google type.",
+      "type": "boolean"
+     }
+    }
+   },
+   "readOnly": false,
+   "output": "File { id, title, parentId, mimeType, fileSize, description, fileExtension, contentSnippet, viewUrl, sharedWithMeTime, createdTime, modifiedTime, viewedByMeTime, owner, canAddChildren }",
+   "rest": "drive v3 files.create (multipart upload when content given)",
+   "scopes": [
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/drive.appdata",
+    "https://www.googleapis.com/auth/drive.file"
+   ]
+  },
+  {
+   "name": "download_file_content",
+   "description": "Call this tool to download the content of a Drive file as a base64 encoded string.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "fileId": {
+      "description": "The ID of the file to retrieve.",
+      "type": "string"
+     },
+     "exportMimeType": {
+      "description": "For Google native files, the MIME type to export the file to, ignored otherwise.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "fileId"
+    ]
+   },
+   "readOnly": true,
+   "output": "FileContent { id, title, mimeType, content }",
+   "rest": "drive v3 files.get?alt=media, or files.export for Google-native types",
+   "scopes": [
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/drive.appdata",
+    "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/drive.meet.readonly",
+    "https://www.googleapis.com/auth/drive.metadata",
+    "https://www.googleapis.com/auth/drive.metadata.readonly",
+    "https://www.googleapis.com/auth/drive.photos.readonly",
+    "https://www.googleapis.com/auth/drive.readonly"
+   ]
+  },
+  {
+   "name": "get_file_metadata",
+   "description": "Call this tool to find general metadata about a user's Drive file.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "fileId": {
+      "description": "The ID of the file to retrieve.",
+      "type": "string"
+     },
+     "excludeContentSnippets": {
+      "description": "If true, the content snippet will be excluded from the response.",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "fileId"
+    ]
+   },
+   "readOnly": true,
+   "output": "File { id, title, parentId, mimeType, fileSize, description, fileExtension, contentSnippet, viewUrl, sharedWithMeTime, createdTime, modifiedTime, viewedByMeTime, owner, canAddChildren }",
+   "rest": "drive v3 files.get",
+   "scopes": [
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/drive.appdata",
+    "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/drive.meet.readonly",
+    "https://www.googleapis.com/auth/drive.metadata",
+    "https://www.googleapis.com/auth/drive.metadata.readonly",
+    "https://www.googleapis.com/auth/drive.photos.readonly",
+    "https://www.googleapis.com/auth/drive.readonly"
+   ]
+  },
+  {
+   "name": "get_file_permissions",
+   "description": "Call this tool to list the permissions of a Drive File.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "fileId": {
+      "description": "The ID of the file to get permissions for.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "fileId"
+    ]
+   },
+   "readOnly": true,
+   "output": "GetFilePermissionsResponse { permissions[] }; Permission { role, displayName, type, emailAddress, view }",
+   "rest": "drive v3 permissions.list",
+   "scopes": [
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/drive.appdata",
+    "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/drive.meet.readonly",
+    "https://www.googleapis.com/auth/drive.metadata",
+    "https://www.googleapis.com/auth/drive.metadata.readonly",
+    "https://www.googleapis.com/auth/drive.photos.readonly",
+    "https://www.googleapis.com/auth/drive.readonly"
+   ]
+  },
+  {
+   "name": "list_recent_files",
+   "description": "Call this tool to find recent files for a user specified a sort order.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "orderBy": {
+      "description": "The sort order for the files. Values (from tool description): recency (default), lastModified, lastModifiedByMe.",
+      "type": "string"
+     },
+     "pageToken": {
+      "description": "The page token to use for pagination.",
+      "type": "string"
+     },
+     "pageSize": {
+      "description": "The maximum number of files to return.",
+      "type": "integer"
+     },
+     "excludeContentSnippets": {
+      "description": "If true, the content snippet will be excluded from the response.",
+      "type": "boolean"
+     }
+    }
+   },
+   "readOnly": true,
+   "output": "ListFilesResponse { files[], nextPageToken }; File { id, title, parentId, mimeType, fileSize, description, fileExtension, contentSnippet, viewUrl, sharedWithMeTime, createdTime, modifiedTime, viewedByMeTime, owner, canAddChildren }",
+   "rest": "drive v3 files.list (orderBy recency / modifiedTime / modifiedByMeTime)",
+   "scopes": [
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/drive.appdata",
+    "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/drive.meet.readonly",
+    "https://www.googleapis.com/auth/drive.metadata",
+    "https://www.googleapis.com/auth/drive.metadata.readonly",
+    "https://www.googleapis.com/auth/drive.photos.readonly",
+    "https://www.googleapis.com/auth/drive.readonly"
+   ]
+  },
+  {
+   "name": "read_file_content",
+   "description": "Call this tool to fetch a natural language representation of a Drive file, and optionally, its comments.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "fileId": {
+      "description": "The ID of the file to retrieve.",
+      "type": "string"
+     },
+     "includeComments": {
+      "description": "Whether to include comments in the response.",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "fileId"
+    ]
+   },
+   "readOnly": true,
+   "output": "ReadFileContentResponse { contentAnchoredComments[], unanchoredComments[], fileContent, textFormattingNotSupported, commentsNotSupported }; CommentThread { replies[], commentId, status, headPost }",
+   "rest": "drive v3 files.export (text/plain, text/csv) or files.get?alt=media; comments.list when includeComments",
+   "scopes": [
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/drive.appdata",
+    "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/drive.meet.readonly",
+    "https://www.googleapis.com/auth/drive.metadata",
+    "https://www.googleapis.com/auth/drive.metadata.readonly",
+    "https://www.googleapis.com/auth/drive.photos.readonly",
+    "https://www.googleapis.com/auth/drive.readonly"
+   ]
+  },
+  {
+   "name": "search_files",
+   "description": "Search Drive files. The query uses Drive's syntax: name contains 'plan', fullText contains 'budget', mimeType = 'application/vnd.google-apps.document', modifiedTime > '2026-01-01T00:00:00', 'FOLDER_ID' in parents, sharedWithMe; title, parentId, and owner work as names for name, parents, and owners. Plain words search the files' text.",
+   "inputSchema": {
+    "type": "object",
+    "properties": {
+     "query": {
+      "description": "The search query, in Drive's query syntax or as plain words.",
+      "type": "string"
+     },
+     "pageToken": {
+      "description": "The page token to use for pagination.",
+      "type": "string"
+     },
+     "pageSize": {
+      "description": "The maximum number of files to return in each page.",
+      "type": "integer"
+     },
+     "excludeContentSnippets": {
+      "description": "If true, the content snippet will be excluded from the response.",
+      "type": "boolean"
+     }
+    }
+   },
+   "readOnly": true,
+   "output": "SearchFilesResponse { files[], nextPageToken }; File { id, title, parentId, mimeType, fileSize, description, fileExtension, contentSnippet, viewUrl, sharedWithMeTime, createdTime, modifiedTime, viewedByMeTime, owner, canAddChildren }",
+   "rest": "drive v3 files.list with q (MCP query terms title/parentId/owner/sharedWithMe translated to v3 name/parents/owners/sharedWithMe)",
+   "scopes": [
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/drive.appdata",
+    "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/drive.meet.readonly",
+    "https://www.googleapis.com/auth/drive.metadata",
+    "https://www.googleapis.com/auth/drive.metadata.readonly",
+    "https://www.googleapis.com/auth/drive.photos.readonly",
+    "https://www.googleapis.com/auth/drive.readonly"
+   ]
+  }
+ ]
+}

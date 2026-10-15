@@ -56,7 +56,7 @@ Slack、Gmail、Google Calendar、Google Drive 和 Telegram 可以在同一台 R
 
 这几个服务在第一次登录前，需要你自己的应用：
 
-- **Gmail、Google Calendar、Google Drive：** 一个 Google Cloud 项目里的桌面版 OAuth 客户端，项目要加入 Google Workspace MCP 预览计划，并打开对应服务的 API。填入它的客户端 ID，有密钥的话也填上。
+- **Gmail、Google Calendar、Google Drive：** 一个 Google Cloud 项目里的桌面版 OAuth 客户端，项目里打开对应服务的 API。填入它的客户端 ID，有密钥的话也填上。
 - **Slack：** 一个开启了 PKCE 的 Slack 应用，回调地址为 `http://localhost:3118/callback`，并且工作区已批准它使用 MCP。填入它的客户端 ID。要用[频道](/zh/docs/channels)的话，还要填它的机器人 token 和应用 token。
 - **Telegram：** BotFather 给的机器人 token。Telegram 用于[频道](/zh/docs/channels)。
 

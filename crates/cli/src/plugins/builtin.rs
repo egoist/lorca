@@ -1,4 +1,5 @@
-//! Servers Lorca answers itself, inside the Runner: Telegram's, and the bot side of Slack. The
+//! Servers Lorca answers itself, inside the Runner: Telegram's, the bot side of Slack, and
+//! Gmail, Calendar, and Drive over Google's REST APIs (`plugins::google`). The
 //! pool reaches one through an in-memory pipe and speaks MCP to it as to any other server, so
 //! its tools go through the bot's Access, Auto-review, the review queue, and the account's call
 //! limits like every plugin tool. A server reads the account's token from the plugin store at
@@ -32,7 +33,7 @@ pub fn service(name: &str) -> Option<Arc<dyn Service>> {
     match name {
         "telegram" => Some(Arc::new(crate::channels::telegram::Server)),
         "slack" => Some(Arc::new(crate::channels::slack::Server)),
-        _ => None,
+        _ => super::google::service(name),
     }
 }
 

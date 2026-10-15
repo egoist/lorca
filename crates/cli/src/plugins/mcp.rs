@@ -350,11 +350,16 @@ async fn connect(app: &Arc<App>, plugin: &Installed, name: &str, spec: &ServerSp
                 }
             }
         }
-        ServerSpec::Builtin { service: name, .. } => {
+        ServerSpec::Builtin { service: service_name, auth: builtin_auth, .. } => {
             // Telegram's server runs only for Telegram's accounts, and Slack's for Slack's.
-            let service = super::builtin::service(name)
+            let service = super::builtin::service(service_name)
                 .filter(|service| service.name() == plugin.service_id())
                 .ok_or_else(|| format!("{} needs a newer Lorca on this Runner.", plugin.manifest.name))?;
+            // One that calls the service with the account's sign-in waits for it, as an HTTP
+            // server does. Its calls refresh the token themselves (`service_token`).
+            if matches!(builtin_auth, Some(AuthSpec::Oauth { .. })) && app.plugins.lock().unwrap().sign_in_secret(&plugin.manifest.id, "oauth", name).is_none() {
+                return Err(format!("Sign in to {} first.", plugin.manifest.name));
+            }
             let pipe = super::builtin::start(app, &plugin.manifest.id, service);
             client().serve(pipe).await.map_err(|e| format!("{} did not start: {e}", plugin.manifest.name))?
         }
@@ -800,7 +805,7 @@ pub async fn service_token(app: &Arc<App>, plugin_id: &str, server: &str) -> Res
     let (stored, token_endpoint) = {
         let store = app.plugins.lock().unwrap();
         let plugin = store.get(plugin_id).ok_or("The account was removed.")?;
-        let Some(ServerSpec::Http { auth: Some(AuthSpec::Oauth { token_endpoint: Some(endpoint), .. }), .. }) = plugin.manifest.servers.get(server) else {
+        let Some(AuthSpec::Oauth { token_endpoint: Some(endpoint), .. }) = plugin.manifest.servers.get(server).and_then(ServerSpec::oauth) else {
             return Err("The account has no sign-in to send with.".into());
         };
         (store.sign_in_secret(plugin_id, "oauth", server).ok_or("Sign in to the account again.")?, endpoint.clone())
@@ -973,7 +978,7 @@ pub fn oauth_server(app: &App, plugin_id: &str) -> Option<String> {
         .manifest
         .servers
         .iter()
-        .find(|(_, spec)| matches!(spec, ServerSpec::Http { auth: Some(AuthSpec::Oauth { .. }), .. }))
+        .find(|(_, spec)| spec.oauth().is_some())
         .map(|(name, _)| name.clone())
 }
 
@@ -1063,30 +1068,29 @@ pub async fn connect_oauth_for_card(app: &Arc<App>, plugin_id: &str, server: &st
     };
     let own = app.plugins.lock().unwrap().values(plugin_id);
     let values = template_values(&plugin, own).await;
-    let (url, scopes, client, device) = match &spec {
-        ServerSpec::Http {
-            url,
-            auth:
-                Some(AuthSpec::Oauth {
-                    scopes,
-                    token_variable,
-                    client_id_variable,
-                    client_secret_variable,
-                    client_id,
-                    client_secret,
-                    device_authorization_endpoint,
-                    token_endpoint,
-                    authorization_endpoint,
-                    authorization_params,
-                    client_name,
-                    callback_port,
-                    callback_url,
-                    auth_server_metadata_url,
-                    ..
-                }),
+    let (url, scopes, client, device) = match spec.oauth() {
+        Some(AuthSpec::Oauth {
+            scopes,
+            token_variable,
+            client_id_variable,
+            client_secret_variable,
+            client_id,
+            client_secret,
+            device_authorization_endpoint,
+            token_endpoint,
+            authorization_endpoint,
+            authorization_params,
+            client_name,
+            callback_port,
+            callback_url,
+            auth_server_metadata_url,
             ..
-        } => {
-            let url = fill(url, &values);
+        }) => {
+            // A builtin server has no MCP endpoint: its sign-in is the service's own.
+            let url = match &spec {
+                ServerSpec::Http { url, .. } => fill(url, &values),
+                _ => String::new(),
+            };
             // A fixed value may name the environment (`${CLIENT_SECRET}`), as an mcp.json entry's does.
             let set = |fixed: &Option<String>, variable: &Option<String>| {
                 fixed.as_deref().map(|value| fill(value, &values)).filter(|v| !v.trim().is_empty()).or_else(|| variable.as_ref().and_then(|v| values.get(v).cloned())).filter(|v| !v.trim().is_empty())
