@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated": "2026-10-15T13:30:00Z",
+  "updated": "2026-10-15T13:42:02Z",
   "review": {
     "deepseek": "deepseek-flash",
     "anthropic": "claude-haiku-4-5",
@@ -301,6 +301,20 @@
       "tiers": [{ "input_tokens_above": 272000, "rates": { "input": 4.0, "output": 15.0, "cache_read": 0.2, "cache_write": 5.0 } }],
       "thinking": "effort",
       "levels": ["low", "medium", "high", "xhigh", "max"],
+      "wire": "responses"
+    },
+    {
+      "provider": "opencode",
+      "id": "gpt-6-luna",
+      "name": "GPT-6 Luna",
+      "context_window": 1050000,
+      "max_output": 128000,
+      "reasoning": true,
+      "images": true,
+      "rates": { "input": 0.1, "output": 0.5, "cache_read": 0.01, "cache_write": 0.125 },
+      "tiers": [{ "input_tokens_above": 272000, "rates": { "input": 0.2, "output": 0.75, "cache_read": 0.02, "cache_write": 0.25 } }],
+      "thinking": "effort",
+      "levels": ["off", "low", "medium", "high", "xhigh", "max"],
       "wire": "responses"
     },
     {
@@ -607,6 +621,19 @@
       "reasoning": true,
       "images": true,
       "rates": { "input": 0.14, "output": 0.28, "cache_read": 0.0028, "cache_write": 0.0 },
+      "thinking": "effort",
+      "levels": [],
+      "wire": "chat-completions"
+    },
+    {
+      "provider": "opencode-go",
+      "id": "space-bunny",
+      "name": "Space Bunny",
+      "context_window": 1048576,
+      "max_output": 524288,
+      "reasoning": true,
+      "images": true,
+      "rates": { "input": 0.15, "output": 0.6, "cache_read": 0.03, "cache_write": 0.0 },
       "thinking": "effort",
       "levels": [],
       "wire": "chat-completions"
