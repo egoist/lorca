@@ -2,14 +2,14 @@
 
 Source of truth for how Lorca is built. Read this before writing code, then the docs in [Subjects](#subjects) for the parts you change.
 
-Lorca is a Grok Bot alternative: persistent named bots, 1:1 chats, group chats, handoff, and orchestration. Work runs on **Devices you own**. The Rust CLI runs on macOS, Linux, and Windows. The macOS app, and the app for Windows and Linux, are UIs for the local CLI, which each bundles and launches.
+Lorca is a Grok Bot alternative: persistent named bots, 1:1 chats, group chats, handoff, and orchestration. Work runs on **Devices you own**. The Rust CLI runs on macOS, Linux, and Windows. The desktop app, on all three, is a UI for the local CLI, which it bundles and launches.
 
 Identity is a **key pair**. Devices pair. The relay stores public keys and ciphertext, after [Happy’s security model](https://happy.engineering/docs/security/).
 
 ## Constraints
 
 1. **The app speaks only to the local CLI** over localhost websocket. The app ships the CLI binary inside its bundle and starts `lorca serve` itself, unless one already answers on the port. The CLI holds keys, talks to the relay, and talks to models.
-2. **The UI is AppKit** (SPM) on macOS: system materials, SF Symbols, Auto Layout, keyboard, accessibility. On Windows and Linux it is a MyGo app in Go, drawn with MyGo's native UI toolkit, that follows the macOS app screen for screen; it builds for macOS too.
+2. **The UI is a MyGo app in Go** (`desktop/`), drawn with MyGo's native UI toolkit on macOS, Windows, and Linux. The AppKit app (`macos/`) is deprecated; its code stays for now.
 3. **The CLI owns the agent loop:** inference, tools, streaming, cancellation, orchestration.
 4. **The relay is zero-knowledge:** opaque blobs and public keys. Auth is a signature challenge. Devices check what it delivers: the account DEK encrypts what they share, and what one Device sends another is signed ([Relay trust](docs/architecture/relay-trust.md)). Its [hosted receivers](docs/architecture/receivers.md) read a service's webhook while they seal it to a Runner, and keep only the sealed copy.
 5. **Every Device records its `os`.** A Device with a desktop `os` (`macos`, `linux`, `windows`) is a **Runner**. Phones and tablets (`ios`, `ipados`, `android`) are Devices, never Runners.
@@ -21,7 +21,7 @@ Identity is a **key pair**. Devices pair. The relay stores public keys and ciphe
 ```
 ┌─────────────────────┐     local websocket      ┌──────────────────────────┐
 │  Lorca.app        │ ◄──────────────────────► │  lorca CLI (Rust)      │
-│  AppKit             │     127.0.0.1           │  keys + agent loop       │
+│  MyGo (Go)          │     127.0.0.1           │  keys + agent loop       │
 └─────────────────────┘                          └────────────┬─────────────┘
                                                               │ HTTPS
                                                               │ ciphertext + signed requests

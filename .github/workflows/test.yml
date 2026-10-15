@@ -88,13 +88,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: oven-sh/setup-bun@v2
-      # The markdown crate's static library, xcframework, and Swift bindings, as `bun run dev`
+      # The markdown crate's static library, xcframework, and Swift bindings, as `bun run mac:dev`
       # builds them into macos/Libraries and macos/Sources/LorcaMarkdown.
       - name: Build the markdown crate for Swift
         run: bun -e 'import { buildMarkdown } from "./scripts/app.ts"; if (!(await buildMarkdown("debug")).ok) process.exit(1)'
       - run: swift test
         working-directory: macos
-      - run: bun run test:mac-startup
+      - run: bun run mac:test-startup
 
   desktop:
     name: Windows and Linux app

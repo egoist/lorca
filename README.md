@@ -1,17 +1,17 @@
 # Lorca
 
-Lorca is a Grok bot alternative: a Rust CLI for macOS, Linux, and Windows, a native macOS AppKit client, a Windows and Linux app, and phone apps. The CLI is a localhost websocket service and the agent loop; the AppKit client is a UI for that CLI and launches the bundled binary.
+Lorca is a Grok bot alternative: a Rust CLI for macOS, Linux, and Windows, a desktop app for the three, and phone apps. The CLI is a localhost websocket service and the agent loop; the desktop app is a UI for that CLI and launches the bundled binary.
 
 You create bots, talk to them 1:1, or put them in a group chat. Bots can hand work to each other and orchestrate, in the same spirit as Grok Bot.
 
-The UI is AppKit (SPM), built to feel like a Mac app: materials, density, keyboard, and motion.
+The desktop app is Go drawn with MyGo's native UI, built to feel native on each system: materials, density, keyboard, and motion.
 
 Identity is a local key pair. Devices pair to each other. Traffic to the network is end-to-end encrypted. Each machine or phone that pairs is a Device and records its OS (`macos`, `linux`, `windows`, `ios`, `ipados`, `android`). Desktop Devices are Runners: you can create a bot for any paired Runner, and that bot uses the account's encrypted provider credentials there. Phones and tablets are Devices, not Runners.
 
 ## Stack
 
-- macOS app: AppKit, SPM (`macos/`)
-- Windows and Linux app: Go on MyGo's native UI (`desktop/`), after the macOS app
+- desktop app for macOS, Windows, and Linux: Go on MyGo's native UI (`desktop/`)
+- the AppKit macOS app (`macos/`) is deprecated, replaced by the desktop app; its code stays for now (`bun run mac:dev`)
 - CLI: Rust websocket service (`crates/cli`)
   - agent loop after pi-agent-core (`crates/agent`), with Grok-style bot orchestration
   - identity, pairing, E2E (X25519/Ed25519 key pairs + XChaCha20-Poly1305 DEK); signed requests and opaque blobs to the relay
@@ -21,9 +21,9 @@ Identity is a local key pair. Devices pair to each other. Traffic to the network
 ## Run it
 
 ```bash
-bun run dev          # builds the CLI and the app, launches the app, rebuilds on change; runs a relay on 0.0.0.0:8787
-bun run desktop      # the Windows and Linux app in development (mygo dev); bun run desktop:build builds its releases
-bun run mobile       # Expo dev server for the phone app (bun run mobile:ios builds the dev client)
+bun run dev          # the desktop app (desktop/) with the CLI, rebuilt on change; runs a relay on 0.0.0.0:8787
+bun run build        # the desktop app's release builds (bun run build linux/amd64,windows/amd64)
+bun run mobile:dev   # the phone app on the iOS Simulator (bun run android for Android)
 bun run relay        # a local relay on 0.0.0.0:8787 (set LORCA_RELAY_URL to use it)
 cargo test           # agent loop, crypto, and SSE tests
 bun run reset        # stop everything and wipe identity, credentials, chats, prefs (-y, --build, --relay)

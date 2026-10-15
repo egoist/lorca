@@ -91,7 +91,7 @@ Platforms are MyGo's, comma separated; the default is this computer's, or `darwi
 1. refuses a version whose release is already published, unless `FORCE=1`, which replaces its
    files;
 2. builds the CLI for each platform into `desktop/resources/<goos>-<goarch>/bin`, as
-   `bun run desktop:build` does;
+   `bun run build` does;
 3. runs `go tool mygo build -platform … -upload`, which builds the apps and installers into
    `desktop/build`, reads the newest published release's manifests and archives to make delta
    updates, signs the archives and deltas, and uploads everything to the release

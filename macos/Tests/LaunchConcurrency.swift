@@ -1,4 +1,4 @@
-// Compiled with the production worker by `bun run test:mac-startup`; AppKit is not loaded.
+// Compiled with the production worker by `bun run mac:test-startup`; AppKit is not loaded.
 import Foundation
 import Darwin
 

@@ -1,9 +1,7 @@
-// The app in desktop/, built with MyGo, for Windows, Linux, and macOS.
+// Builds and releases of the app in desktop/, built with MyGo, for Windows, Linux, and macOS. Its
+// dev loop is `bun run dev` (scripts/dev.ts).
 //
-//   bun run desktop                       Lorca Dev with live reload: builds the CLI for this
-//                                         computer and runs `go tool mygo dev`, whose app launches it
-//                                         (LORCA_CLI) with LORCA_DEV=1, as the Mac dev loop does.
-//   bun run desktop:build [platforms]     The release apps: the CLI for each platform into
+//   bun run build [platforms]             The release apps: the CLI for each platform into
 //                                         desktop/resources/<goos>-<goarch>/bin, then
 //                                         `go tool mygo build -platform`. Platforms are MyGo's, comma
 //                                         separated (linux/amd64,windows/amd64); the default is
@@ -12,13 +10,12 @@
 //                                         (musl) and, like other computers' CLIs, build with
 //                                         cargo-zigbuild; the macOS CLI builds with cargo on a Mac,
 //                                         which alone signs the app and makes its disk image.
-//   bun run release-desktop [platforms]   desktop:build signed with the update key and uploaded to
+//   bun run release-desktop [platforms]   build, signed with the update key and uploaded to
 //                                         the draft release desktop-v<version> of egoist/lorca
 //                                         (`mygo build -upload`), which the apps see once it is
 //                                         published. The macOS app is signed with the Developer ID
 //                                         (SIGN_IDENTITY) and notarized with the notarytool profile
-//                                         NOTARY_PROFILE, as `bun run release-mac` is:
-//                                         docs/releasing-desktop.md.
+//                                         NOTARY_PROFILE: docs/releasing-desktop.md.
 
 import { copyFileSync, chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
@@ -57,18 +54,6 @@ async function run(command: string[], options: { cwd?: string; env?: Record<stri
     stdin: "inherit",
   })
   return await child.exited
-}
-
-async function dev(): Promise<number> {
-  log(`${color.bold("building")} ${color.dim("the CLI (debug)")}`)
-  const cli = await buildCLI("debug")
-  if (!cli.ok) {
-    log(color.red("the CLI did not build"))
-    return 1
-  }
-  const binary = process.platform === "win32" ? `${cli.path}.exe` : cli.path
-  log(`${color.bold("running")} ${color.dim("mygo dev")}`)
-  return await run([...MYGO, "dev"], { cwd: DESKTOP, env: { LORCA_CLI: binary, LORCA_DEV: "1" } })
 }
 
 /** The CLI for `platform`, built for its Rust target and placed where the app finds it. */
@@ -203,9 +188,10 @@ async function build(platforms: string[], options: { upload?: boolean } = {}): P
 }
 
 const [mode, list] = process.argv.slice(2)
-if (mode === "build" || mode === "release") {
-  const host = hostPlatform()
-  const platforms = list?.split(",").filter((platform) => platform !== "") ?? (host.startsWith("darwin") ? ["darwin/arm64", "linux/amd64", "windows/amd64"] : [host])
-  process.exit(await build(platforms, { upload: mode === "release" }))
+if (mode !== "build" && mode !== "release") {
+  log(color.red("usage: scripts/desktop.ts build|release [platforms] — the dev loop is bun run dev"))
+  process.exit(1)
 }
-process.exit(await dev())
+const host = hostPlatform()
+const platforms = list?.split(",").filter((platform) => platform !== "") ?? (host.startsWith("darwin") ? ["darwin/arm64", "linux/amd64", "windows/amd64"] : [host])
+process.exit(await build(platforms, { upload: mode === "release" }))

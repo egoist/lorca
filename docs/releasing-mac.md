@@ -119,7 +119,7 @@ rclone lsf r2:lorca-mac-releases --s3-no-check-bucket
 
 The script:
 
-1. calls `buildApp("release")` from `scripts/app.ts`, the same build as `bun run build`: `cargo build
+1. calls `buildApp("release")` from `scripts/app.ts`, the same build as `bun run mac:build`: `cargo build
    --release` for the `lorca` CLI and the Markdown library, `swift build -c release` for the app,
    the CLI copied into `Contents/Resources/bin`, Sparkle embedded, and everything signed with the
    Developer ID under the hardened runtime (`macos/.build/bundle/release/Lorca.app`);
