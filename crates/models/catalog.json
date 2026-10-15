@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated": "2026-10-09T09:50:00Z",
+  "updated": "2026-10-15T13:30:00Z",
   "review": {
     "deepseek": "deepseek-flash",
     "anthropic": "claude-haiku-4-5",
@@ -30,7 +30,7 @@
       "max_output": 384000,
       "reasoning": true,
       "images": false,
-      "rates": { "input": 0.435, "output": 0.87, "cache_read": 0.003625, "cache_write": 0.0 },
+      "rates": { "input": 0.66, "output": 1.98, "cache_read": 0.022, "cache_write": 0.0 },
       "thinking": "adaptive",
       "levels": ["off", "low", "medium", "high", "xhigh", "max"]
     },
@@ -371,6 +371,19 @@
     },
     {
       "provider": "opencode",
+      "id": "mistral-large-4",
+      "name": "Mistral Large 4",
+      "context_window": 524288,
+      "max_output": 262144,
+      "reasoning": true,
+      "images": true,
+      "rates": { "input": 0.68, "output": 2.09, "cache_read": 0.07, "cache_write": 0.0 },
+      "thinking": "effort",
+      "levels": [],
+      "wire": "chat-completions"
+    },
+    {
+      "provider": "opencode",
       "id": "qwen3.8-max",
       "name": "Qwen3.8 Max",
       "context_window": 262144,
@@ -521,6 +534,19 @@
     },
     {
       "provider": "opencode-go",
+      "id": "muse-spark-1.3-contributor",
+      "name": "Muse Spark 1.3 Contributor",
+      "context_window": 1048576,
+      "max_output": 131072,
+      "reasoning": true,
+      "images": true,
+      "rates": { "input": 0.1, "output": 0.2, "cache_read": 0.002, "cache_write": 0.0 },
+      "thinking": "effort",
+      "levels": ["minimal", "low", "medium", "high", "xhigh"],
+      "wire": "responses"
+    },
+    {
+      "provider": "opencode-go",
       "id": "qwen3.8-max",
       "name": "Qwen3.8 Max",
       "context_window": 1000000,
@@ -568,6 +594,19 @@
       "reasoning": true,
       "images": true,
       "rates": { "input": 0.435, "output": 0.87, "cache_read": 0.003625, "cache_write": 0.0 },
+      "thinking": "effort",
+      "levels": [],
+      "wire": "chat-completions"
+    },
+    {
+      "provider": "opencode-go",
+      "id": "mimo-v2.6-flash",
+      "name": "MiMo-V2.6-Flash",
+      "context_window": 1048576,
+      "max_output": 131072,
+      "reasoning": true,
+      "images": true,
+      "rates": { "input": 0.14, "output": 0.28, "cache_read": 0.0028, "cache_write": 0.0 },
       "thinking": "effort",
       "levels": [],
       "wire": "chat-completions"
