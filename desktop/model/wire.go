@@ -134,24 +134,56 @@ type WireRun struct {
 type WireAgent struct {
 	ID       string  `json:"id"`
 	Kind     string  `json:"kind"`
-	Host     *string `json:"host"`
+	Title    *string `json:"title"`
 	Task     *string `json:"task"`
 	Folder   *string `json:"folder"`
 	Branch   *string `json:"branch"`
 	State    string  `json:"state"`
-	Stalled  *bool   `json:"stalled"`
-	Held     *bool   `json:"held"`
 	Question *struct {
-		Kind    string   `json:"kind"`
-		Text    *string  `json:"text"`
-		Command *string  `json:"command"`
-		Choices []string `json:"choices"`
-		Reason  *string  `json:"reason"`
-		Rule    *string  `json:"rule"`
+		Kind    string  `json:"kind"`
+		Command *string `json:"command"`
+		Reason  *string `json:"reason"`
+		Rule    *string `json:"rule"`
 	} `json:"question"`
-	Output  *string `json:"output"`
-	Outcome *string `json:"outcome"`
-	Device  *string `json:"device"`
+	Outcome     *string       `json:"outcome"`
+	PullRequest *string       `json:"pull_request"`
+	Changes     *AgentChanges `json:"changes"`
+	Device      *string       `json:"device"`
+	StartedAt   *float64      `json:"started_at"`
+	UpdatedAt   *float64      `json:"updated_at"`
+}
+
+// ToAgentRun reads a coding agent as a start row, or `coding.transcript`'s card, carries it.
+func ToAgentRun(wire *WireAgent) *AgentRun {
+	state := AgentState(wire.State)
+	switch state {
+	case AgentStarting, AgentWorking, AgentAsking, AgentIdle, AgentFailed, AgentStopped:
+	default:
+		state = AgentStopped
+	}
+	agent := &AgentRun{
+		ID: wire.ID, Kind: wire.Kind, Title: str(wire.Title), Task: str(wire.Task), Folder: str(wire.Folder), Branch: str(wire.Branch),
+		State: state, Outcome: str(wire.Outcome), PullRequest: str(wire.PullRequest), Device: str(wire.Device),
+	}
+	if wire.Changes != nil {
+		changes := *wire.Changes
+		agent.Changes = &changes
+	}
+	if wire.StartedAt != nil {
+		agent.StartedAt = seconds(*wire.StartedAt)
+	}
+	if wire.UpdatedAt != nil {
+		agent.UpdatedAt = seconds(*wire.UpdatedAt)
+	}
+	if q := wire.Question; q != nil && q.Kind == "command" {
+		agent.Question = &AgentQuestion{Command: str(q.Command), Reason: str(q.Reason), Rule: str(q.Rule), HasRule: q.Rule != nil}
+	}
+	return agent
+}
+
+// WireCodingAgents is the account's coding agents, in its order, each on or off.
+type WireCodingAgents struct {
+	Agents []CodingAgentChoice `json:"agents"`
 }
 
 type WireAuthor struct {
@@ -203,6 +235,11 @@ type WireBody struct {
 	IsRunning     *bool            `json:"is_running"`
 	Description   *string          `json:"description"`
 	TargetBotID   *string          `json:"target_bot_id"`
+	TargetAgentID *string          `json:"target_agent_id"`
+	AgentID       *string          `json:"agent_id"`
+	AgentKind     *string          `json:"agent_kind"`
+	Title         *string          `json:"title"`
+	Failed        *bool            `json:"failed"`
 	ScriptCommand *string          `json:"script_command"`
 	From          *string          `json:"from"`
 	To            *string          `json:"to"`
@@ -452,6 +489,7 @@ type WireSnapshot struct {
 	Reviews             []ReviewItem      `json:"reviews"`
 	Tasks               []DurableTask     `json:"tasks"`
 	AutoReview          *WireAutoReview   `json:"auto_review"`
+	CodingAgents        *WireCodingAgents `json:"coding_agents"`
 	SharedLinks         []SharedLink      `json:"shared_links"`
 	Providers           []WireProvider    `json:"providers"`
 	Models              []WireModel       `json:"models"`
@@ -461,14 +499,15 @@ type WireSnapshot struct {
 }
 
 type WireRosterChanged struct {
-	Devices     []WireDevice    `json:"devices"`
-	Bots        []WireBot       `json:"bots"`
-	Chats       []WireChat      `json:"chats"`
-	Sections    []WireSection   `json:"sections"`
-	Routines    []WireRoutine   `json:"routines"`
-	AutoReview  *WireAutoReview `json:"auto_review"`
-	SharedLinks []SharedLink    `json:"shared_links"`
-	Providers   []WireProvider  `json:"providers"`
+	Devices      []WireDevice      `json:"devices"`
+	Bots         []WireBot         `json:"bots"`
+	Chats        []WireChat        `json:"chats"`
+	Sections     []WireSection     `json:"sections"`
+	Routines     []WireRoutine     `json:"routines"`
+	AutoReview   *WireAutoReview   `json:"auto_review"`
+	CodingAgents *WireCodingAgents `json:"coding_agents"`
+	SharedLinks  []SharedLink      `json:"shared_links"`
+	Providers    []WireProvider    `json:"providers"`
 	// Models are the catalog's models again, so a newer catalog the CLI installs reaches the pickers.
 	Models    []WireModel        `json:"models"`
 	Playbooks *[]PlaybookSummary `json:"playbooks"`
@@ -865,6 +904,7 @@ func ToMessage(wire WireMessage) *Message {
 			IsRunning:     flag(body.IsRunning),
 			Description:   str(body.Description),
 			TargetBotID:   str(body.TargetBotID),
+			TargetAgentID: str(body.TargetAgentID),
 			ScriptCommand: str(body.ScriptCommand),
 		}
 		if tool.Name == "" {
@@ -892,29 +932,13 @@ func ToMessage(wire WireMessage) *Message {
 			}
 		}
 		if agent := body.Agent; agent != nil {
-			state := AgentState(agent.State)
-			switch state {
-			case AgentChecking, AgentAsking, AgentStarting, AgentWorking, AgentIdle, AgentExited, AgentFailed, AgentStopped, AgentDenied, AgentExpired, AgentDismissed:
-			default:
-				state = AgentStopped
-			}
-			card := &AgentRun{
-				ID: agent.ID, Kind: agent.Kind, Host: str(agent.Host), Task: str(agent.Task), Folder: str(agent.Folder),
-				Branch: str(agent.Branch), State: state, Stalled: flag(agent.Stalled), Held: flag(agent.Held), Output: str(agent.Output),
-				Outcome: str(agent.Outcome), Device: str(agent.Device),
-			}
-			if q := agent.Question; q != nil {
-				switch q.Kind {
-				case "start", "command", "choices", "text":
-					card.Question = &AgentQuestion{
-						Kind: q.Kind, Text: str(q.Text), Command: str(q.Command), Choices: q.Choices,
-						Reason: str(q.Reason), Rule: str(q.Rule), HasRule: q.Rule != nil,
-					}
-				}
-			}
-			tool.Agent = card
+			tool.Agent = ToAgentRun(agent)
 		}
 		message.Body = Body{Kind: BodyTool, Tool: tool}
+	case "agent_message":
+		message.Body = Body{Kind: BodyAgentMessage, AgentMessage: &AgentMessage{
+			AgentID: str(body.AgentID), AgentKind: str(body.AgentKind), Title: str(body.Title), Text: str(body.Text), Failed: flag(body.Failed),
+		}}
 	case "handoff":
 		message.Body = Body{Kind: BodyHandoff, Handoff: Handoff{From: str(body.From), To: str(body.To), Reason: str(body.Reason)}}
 	case "notice":

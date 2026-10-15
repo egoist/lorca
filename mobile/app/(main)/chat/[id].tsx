@@ -29,7 +29,8 @@ import Animated, {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { SoftScrollEdgeView } from "../../../modules/lorca-core/SoftScrollEdgeView";
 import { chatTitle, engine, type PickedFile } from "../../../src/core/engine";
-import { isLive, showsSpeakers, type Bot, type Message } from "../../../src/core/model";
+import { agentTitle, isLive, showsSpeakers, type Bot, type Message } from "../../../src/core/model";
+import { agentStatusWord } from "../../../src/ui/codingAgents";
 import {
   useBotMap,
   useChat,
@@ -763,7 +764,6 @@ export default function ChatScreen() {
   const [answeringId, setAnsweringId] = useState<string | null>(null);
   const answering = answeringId ? chat?.messages.find((m) => m.id === answeringId) : undefined;
   const answeringRun = answering?.body.kind === "tool" ? answering.body.run : undefined;
-  const answeringAgent = answering?.body.kind === "tool" && answering.body.agent?.question?.kind === "text" ? answering.body.agent : undefined;
   /// The secret request whose sheet is up, while it still asks.
   const [fillingId, setFillingId] = useState<string | null>(null);
   const filling = fillingId ? chat?.messages.find((m) => m.id === fillingId) : undefined;
@@ -847,8 +847,23 @@ export default function ChatScreen() {
   const answerCommand = useCallback((message: Message) => setAnsweringId(message.id), []);
   const fillSecret = useCallback((message: Message) => setFillingId(message.id), []);
   const stopCommand = useCallback((message: Message) => engine.stopCommand(message.chat_id, message.id), []);
-  const stopAgent = useCallback((message: Message) => engine.stopAgent(message.chat_id, message.id), []);
-  const chooseForAgent = useCallback((message: Message, choice: number) => engine.answerAgentChoice(message.chat_id, message.id, choice), []);
+  /// A coding agent's page, from any of its markers. One whose start failed has no page: its
+  /// marker says why in an alert. A message whose agent's row is not loaded opens in full.
+  const openAgent = useCallback(
+    (row: Extract<Row, { type: "agent" }>) => {
+      const messages = useStore.getState().chats.find((c) => c.id === id)?.messages ?? [];
+      const start = row.start ? messages.find((m) => m.id === row.start) : undefined;
+      const agent = start?.body.kind === "tool" ? start.body.agent : undefined;
+      if (start && agent?.id) {
+        router.push({ pathname: "/agent/[id]", params: { id: start.id, chat: id } });
+      } else if (agent && (agent.state === "failed" || agent.state === "stopped")) {
+        alert(agentTitle(agent), agent.outcome ?? agentStatusWord(agent));
+      } else {
+        router.push({ pathname: "/message/[id]", params: { id: row.message.id, chat: id, title: `${row.incoming ? t("Message from") : t("Messaged")} ${row.title}` } });
+      }
+    },
+    [router, id],
+  );
 
   const renderItem = useCallback(
     ({ item }: { item: Row }) => {
@@ -895,11 +910,9 @@ export default function ChatScreen() {
           return (
             <AgentRow
               row={item}
-              isGroup={isGroup}
+              isGroup={speakers}
+              onOpen={openAgent}
               onDecide={answerCard}
-              onChoose={chooseForAgent}
-              onAnswer={answerCommand}
-              onStop={stopAgent}
             />
           );
         case "working":
@@ -908,7 +921,7 @@ export default function ChatScreen() {
           return <StatusRow text={item.text} />;
       }
     },
-    [answerCard, answerCommand, fillSecret, bots, id, isGroup, speakers, openMarker, startReply, revealQuoted, flashId, stopCommand],
+    [answerCard, answerCommand, fillSecret, bots, id, isGroup, speakers, openMarker, openAgent, startReply, revealQuoted, flashId, stopCommand],
   );
 
   if (!chat) {
@@ -1065,13 +1078,6 @@ export default function ChatScreen() {
           run={answeringRun}
           onDismiss={() => setAnsweringId(null)}
           onSend={(text) => engine.answerCommand(answering.chat_id, answering.id, text)}
-        />
-      ) : null}
-      {answering && answeringAgent ? (
-        <AnswerSheet
-          prompt={(answeringAgent.question?.text ?? "").split("\n").map((line) => line.trim()).filter(Boolean).pop()}
-          onDismiss={() => setAnsweringId(null)}
-          onSend={(text) => engine.answerAgentText(answering.chat_id, answering.id, text)}
         />
       ) : null}
       {filling && fillingAsk ? (

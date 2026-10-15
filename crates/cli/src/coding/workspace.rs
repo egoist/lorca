@@ -1,20 +1,19 @@
 //! Where a coding agent works. In a git repository that is a worktree of its own, so it never
 //! edits the checkout the user works in: a new one on a branch of its own name, or the one a
 //! bot names again, under `worktrees/` in Lorca's folder. A folder that is not a repository is
-//! worked in as it is. The proof the bot expects goes in `.lorca-proof/` there, which ignores
-//! itself in git.
+//! worked in as it is.
 
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
+use regex::Regex;
 use sha2::{Digest, Sha256};
 
-/// The folder the agent saves its proof in, inside the folder it works in.
-pub(crate) const PROOF_FOLDER: &str = ".lorca-proof";
-/// The most diff an output carries.
-const DIFF_BYTES: usize = 2 * 1024 * 1024;
-/// New files a diff shows in full, at most, and how big each may be.
-const NEW_FILES: usize = 50;
-const NEW_FILE_BYTES: u64 = 256 * 1024;
+use crate::model::AgentChanges;
+
+/// New files whose lines count toward the changes, at most, and how big each may be.
+const NEW_FILES: usize = 200;
+const NEW_FILE_BYTES: u64 = 1024 * 1024;
 
 /// Where an agent works.
 #[derive(Debug, Clone, PartialEq)]
@@ -28,8 +27,8 @@ pub(crate) struct Place {
 
 /// Prepares the folder for an agent: `folder` (relative to `workdir`, the bot's working
 /// directory, where it also defaults to), and in a repository the worktree `worktree` names or
-/// a new one named after `task`.
-pub(crate) async fn prepare(home: &Path, workdir: &Path, folder: Option<&str>, worktree: Option<&str>, task: &str) -> Result<Place, String> {
+/// a new one named after `title`.
+pub(crate) async fn prepare(home: &Path, workdir: &Path, folder: Option<&str>, worktree: Option<&str>, title: &str) -> Result<Place, String> {
     let folder = resolve(workdir, folder);
     if !folder.is_dir() {
         return Err(format!("{} is not a folder on this Runner", super::home_relative(&folder)));
@@ -38,12 +37,11 @@ pub(crate) async fn prepare(home: &Path, workdir: &Path, folder: Option<&str>, w
         if worktree.is_some() {
             return Err(format!("{} is not a git repository, so it has no worktrees. Leave worktree out to work in the folder itself.", super::home_relative(&folder)));
         }
-        create_proof_folder(&folder)?;
         return Ok(Place { folder, branch: None, base: None });
     };
     let name = match worktree {
         Some(name) => slug(name).ok_or("A worktree name needs letters or digits")?,
-        None => format!("{}-{}", slug(task).unwrap_or_else(|| "work".into()), &uuid::Uuid::new_v4().simple().to_string()[..4]),
+        None => format!("{}-{}", slug(title).unwrap_or_else(|| "work".into()), &uuid::Uuid::new_v4().simple().to_string()[..4]),
     };
     let path = worktrees_folder(home, &repo).join(&name);
     let head = git(&repo, &["rev-parse", "HEAD"]).await.map_err(|error| format!("{} has no commit to start from: {error}", super::home_relative(&repo)))?;
@@ -55,7 +53,6 @@ pub(crate) async fn prepare(home: &Path, workdir: &Path, folder: Option<&str>, w
         }
         let branch = git(&path, &["branch", "--show-current"]).await.ok().filter(|branch| !branch.is_empty());
         let base = git(&path, &["merge-base", "HEAD", &head]).await.ok();
-        create_proof_folder(&path)?;
         return Ok(Place { folder: path, branch, base });
     }
     std::fs::create_dir_all(path.parent().unwrap_or(home)).map_err(|e| e.to_string())?;
@@ -64,7 +61,6 @@ pub(crate) async fn prepare(home: &Path, workdir: &Path, folder: Option<&str>, w
     let added = if exists { git(&repo, &["worktree", "add", &target, &name]).await } else { git(&repo, &["worktree", "add", "-b", &name, &target, &head]).await };
     added.map_err(|error| format!("Could not make the worktree {name}: {error}"))?;
     let base = git(&path, &["rev-parse", "HEAD"]).await.ok();
-    create_proof_folder(&path)?;
     Ok(Place { folder: path, branch: Some(name), base })
 }
 
@@ -112,17 +108,6 @@ pub(crate) fn slug(text: &str) -> Option<String> {
     (!slug.is_empty()).then_some(slug)
 }
 
-/// The proof folder, which ignores itself and everything in it.
-fn create_proof_folder(folder: &Path) -> Result<(), String> {
-    let proof = folder.join(PROOF_FOLDER);
-    std::fs::create_dir_all(&proof).map_err(|e| format!("Could not make {}: {e}", super::home_relative(&proof)))?;
-    let ignore = proof.join(".gitignore");
-    if !ignore.exists() {
-        std::fs::write(&ignore, "*\n").map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
 /// Runs git in `folder` and returns what it printed, trimmed.
 pub(crate) async fn git(folder: &Path, args: &[&str]) -> Result<String, String> {
     let mut command = lorca_agent::login_shell::command("git").await;
@@ -136,47 +121,50 @@ pub(crate) async fn git(folder: &Path, args: &[&str]) -> Result<String, String> 
     }
 }
 
-/// Everything the agent changed since `base`: commits, edits not committed yet, and new files.
-/// Empty when nothing changed.
-pub(crate) async fn diff(folder: &Path, base: &str) -> String {
-    let mut command = lorca_agent::login_shell::command("git").await;
-    command.arg("-C").arg(folder).args(["-c", "core.quotepath=off", "diff", base, "--"]).stdin(std::process::Stdio::null());
-    let mut diff = match command.output().await {
-        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout).to_string(),
-        _ => String::new(),
-    };
+/// What the agent changed since `base`: commits, edits not committed yet, and new files. None
+/// when git cannot tell.
+pub(crate) async fn changes(folder: &Path, base: &str) -> Option<AgentChanges> {
+    let numstat = git(folder, &["-c", "core.quotepath=off", "diff", "--numstat", base, "--"]).await.ok()?;
+    let mut changes = AgentChanges::default();
+    for line in numstat.lines() {
+        let mut fields = line.split('\t');
+        let (Some(added), Some(removed)) = (fields.next(), fields.next()) else { continue };
+        changes.files += 1;
+        // A binary file counts as changed, with no lines.
+        changes.added += added.parse::<u32>().unwrap_or(0);
+        changes.removed += removed.parse::<u32>().unwrap_or(0);
+    }
     let untracked = git(folder, &["ls-files", "--others", "--exclude-standard"]).await.unwrap_or_default();
     for file in untracked.lines().filter(|file| !file.is_empty()).take(NEW_FILES) {
+        changes.files += 1;
         let path = folder.join(file);
-        if std::fs::metadata(&path).is_ok_and(|metadata| metadata.len() > NEW_FILE_BYTES) {
-            diff.push_str(&format!("diff --git a/{file} b/{file}\nnew file (too large to show)\n"));
-            continue;
-        }
-        let mut command = lorca_agent::login_shell::command("git").await;
-        // Git takes `/dev/null` as the empty side on every platform.
-        command.arg("-C").arg(folder).args(["diff", "--no-index", "--", "/dev/null", file]).stdin(std::process::Stdio::null());
-        // `git diff --no-index` exits 1 when the files differ, as a new one does.
-        if let Ok(output) = command.output().await {
-            diff.push_str(&String::from_utf8_lossy(&output.stdout));
-        }
-        if diff.len() > DIFF_BYTES {
-            break;
+        if std::fs::metadata(&path).is_ok_and(|metadata| metadata.len() <= NEW_FILE_BYTES) {
+            if let Ok(text) = std::fs::read_to_string(&path) {
+                changes.added += text.lines().count() as u32;
+            }
         }
     }
-    if diff.len() > DIFF_BYTES {
-        let mut cut = DIFF_BYTES;
-        while !diff.is_char_boundary(cut) {
-            cut -= 1;
-        }
-        diff.truncate(cut);
-        diff.push_str("\n… (the diff is longer; read the rest in the worktree)\n");
-    }
-    diff
+    Some(changes)
+}
+
+static PULL_REQUEST: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"https://(?:github\.com/[\w.-]+/[\w.-]+/pull/\d+|gitlab\.com/[\w./-]+/-/merge_requests/\d+)").unwrap());
+
+/// The last pull request (or GitLab merge request) `text` names.
+pub(crate) fn pull_request(text: &str) -> Option<String> {
+    PULL_REQUEST.find_iter(text).last().map(|found| found.as_str().to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_transcript_names_its_pull_request() {
+        assert_eq!(pull_request("Opened https://github.com/egoist/lorca/pull/141 for review.").as_deref(), Some("https://github.com/egoist/lorca/pull/141"));
+        assert_eq!(pull_request("https://gitlab.com/acme/shop/-/merge_requests/7").as_deref(), Some("https://gitlab.com/acme/shop/-/merge_requests/7"));
+        assert_eq!(pull_request("See https://github.com/egoist/lorca/issues/134"), None);
+    }
 
     #[test]
     fn names_come_from_the_task() {
@@ -200,16 +188,15 @@ mod tests {
         assert_eq!(place.branch.as_deref(), Some("fix-login"));
         assert!(place.folder.starts_with(home.join("worktrees")), "{}", place.folder.display());
         assert!(place.folder.join("README.md").exists());
-        assert!(place.folder.join(PROOF_FOLDER).is_dir());
-        assert_eq!(git(&place.folder, &["status", "--porcelain"]).await.unwrap(), "", "the proof folder ignores itself");
+        assert_eq!(git(&place.folder, &["status", "--porcelain"]).await.unwrap(), "");
 
-        // Named again, it is the same worktree, and the diff shows what changed since.
+        // Named again, it is the same worktree, and its changes count from where it started.
         std::fs::write(place.folder.join("README.md"), "shop\nlogin\n").unwrap();
-        std::fs::write(place.folder.join("new.txt"), "new\n").unwrap();
+        std::fs::write(place.folder.join("new.txt"), "new\ntwo\n").unwrap();
         let again = prepare(&home, &scratch, Some(repo.to_str().unwrap()), Some("fix-login"), "anything").await.unwrap();
         assert_eq!(again.folder, place.folder);
-        let diff = diff(&again.folder, again.base.as_deref().unwrap()).await;
-        assert!(diff.contains("+login") && diff.contains("+new"), "{diff}");
+        let changes = changes(&again.folder, again.base.as_deref().unwrap()).await.unwrap();
+        assert_eq!(changes, AgentChanges { files: 2, added: 3, removed: 0 });
 
         // A new one without a name takes the task's words.
         let fresh = prepare(&home, &scratch, Some("shop"), None, "Add dark mode").await.unwrap();

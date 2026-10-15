@@ -311,15 +311,31 @@ pub enum Body {
         /// `bash` row has one; the apps show it in place of the row.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         run: Option<CommandRun>,
-        /// The card of the coding agent a `coding_agent` call started, for as long as the agent
-        /// runs and after: the apps show it in place of the row.
+        /// The coding agent a `coding_agent` start call started, for as long as the agent runs
+        /// and after: the apps show the row as "Messaged ⬢ Title", and list it under Coding.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         agent: Option<AgentRun>,
+        /// The coding agent a `coding_agent` send call wrote to, by id: the apps show the row as
+        /// "Messaged ⬢ Title" too.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target_agent_id: Option<String>,
     },
     Handoff {
         from: String,
         to: String,
         reason: String,
+    },
+    /// What a coding agent said when it was done with what it was asked, or why it ended on its
+    /// own (`failed`). The apps show it as "Message from ⬢ Title"; the bot that runs the agent
+    /// reads it in the turn it wakes for it (`crate::coding`).
+    AgentMessage {
+        agent_id: String,
+        /// `claude`, `codex`, `opencode`, `pi`, or `fx`.
+        agent_kind: String,
+        title: String,
+        text: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        failed: bool,
     },
     Notice {
         text: String,
@@ -478,19 +494,19 @@ impl ReplyTo {
     }
 }
 
-/// A coding agent (Claude Code or Codex) a bot runs on its Runner, as the card on the
-/// `coding_agent` row that started it shows it (`crate::coding`): Auto-review's question before
-/// it starts, what it works on and where, how it stands, its last lines, and what it asks.
+/// A coding agent a bot runs on its Runner (`crate::coding`), as the row of the `coding_agent`
+/// call that started it carries it: what it was asked and where it works, how it stands, what it
+/// asks the user, and what came of it.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct AgentRun {
     /// The bot's handle for it, across turns: `agent-3f9a2c1d`.
     pub id: String,
-    /// `claude` (Claude Code) or `codex`.
+    /// `claude` (Claude Code), `codex`, `opencode`, `pi`, or `fx`.
     pub kind: String,
-    /// `herdr` or `luvus` when it runs in a pane of that terminal host on the Runner, where the
-    /// user can watch it and type into it; none when Lorca runs it on its own.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub host: Option<String>,
+    /// What the bot calls the job, which names the agent wherever it shows: "Docs: use
+    /// mygo.json in the launcher examples".
+    #[serde(default)]
+    pub title: String,
     /// What it was asked: the prompt's first line.
     pub task: String,
     /// Where it works, from the home folder: the worktree Lorca made for it, or a folder that
@@ -499,59 +515,103 @@ pub struct AgentRun {
     pub folder: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
-    /// `checking` (Auto-review is judging the start), `asking` (a `question` waits for the
-    /// user), `starting`, `working`, `idle` (done with what it was asked; it takes a follow-up).
-    /// Once it ended: `exited`, `failed`, `stopped`, `denied` (not allowed to start), `expired`
-    /// (nobody answered in time), or `dismissed` (the user wrote instead of answering).
+    /// `starting`, `working`, `asking` (a `question` waits for the user), `idle` (done with
+    /// what it was asked; it takes a follow-up). Once it ended: `failed` or `stopped`.
     pub state: String,
-    /// It is working, and has shown nothing new for a while.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub stalled: bool,
-    /// Auto-review held its start and told the bot why, without asking the user: the card is
-    /// `denied`, and the apps read it as "Held by Auto-review".
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub held: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub question: Option<AgentQuestion>,
-    /// Its last lines, as its transcript shows them.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output: Option<String>,
-    /// How it ended, in words: "Stopped", "Claude Code exited".
+    /// Why it ended, in words: "Stopped", "Claude Code exited with code 1".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
     /// The pull request it opened, when its transcript names one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull_request: Option<String>,
+    /// What its work changed against the commit it started from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changes: Option<AgentChanges>,
     /// The Runner it runs on, by name: "Workbench".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device: Option<String>,
     /// When it started, in Unix seconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<f64>,
+    /// When it last changed state, in Unix seconds: the apps list the agents by it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<f64>,
 }
 
 impl AgentRun {
     /// It has not ended: it may still ask, work, or take a follow-up.
     pub fn is_open(&self) -> bool {
-        matches!(self.state.as_str(), "checking" | "asking" | "starting" | "working" | "idle")
+        matches!(self.state.as_str(), "asking" | "starting" | "working" | "idle")
     }
 }
 
-/// What a coding agent's card asks the user.
+/// The coding agents a bot can run, by the name the bot and the apps use: the account's default
+/// order of preference.
+pub const CODING_AGENT_KINDS: [&str; 5] = ["claude", "codex", "opencode", "pi", "fx"];
+
+/// A coding agent's name: "Claude Code", "Codex", "OpenCode", "pi", "fx".
+pub fn coding_agent_name(kind: &str) -> &'static str {
+    match kind {
+        "codex" => "Codex",
+        "opencode" => "OpenCode",
+        "pi" => "pi",
+        "fx" => "fx",
+        _ => "Claude Code",
+    }
+}
+
+/// Which coding agents bots may start, in the order the account prefers them: a start that
+/// names none takes the first one on that its Runner has installed (`crate::coding::settings`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodingAgents {
+    pub agents: Vec<CodingAgentChoice>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CodingAgentChoice {
+    /// `claude`, `codex`, `opencode`, `pi`, or `fx`.
+    pub kind: String,
+    pub enabled: bool,
+}
+
+impl Default for CodingAgents {
+    fn default() -> Self {
+        CodingAgents { agents: CODING_AGENT_KINDS.iter().map(|kind| CodingAgentChoice { kind: kind.to_string(), enabled: true }).collect() }
+    }
+}
+
+impl CodingAgents {
+    /// Every agent Lorca knows once, in this order, with any it did not list on at the end.
+    pub fn normalized(mut self) -> CodingAgents {
+        let mut seen = std::collections::HashSet::new();
+        self.agents.retain(|choice| CODING_AGENT_KINDS.contains(&choice.kind.as_str()) && seen.insert(choice.kind.clone()));
+        for kind in CODING_AGENT_KINDS {
+            if !seen.contains(kind) {
+                self.agents.push(CodingAgentChoice { kind: kind.to_string(), enabled: true });
+            }
+        }
+        self
+    }
+}
+
+/// What a coding agent's work changed: its commits, edits not committed yet, and new files.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
+pub struct AgentChanges {
+    pub files: u32,
+    pub added: u32,
+    pub removed: u32,
+}
+
+/// What a coding agent asks the user, when Auto-review asks: whether it may run `command` (or
+/// do what `command` says, for a change or a tool), answered with `chats.permission`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct AgentQuestion {
-    /// `start`: Auto-review asks before the agent starts. `command`: the agent wants to run
-    /// `command`. `choices`: its screen asks, with a menu of `choices`. `text`: its screen asks
-    /// for an answer to type. The first two are answered with `chats.permission`, the others
-    /// with `coding.answer`.
+    /// `command`.
     pub kind: String,
-    /// The question, as the agent's screen shows it (`choices`, `text`).
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub choices: Vec<String>,
     /// Why Auto-review asked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -560,15 +620,10 @@ pub struct AgentQuestion {
     pub rule: Option<String>,
 }
 
-/// One line about what a coding agent's card asks, for a notification: "Claude Code: $ git push".
+/// One line about what a coding agent asks, for a notification: "Claude Code: $ git push".
 pub fn agent_question_summary(agent: &AgentRun, question: &AgentQuestion) -> String {
-    let name = if agent.kind == "codex" { "Codex" } else { "Claude Code" };
-    let what = match question.kind.as_str() {
-        "start" => format!("start in {}", agent.folder),
-        "command" => format!("$ {}", question.command.as_deref().unwrap_or("").lines().next().unwrap_or("").trim()),
-        _ => question.text.lines().map(str::trim).filter(|line| !line.is_empty()).next_back().unwrap_or("").to_string(),
-    };
-    format!("{name}: {}", what.chars().take(180).collect::<String>())
+    let what = format!("$ {}", question.command.as_deref().unwrap_or("").lines().next().unwrap_or("").trim());
+    format!("{}: {}", coding_agent_name(&agent.kind), what.chars().take(180).collect::<String>())
 }
 
 /// A `bash` call as its card shows it: Auto-review checking it, the question it asks, the
@@ -1052,6 +1107,8 @@ pub struct RosterBlob {
     pub routines: Vec<Routine>,
     #[serde(default)]
     pub auto_review: AutoReview,
+    #[serde(default)]
+    pub coding_agents: CodingAgents,
     /// The bots the account shares as links, with their keys.
     #[serde(default)]
     pub shared_links: Vec<crate::templates::links::SharedLink>,
@@ -1468,6 +1525,7 @@ mod app_view_tests {
             call_id: "call".into(), arguments: serde_json::json!({ "path": "big" }), result: Some("y".repeat(100_000)), is_error: false, description: None, target_bot_id: None, script_command: None,
             run: None,
             agent: None,
+            target_agent_id: None,
         });
         let Body::Tool { detail, arguments, result, summary, .. } = tool.for_app().body else { panic!() };
         assert_eq!((detail.len(), arguments.is_null(), result, summary.as_str()), (400, true, None, "Read a file"));

@@ -18,7 +18,6 @@ Commands:
 - `lorca update` — install the latest release now, through a running `lorca serve`, which restarts into it once no bot is at work, or with none over this binary; `--check` says whether one is out, `--auto on|off` turns automatic updates on or off. A CLI an app carries says the app updates it
 - `lorca service install` / `uninstall` / `status` — keep `lorca serve` running from login on ([Updates and the service](#updates-and-the-service))
 - `lorca status` / `doctor` (which also says whether `mcp.json` reads)
-- `lorca coding hook <agent>` — Claude Code's `PreToolUse` hook in a [coding agent](coding-agents.md)'s pane: asks this Runner's `lorca serve` whether the agent's command may run
 
 Bind: `127.0.0.1:4862` (`--port`, `LORCA_PORT`). Relay: `LORCA_RELAY_URL`. If the port is busy the CLI fails loudly.
 

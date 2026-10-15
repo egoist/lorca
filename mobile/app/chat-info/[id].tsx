@@ -1,10 +1,10 @@
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { MenuView, type MenuComponentRef } from "@expo/ui/community/menu";
-import { Platform, PlatformColor, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
+import { ActivityIndicator, Platform, PlatformColor, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import { Pressable } from "../../src/ui/Pressable";
 import { chatTitle, engine } from "../../src/core/engine";
-import { BROWSER_PLUGIN_ID, isMuted, PROJECT_KINDS, projectSymbol, skillScopeOf, providerKinds, providerLabel, providerModels, PROVIDER_KINDS, taskSymbol, thinkingLabel, thinkingLevels, withCustomModels, type Bot, type Routine } from "../../src/core/model";
+import { agentTitle, pullRequestLabel, BROWSER_PLUGIN_ID, isMuted, PROJECT_KINDS, projectSymbol, skillScopeOf, providerKinds, providerLabel, providerModels, PROVIDER_KINDS, taskSymbol, thinkingLabel, thinkingLevels, withCustomModels, type Bot, type Routine } from "../../src/core/model";
 import { deviceIsOnline, useBotMap, useBudget, useChannels, useChat, useDurableTasks, useOpenReviews, useOutputs, useProject, useRoutines, useSkills, useStoppedTurn, useStore, useWorkingBotIds } from "../../src/core/store";
 import { channelProblem, listenSummary, serviceSymbol } from "../../src/ui/channels";
 import { t, tc, useLanguage } from "../../src/i18n";
@@ -23,6 +23,7 @@ import { haptic } from "../../src/ui/haptics";
 import { alert, prompt } from "../../src/ui/alert";
 import { OutputRow } from "../../src/ui/outputs";
 import { taskStateTitle, useTaskTint } from "../../src/ui/durableTasks";
+import { agentMark, agentStatusWord, chatAgents } from "../../src/ui/codingAgents";
 import { reviewHeadline, reviewStateWord, reviewSymbol } from "../../src/ui/reviews";
 import { loadFeedback, useFeedback } from "../../src/core/feedback";
 import { countsLine, isEmpty, targetName } from "../../src/ui/feedback";
@@ -59,6 +60,8 @@ export default function ChatInfoScreen() {
   const reviews = useOpenReviews(chat?.id);
   const taskTint = useTaskTint();
   const [allTasks, setAllTasks] = useState(false);
+  const agents = useMemo(() => chatAgents(chat?.messages ?? []), [chat?.messages]);
+  const [allAgents, setAllAgents] = useState(false);
   const project = useProject(chat?.kind === "group" ? chat.id : undefined);
   const [allProject, setAllProject] = useState(false);
   const skillScope = chat ? skillScopeOf(chat) : undefined;
@@ -252,6 +255,31 @@ export default function ChatInfoScreen() {
         {!allTasks && tasks.length > 5 ? <Row title={t("Show {count} More", { count: tasks.length - 4 })} icon="ellipsis" onPress={() => setAllTasks(true)} /> : null}
         <Row title={t("New Task")} icon="plus" onPress={() => router.push({ pathname: "/chat-info/durable-task/[id]", params: { id: "new", chat: chat.id } })} />
       </Section>
+
+      {/* The coding agents the chat's bots run, open ones first: a row opens the agent's page.
+          Past five rows the rest wait behind Show More. */}
+      {agents.length > 0 && (
+        <Section title={t("Coding")}>
+          {(allAgents || agents.length <= 5 ? agents : agents.slice(0, 4)).map(({ message, agent }) => {
+            const mark = agentMark(agent);
+            return (
+              <Row
+                key={message.id}
+                title={agentTitle(agent)}
+                subtitle={[agentStatusWord(agent), agent.pull_request ? pullRequestLabel(agent.pull_request) : agent.branch].filter(Boolean).join(" · ")}
+                leading={
+                  <View style={styles.agentMark}>
+                    {mark.spinner ? <ActivityIndicator size="small" /> : <Symbol name={mark.symbol} size={20} color={mark.tone === "orange" ? orange : mark.tone === "red" ? p.red : mark.tone === "green" ? p.green : mark.tone === "tint" ? p.tint : p.secondaryLabel} />}
+                  </View>
+                }
+                chevron
+                onPress={() => router.push({ pathname: "/chat-info/agent/[id]", params: { id: message.id, chat: chat.id } })}
+              />
+            );
+          })}
+          {!allAgents && agents.length > 5 ? <Row title={t("Show {count} More", { count: agents.length - 4 })} icon="ellipsis" onPress={() => setAllAgents(true)} /> : null}
+        </Section>
+      )}
 
       {/* What the chat's bots published: the latest three, and View All for the rest. */}
       {outputs.length > 0 && (
@@ -600,6 +628,7 @@ const styles = StyleSheet.create({
   heroTitle: { fontSize: 22, fontWeight: "700", marginTop: 6 },
   heroSubtitle: { fontSize: 15, textAlign: "center", paddingHorizontal: 32 },
   deviceIcon: { width: 32, alignItems: "center" },
+  agentMark: { width: 20, alignItems: "center" },
   deviceDot: { position: "absolute", right: 0, bottom: -2, width: 10, height: 10, borderRadius: 5, borderWidth: 2 },
 });
 

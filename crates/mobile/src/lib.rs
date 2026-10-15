@@ -271,6 +271,7 @@ mod tests {
                 script_command: None,
                 run: None,
                 agent: None,
+                target_agent_id: None,
             },
         );
         let tool_id = tool.id.clone();

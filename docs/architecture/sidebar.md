@@ -26,7 +26,7 @@ A section folds on every Device: its header's fold control writes `collapsed`. C
 
 `chats.mute { chat_id, muted, until? }` sets a chat's `mute`: `{ until }` in Unix seconds, or `{}` until it is unmuted. A chat is muted while its mute has no `until` or the time has not come, by each Device's clock; a mute that ran out stays in the roster and changes nothing.
 
-A muted chat alerts nowhere. The Runner sends no phone push for it, whatever the push is about: a reply, a failure, a question (a permission card, a command's card, a [coding agent](coding-agents.md)'s card, a [secret request](secrets.md)), a coordinator's brief or urgent escalation (`push::should_notify`); the turns an event or a channel's message starts are no exception. Attention still lists what a muted chat raises, so muting quiets a chat without hiding what waits in it. The Mac app and the Windows and Linux app post no notification for it and leave it out of the Dock or taskbar badge. Its unread count is kept, and its row shows a crossed-out bell beside the stamp.
+A muted chat alerts nowhere. The Runner sends no phone push for it, whatever the push is about: a reply, a failure, a question (a permission card, a command's card, a [coding agent](coding-agents.md)'s question, a [secret request](secrets.md)), a coordinator's brief or urgent escalation (`push::should_notify`); the turns an event or a channel's message starts are no exception. Attention still lists what a muted chat raises, so muting quiets a chat without hiding what waits in it. The Mac app and the Windows and Linux app post no notification for it and leave it out of the Dock or taskbar badge. Its unread count is kept, and its row shows a crossed-out bell beside the stamp.
 
 ## The chat in front on a computer
 

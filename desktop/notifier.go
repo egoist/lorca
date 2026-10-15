@@ -50,16 +50,7 @@ func notificationFor(message *model.Message) *chatNotification {
 		return &base
 	case body.Kind == model.BodyTool && body.Tool.Agent != nil && body.Tool.Agent.State == model.AgentAsking && body.Tool.Agent.Question != nil:
 		agent := body.Tool.Agent
-		base.kind = notifyPermission
-		switch q := agent.Question; q.Kind {
-		case "start":
-			base.body = L("Confirmation needed: %@", L("Start %@", agent.Name()))
-		case "command":
-			base.body = L("Confirmation needed: %@", agent.Name()+": $ "+model.FirstLine(q.Command))
-		default:
-			lines := strings.Split(strings.TrimSpace(q.Text), "\n")
-			base.body = L("%@ asks", agent.Name()) + ": " + strings.TrimSpace(lines[len(lines)-1])
-		}
+		base.kind, base.body = notifyPermission, L("Confirmation needed: %@", agent.Name()+": $ "+model.FirstLine(agent.Question.Command))
 		return &base
 	case body.Kind == model.BodyText:
 		if message.State.Kind == model.StateFailed {
@@ -238,7 +229,7 @@ func (n *notifier) permissionChanged(chatID, messageID string) {
 		return
 	}
 	body := message.Body
-	if body.Kind != model.BodyPermission && !(body.Kind == model.BodyTool && body.Tool.Run != nil) {
+	if body.Kind != model.BodyPermission && !(body.Kind == model.BodyTool && (body.Tool.Run != nil || body.Tool.Agent != nil)) {
 		return
 	}
 	if !asks(message) {

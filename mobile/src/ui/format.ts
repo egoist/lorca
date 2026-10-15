@@ -2,7 +2,7 @@
 // (Design/Formatters.swift, AppStore.preview, ChatViewController.activity).
 
 import type { Body, Bot, Chat, Message, Routine } from "../core/model";
-import { attachmentSummary, isSentMessage } from "../core/model";
+import { agentStartRow, agentTitle, agentWrote, attachmentSummary, isAgentRow, isSentMessage } from "../core/model";
 import type { StoreState } from "../core/store";
 import { language, t } from "../i18n";
 import { draftTitle } from "./drafts";
@@ -140,12 +140,13 @@ export function lastSeen(seenUnix: number | undefined): string {
   return t("Last seen {count}d ago", { count: Math.floor(elapsed / 86400) });
 }
 
-/// The last thing worth previewing: tool calls never are, except a sent message.
+/// The last thing worth previewing: tool calls never are, except a sent message and a coding
+/// agent's start or a message the bot sent it.
 export function preview(chat: Chat, bots: Map<string, Bot>): string {
   let shown: Message | undefined;
   for (let i = chat.messages.length - 1; i >= 0 && !shown; i--) {
     const m = chat.messages[i];
-    if (m.body.kind !== "tool" || isSentMessage(m.body)) shown = m;
+    if (m.body.kind !== "tool" || isSentMessage(m.body) || isAgentRow(m.body)) shown = m;
   }
   if (!shown) return t("No messages yet");
   let body: string;
@@ -153,8 +154,19 @@ export function preview(chat: Chat, bots: Map<string, Bot>): string {
     case "text":
       body = shown.body.text || attachmentSummary(shown.body.attachments ?? []);
       break;
-    case "tool":
-      body = t("Messaged {name}: {detail}", { name: bots.get(shown.body.target_bot_id ?? "")?.name ?? t("a teammate"), detail: shown.body.detail });
+    case "tool": {
+      const tool = shown.body;
+      if (isAgentRow(tool)) {
+        const start = tool.agent ? shown : agentStartRow(chat.messages, tool.target_agent_id ?? "");
+        const agent = start?.body.kind === "tool" ? start.body.agent : undefined;
+        body = t("Messaged {name}: {detail}", { name: agent ? agentTitle(agent) : t("a coding agent"), detail: agentWrote(tool) });
+      } else {
+        body = t("Messaged {name}: {detail}", { name: bots.get(tool.target_bot_id ?? "")?.name ?? t("a teammate"), detail: tool.detail });
+      }
+      break;
+    }
+    case "agent_message":
+      body = t("Message from {name}: {reason}", { name: shown.body.title || t("a coding agent"), reason: shown.body.text });
       break;
     case "handoff":
       body =
@@ -265,6 +277,8 @@ function toolActivity(s: WorkState, botId: string, tool: Extract<Body, { kind: "
       const target = s.bots.find((b) => b.id === tool.target_bot_id);
       return target ? t("Messaging {name}…", { name: target.name }) : t("Messaging another bot…");
     }
+    case "coding_agent":
+      return t("Writing some code…");
     case "list_teammates":
       return t("Checking the team…");
     case "create_bot":

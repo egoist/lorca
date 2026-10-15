@@ -147,6 +147,9 @@ type Store struct {
 	Budgets []BudgetState
 	// AutoReview is shared through the roster.
 	AutoReview AutoReview
+	// CodingAgents are the coding agents bots may start, in the account's order of preference,
+	// each on or off, shared through the roster.
+	CodingAgents []CodingAgentChoice
 	// Attention is what waits on the user across chats, kept by the bots (attention.changed).
 	Attention AttentionView
 	// SharedLinks are the bots the account shares as links, shared through the roster.
@@ -239,6 +242,7 @@ func NewStore(transport Transport, post func(func()), mock bool) *Store {
 		post:               post,
 		IsStarting:         true,
 		AutoReview:         AutoReview{IsEnabled: true},
+		CodingAgents:       NormalizedCodingAgents(nil),
 		Attention:          DefaultAttention(),
 		CLI:                CLIState{Connection: "disconnected", Launcher: LauncherStatus{Kind: "idle"}, Starting: true},
 		jobStarts:          map[string]time.Time{},
@@ -485,6 +489,10 @@ func (s *Store) apply(snapshot WireSnapshot) {
 		s.Routines = append(s.Routines, ToRoutine(routine))
 	}
 	s.AutoReview = ToAutoReview(snapshot.AutoReview)
+	s.CodingAgents = NormalizedCodingAgents(nil)
+	if snapshot.CodingAgents != nil {
+		s.CodingAgents = NormalizedCodingAgents(snapshot.CodingAgents.Agents)
+	}
 	s.Attention = DefaultAttention()
 	if snapshot.Attention != nil {
 		s.Attention = *snapshot.Attention
@@ -604,6 +612,9 @@ func (s *Store) handle(name string, data json.RawMessage) {
 		}
 		if roster.AutoReview != nil {
 			s.AutoReview = ToAutoReview(roster.AutoReview)
+		}
+		if roster.CodingAgents != nil {
+			s.CodingAgents = NormalizedCodingAgents(roster.CodingAgents.Agents)
 		}
 		if roster.Providers != nil {
 			s.Providers = ToProviders(roster.Providers)
@@ -983,11 +994,11 @@ func (s *Store) botName(id, fallback string) string {
 
 // Preview is the chat list's line under a chat's title: the last thing worth previewing.
 func (s *Store) Preview(chat *Chat) string {
-	// Tool calls never are, except a sent message.
+	// Tool calls never are, except a sent message and a message to a coding agent.
 	var last *Message
 	for i := len(chat.Messages) - 1; i >= 0; i-- {
 		message := chat.Messages[i]
-		if message.Body.Kind != BodyTool || message.Body.Tool.IsSentMessage() {
+		if message.Body.Kind != BodyTool || message.Body.Tool.IsSentMessage() || message.Body.Tool.IsAgentMessage() {
 			last = message
 			break
 		}
@@ -1004,11 +1015,18 @@ func (s *Store) Preview(chat *Chat) string {
 			body = AttachmentSummary(last.Attachments)
 		}
 	case BodyTool:
+		if tool := content.Tool; tool.IsAgentMessage() {
+			body = L("Messaged %@: %@", AgentLabel(chat, tool), tool.AgentText())
+			break
+		}
 		target := L("a teammate")
 		if content.Tool.TargetBotID != "" {
 			target = s.botName(content.Tool.TargetBotID, target)
 		}
 		body = L("Messaged %@: %@", target, content.Tool.Detail)
+	case BodyAgentMessage:
+		said := content.AgentMessage
+		body = L("Message from %@: %@", firstNonEmpty(said.Title, CodingAgentName(said.AgentKind)), said.Text)
 	case BodyHandoff:
 		if slices.Contains(chat.BotIDs, content.Handoff.To) && !slices.Contains(chat.BotIDs, content.Handoff.From) {
 			body = L("Message from %@: %@", s.botName(content.Handoff.From, L("a teammate")), content.Handoff.Reason)
@@ -1794,19 +1812,11 @@ func (s *Store) AnswerPermission(chatID, messageID, decision string) {
 				request.Summary = L("Starting the sign-in…")
 			}
 			message.Body.Request = &request
-		case body.Kind == BodyTool && body.Tool.Agent != nil && body.Tool.Agent.Question != nil && body.Tool.Agent.Question.IsPermission():
+		case body.Kind == BodyTool && body.Tool.Agent != nil && body.Tool.Agent.Question != nil:
+			// The agent goes back to work either way: a denied command is its to work around.
 			tool := *body.Tool
 			agent := *tool.Agent
-			start := agent.Question.Kind == "start"
-			agent.Question = nil
-			switch {
-			case decision == "deny" && start:
-				agent.State = AgentDenied
-			case start:
-				agent.State = AgentStarting
-			default:
-				agent.State = AgentWorking
-			}
+			agent.Question, agent.State = nil, AgentWorking
 			tool.Agent = &agent
 			message.Body.Tool = &tool
 		case body.Kind == BodyTool && body.Tool.Run != nil && body.Tool.Run.State == CommandAsking:
@@ -1825,7 +1835,7 @@ func (s *Store) AnswerPermission(chatID, messageID, decision string) {
 
 // MARK: - Coding agents
 
-// StopAgent stops a coding agent, here or on its bot's Runner; its card says so once the Runner has.
+// StopAgent stops a coding agent, here or on its bot's Runner; its row says so once the Runner has.
 func (s *Store) StopAgent(chatID, messageID string, done func(error)) {
 	if s.IsMock {
 		s.finishMockAgent(chatID, messageID, AgentStopped)
@@ -1835,45 +1845,96 @@ func (s *Store) StopAgent(chatID, messageID string, done func(error)) {
 	s.simple(done, "coding.stop", map[string]any{"chat_id": chatID, "message_id": messageID})
 }
 
-// AnswerAgentChoice answers what a coding agent's pane asks with one of the choices it offers.
-func (s *Store) AnswerAgentChoice(chatID, messageID string, choice int, done func(error)) {
+// AgentTranscript is a coding agent's transcript, from its Runner: what it was sent, thought,
+// said, and did, step by step, and its row's agent as it stands.
+func (s *Store) AgentTranscript(chatID, messageID string, done func(AgentTranscript, error)) {
 	if s.IsMock {
-		s.finishMockAgent(chatID, messageID, AgentWorking)
-		s.post(func() { done(nil) })
+		transcript := AgentTranscript{Items: MockAgentTranscript()}
+		if chat := s.Chat(chatID); chat != nil {
+			transcript.Card = AgentOf(chat.Message(messageID))
+		}
+		// An agent that is done has nothing running.
+		if transcript.Card != nil && !transcript.Card.IsRunning() {
+			for _, item := range transcript.Items {
+				if item.Tool != nil && item.Tool.Status == "running" {
+					item.Tool.Status = "done"
+				}
+			}
+		}
+		s.post(func() { done(transcript, nil) })
 		return
 	}
-	s.simple(done, "coding.answer", map[string]any{"chat_id": chatID, "message_id": messageID, "choice": choice})
-}
-
-// AnswerAgentText types an answer into what a coding agent's pane asks, then Return.
-func (s *Store) AnswerAgentText(chatID, messageID, text string, done func(error)) {
-	if s.IsMock {
-		s.finishMockAgent(chatID, messageID, AgentWorking)
-		s.post(func() { done(nil) })
-		return
-	}
-	s.simple(done, "coding.answer", map[string]any{"chat_id": chatID, "message_id": messageID, "text": text})
-}
-
-// AgentTranscript is a coding agent's transcript, from its Runner: what it was sent, said, and
-// did, or what its pane shows.
-func (s *Store) AgentTranscript(chatID, messageID string, done func(string, error)) {
-	if s.IsMock {
-		s.post(func() { done(MockAgentTranscript, nil) })
-		return
-	}
-	Async(s, func() (string, error) {
+	Async(s, func() (AgentTranscript, error) {
 		var answer struct {
-			Text string `json:"text"`
+			Items []AgentItem `json:"items"`
+			Card  *WireAgent  `json:"card"`
 		}
 		err := s.request("coding.transcript", map[string]any{"chat_id": chatID, "message_id": messageID}, &answer)
-		return answer.Text, err
+		transcript := AgentTranscript{Items: answer.Items}
+		if answer.Card != nil {
+			transcript.Card = ToAgentRun(answer.Card)
+		}
+		return transcript, err
 	}, done)
 }
 
-// ShowAgent brings a coding agent's pane forward on this Runner, in its terminal host.
-func (s *Store) ShowAgent(chatID, messageID string, done func(error)) {
-	s.simple(done, "coding.show", map[string]any{"chat_id": chatID, "message_id": messageID})
+// InstalledCodingAgents is each coding agent in the account's order, on or off, and whether this
+// Device has it installed, with its version.
+func (s *Store) InstalledCodingAgents(done func([]InstalledCodingAgent, error)) {
+	if s.IsMock {
+		var agents []InstalledCodingAgent
+		for _, choice := range s.CodingAgents {
+			agent := InstalledCodingAgent{Kind: choice.Kind, Name: CodingAgentName(choice.Kind), Enabled: choice.Enabled}
+			switch choice.Kind {
+			case "claude":
+				agent.Installed, agent.Version = true, "2.3.1 (Claude Code)"
+			case "codex":
+				agent.Installed, agent.Version = true, "codex-cli 0.98.0"
+			}
+			agents = append(agents, agent)
+		}
+		s.post(func() { done(agents, nil) })
+		return
+	}
+	Async(s, func() ([]InstalledCodingAgent, error) {
+		var answer struct {
+			Agents []InstalledCodingAgent `json:"agents"`
+		}
+		err := s.request("coding.agents", nil, &answer)
+		return answer.Agents, err
+	}, done)
+}
+
+// SetCodingAgents replaces the account's order of coding agents and which are on. The change
+// shows at once; a failure puts back what was there before telling `done`.
+func (s *Store) SetCodingAgents(choices []CodingAgentChoice, done func(error)) {
+	previous := s.CodingAgents
+	s.CodingAgents = NormalizedCodingAgents(choices)
+	s.emit(Event{Kind: EventRosterChanged})
+	if s.IsMock {
+		if done != nil {
+			s.post(func() { done(nil) })
+		}
+		return
+	}
+	agents := s.CodingAgents
+	Async(s, func() (WireCodingAgents, error) {
+		var answer struct {
+			CodingAgents WireCodingAgents `json:"coding_agents"`
+		}
+		err := s.request("coding_agents.set", map[string]any{"agents": agents}, &answer)
+		return answer.CodingAgents, err
+	}, func(settings WireCodingAgents, err error) {
+		if err != nil {
+			s.CodingAgents = previous
+		} else {
+			s.CodingAgents = NormalizedCodingAgents(settings.Agents)
+		}
+		s.emit(Event{Kind: EventRosterChanged})
+		if done != nil {
+			done(err)
+		}
+	})
 }
 
 // RunsHere is whether this Device runs the bot behind `message`: only there does its pane show.
@@ -1894,7 +1955,10 @@ func (s *Store) finishMockAgent(chatID, messageID string, state AgentState) {
 		}
 		tool := *message.Body.Tool
 		agent := *tool.Agent
-		agent.State, agent.Question = state, nil
+		agent.State, agent.Question, agent.UpdatedAt = state, nil, time.Now()
+		if state == AgentStopped {
+			agent.Outcome = "Stopped"
+		}
 		tool.Agent = &agent
 		message.Body.Tool = &tool
 	})
@@ -3260,6 +3324,7 @@ func (s *Store) ResetMockData() {
 	}
 	s.Budgets = mockBudgets()
 	s.AutoReview = mockAutoReview()
+	s.CodingAgents = NormalizedCodingAgents([]CodingAgentChoice{{Kind: "claude", Enabled: true}, {Kind: "codex", Enabled: true}, {Kind: "opencode", Enabled: false}, {Kind: "pi", Enabled: true}})
 	s.Attention = DefaultAttention()
 	s.SharedLinks = mockSharedLinks()
 	s.Sections = mockSections()
