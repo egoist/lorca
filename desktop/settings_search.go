@@ -84,7 +84,7 @@ func codingAgentsEntry() settingsEntry {
 
 // codingAgentEntry is an agent's row, by its product's name.
 func codingAgentEntry(kind string) settingsEntry {
-	keywords := map[string]string{"claude": "anthropic", "codex": "openai"}
+	keywords := map[string]string{"claude": "anthropic", "codex": "openai", "fx": "vercel"}
 	return entry(model.PaneCodingAgents, model.CodingAgentName(kind), "", keywords[kind], L("coding agent installed version"))
 }
 

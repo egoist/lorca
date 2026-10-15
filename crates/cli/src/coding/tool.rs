@@ -29,7 +29,7 @@ pub struct CodingAgentTool {
     pub event: Option<crate::event_triggers::EventTask>,
 }
 
-const DESCRIPTION: &str = "Hand a coding job to a coding agent on your Runner (Claude Code, Codex, OpenCode, or pi, as the user set up \
+const DESCRIPTION: &str = "Hand a coding job to a coding agent on your Runner (Claude Code, Codex, OpenCode, pi, or fx, as the user set up \
 in Settings → Coding Agents) and supervise it. `start` runs one on `prompt`, under a short `title` that names the job for the user \
 (\"Docs: use mygo.json in the launcher examples\"), in a git worktree of `folder` (default: your working directory): a new worktree \
 on a branch of its own, or the one `worktree` names, so it never edits the user's checkout; a folder that is not a repository is \

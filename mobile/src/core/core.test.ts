@@ -127,6 +127,7 @@ describe("model", () => {
     expect(agentName("codex")).toBe("Codex");
     expect(agentName("opencode")).toBe("OpenCode");
     expect(agentName("pi")).toBe("pi");
+    expect(agentName("fx")).toBe("fx");
     expect(agentTitle(agent("working"))).toBe("Fix the login");
     expect(agentTitle(agent("working", { title: "" }))).toBe("Fix it");
     for (const state of ["starting", "working", "asking"] as const) expect(agentIsRunning(agent(state))).toBe(true);

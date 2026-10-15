@@ -17,6 +17,9 @@ use crate::model::CodingAgents;
 /// OpenCode's own permissions for an agent Lorca runs (`OPENCODE_CONFIG_CONTENT`): commands,
 /// fetches, and anything outside its folder ask, so they come to Lorca.
 pub(crate) const OPENCODE_PERMISSIONS: &str = r#"{"permission":{"bash":"ask","webfetch":"ask","external_directory":"ask","edit":"allow"}}"#;
+/// fx's permission mode for an agent Lorca runs (`FX_PERMISSION_MODE`): every command and change
+/// asks, so it comes to Lorca. Its default, `auto`, has fx's own reviewer decide.
+pub(crate) const FX_PERMISSION_MODE: &str = "ask";
 
 /// How long `--version` has to answer.
 const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -27,6 +30,7 @@ fn program(kind: &str) -> &'static str {
         "codex" => "codex",
         "opencode" => "opencode",
         "pi" => "pi",
+        "fx" => "fx",
         _ => "claude",
     }
 }
@@ -117,6 +121,6 @@ mod tests {
         }
         .normalized();
         let kinds: Vec<(&str, bool)> = settings.agents.iter().map(|choice| (choice.kind.as_str(), choice.enabled)).collect();
-        assert_eq!(kinds, vec![("pi", true), ("claude", false), ("codex", true), ("opencode", true)]);
+        assert_eq!(kinds, vec![("pi", true), ("claude", false), ("codex", true), ("opencode", true), ("fx", true)]);
     }
 }

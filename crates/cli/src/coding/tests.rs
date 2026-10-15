@@ -116,14 +116,15 @@ while True:
         out({"method": "turn/completed", "params": {"threadId": "thread-1", "turn": {"id": turn, "items": [], "status": "completed"}}})
 "#;
 
-/// OpenCode's ACP server, scripted: a session, and a prompt that runs `git status` once the
-/// client allows it, writes a file, and answers. A "(slow)" prompt waits for `release.txt`
-/// before it ends, so a message can arrive while it works.
-const FAKE_OPENCODE: &str = r#"#!/usr/bin/env python3
+/// An ACP server, scripted, standing in for OpenCode and fx: a session, and a prompt that runs
+/// `git status` once the client allows it, writes a file, and answers. A "(slow)" prompt waits
+/// for `release.txt` before it ends, so a message can arrive while it works. Each run appends its
+/// arguments and the permission settings it was given to `<program>-args.log`.
+const FAKE_ACP: &str = r#"#!/usr/bin/env python3
 import json, os, sys, time
 here = os.path.dirname(os.path.abspath(__file__))
-with open(os.path.join(here, "opencode-args.log"), "a") as log:
-    log.write(" ".join(sys.argv[1:]) + " " + os.environ.get("OPENCODE_CONFIG_CONTENT", "") + "\n")
+with open(os.path.join(here, os.path.basename(sys.argv[0]) + "-args.log"), "a") as log:
+    log.write(" ".join(sys.argv[1:]) + " " + os.environ.get("OPENCODE_CONFIG_CONTENT", "") + " FX_PERMISSION_MODE=" + os.environ.get("FX_PERMISSION_MODE", "") + "\n")
 def out(value):
     sys.stdout.write(json.dumps(value) + "\n"); sys.stdout.flush()
 def read():
@@ -237,7 +238,7 @@ fn programs() -> &'static Path {
         use std::os::unix::fs::PermissionsExt;
         let folder = std::env::temp_dir().join(format!("lorca-coding-programs-{}", std::process::id()));
         std::fs::create_dir_all(&folder).unwrap();
-        for (name, script) in [("claude", FAKE_CLAUDE), ("codex", FAKE_CODEX), ("opencode", FAKE_OPENCODE), ("pi", FAKE_PI)] {
+        for (name, script) in [("claude", FAKE_CLAUDE), ("codex", FAKE_CODEX), ("opencode", FAKE_ACP), ("pi", FAKE_PI), ("fx", FAKE_ACP)] {
             let path = folder.join(name);
             std::fs::write(&path, script).unwrap();
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -563,6 +564,24 @@ async fn opencode_speaks_acp_and_a_message_while_it_works_waits_for_its_turn() {
 }
 
 #[tokio::test]
+async fn fx_speaks_acp_in_its_ask_mode() {
+    let scratch = setup().await;
+    let app = &scratch.app;
+    let tool = tool(&scratch);
+    start_row(app, "call-1");
+    let started = call(&tool, "call-1", json!({ "action": "start", "agent": "fx", "title": "Files", "folder": scratch.repo.to_str().unwrap(), "prompt": "Write b.txt" })).await.unwrap();
+    assert!(started.starts_with("Started fx ("), "{started}");
+    // Its commands ask Lorca, which lets `git status` run.
+    let (_, _, text, _) = eventually("its message", || agent_messages(app).pop()).await;
+    assert_eq!(text, "OpenCode did it (once).");
+    let launched = std::fs::read_to_string(programs().join("fx-args.log")).unwrap();
+    assert!(launched.lines().any(|line| line.starts_with("acp ") && line.ends_with("FX_PERMISSION_MODE=ask")), "{launched}");
+    let agent = app.coding_agents.of("chat", "b1").pop().unwrap();
+    assert_eq!(agent.record().session.as_deref(), Some("ses_1"));
+    stop(app, &agent, "Stopped");
+}
+
+#[tokio::test]
 async fn pi_asks_through_lorcas_extension_before_a_tool_runs() {
     let scratch = setup().await;
     let app = &scratch.app;
@@ -597,7 +616,7 @@ async fn a_start_takes_the_first_agent_the_user_turned_on() {
     assert_eq!(kind, "pi");
     assert!(settings::pick(app, Some("claude")).await.unwrap_err().contains("turned Claude Code off"));
     assert_eq!(settings::pick(app, Some("codex")).await.unwrap().0, "codex");
-    app.set_coding_agents(choose(&[("claude", false), ("codex", false), ("opencode", false), ("pi", false)]));
+    app.set_coding_agents(choose(&[("claude", false), ("codex", false), ("opencode", false), ("pi", false), ("fx", false)]));
     assert!(settings::pick(app, None).await.unwrap_err().contains("every coding agent off"));
     // The card says why when none can start.
     let tool = tool(&scratch);
@@ -609,7 +628,7 @@ async fn a_start_takes_the_first_agent_the_user_turned_on() {
     // The apps list every agent in the account's order.
     let listed = settings::list(app).await;
     let kinds: Vec<&str> = listed["agents"].as_array().unwrap().iter().map(|agent| agent["kind"].as_str().unwrap()).collect();
-    assert_eq!(kinds, vec!["claude", "codex", "opencode", "pi"]);
+    assert_eq!(kinds, vec!["claude", "codex", "opencode", "pi", "fx"]);
 }
 
 #[tokio::test]
@@ -744,13 +763,13 @@ async fn an_agent_an_event_started_keeps_the_owners_task_for_its_reviews() {
 }
 
 /// The real agents installed on this computer, each on a small job in a scratch repository:
-/// `LORCA_REAL_AGENTS=claude,codex,opencode,pi cargo test -p lorca --lib real_agents -- --ignored
+/// `LORCA_REAL_AGENTS=claude,codex,opencode,pi,fx cargo test -p lorca --lib real_agents -- --ignored
 /// --nocapture`. Each asks before its command, which the test allows, writes a file, and says
 /// it is done; its steps are printed.
 #[tokio::test]
 #[ignore = "runs the real coding agents, which sign in and spend tokens"]
 async fn real_agents() {
-    let kinds = std::env::var("LORCA_REAL_AGENTS").unwrap_or_else(|_| "claude,codex,opencode,pi".into());
+    let kinds = std::env::var("LORCA_REAL_AGENTS").unwrap_or_else(|_| "claude,codex,opencode,pi,fx".into());
     for kind in kinds.split(',').map(str::trim).filter(|kind| !kind.is_empty()) {
         let scratch = setup_without_stand_ins().await;
         let app = &scratch.app;

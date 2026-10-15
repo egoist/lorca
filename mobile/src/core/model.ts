@@ -446,7 +446,7 @@ export interface AgentQuestion {
 }
 
 /// The coding agents Lorca knows, in the account's default order of preference.
-export const CODING_AGENT_KINDS = ["claude", "codex", "opencode", "pi"] as const;
+export const CODING_AGENT_KINDS = ["claude", "codex", "opencode", "pi", "fx"] as const;
 
 /// Which coding agents bots may start, in the order the account prefers them, from the roster.
 export type CodingAgents = { agents: { kind: string; enabled: boolean }[] };
@@ -464,6 +464,8 @@ export function agentName(kind: string): string {
       return "OpenCode";
     case "pi":
       return "pi";
+    case "fx":
+      return "fx";
     default:
       return "Claude Code";
   }

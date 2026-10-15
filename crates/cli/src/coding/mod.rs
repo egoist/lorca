@@ -1,4 +1,4 @@
-//! Coding agents a bot runs on its Runner and supervises: Claude Code, Codex, OpenCode, or pi,
+//! Coding agents a bot runs on its Runner and supervises: Claude Code, Codex, OpenCode, pi, or fx,
 //! in a git worktree of a repository there, on a prompt and under a title the bot gives the job.
 //! The agent is a process of its own that outlives the turn that started it. The bot keeps its id
 //! across turns, reads its transcript, sends it follow-ups (queued, or cutting in), and stops it.
@@ -8,7 +8,7 @@
 //! review asks the user shows on the row that started it.
 //!
 //! Every agent is driven through [`driver::Driver`] whatever it speaks (`claude`: stream-json,
-//! `codex`: app-server, `acp`: the Agent Client Protocol for OpenCode, `pi`: pi's RPC), and its
+//! `codex`: app-server, `acp`: the Agent Client Protocol for OpenCode and fx, `pi`: pi's RPC), and its
 //! transcript is steps ([`transcript::Item`]) the apps draw the way Cursor draws an agent's run.
 
 pub(crate) mod acp;
@@ -75,8 +75,8 @@ pub(crate) struct Record {
     pub trigger_message_id: String,
     pub kind: String,
     pub title: String,
-    /// What resumes it: Claude Code's session, Codex's thread, OpenCode's session, pi's session
-    /// file.
+    /// What resumes it: Claude Code's session, Codex's thread, OpenCode's or fx's session, pi's
+    /// session file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<String>,
     pub folder: PathBuf,
@@ -556,6 +556,12 @@ async fn launch(app: &Arc<App>, agent: &Arc<Agent>, program: &Path, prompt: &str
             acp::start(launch, &prompt, session, tx).await?
         }
         "pi" => pi::start(&app.config.home, program, folder, &prompt, session, &variables, tx).await?,
+        "fx" => {
+            let mut variables = variables;
+            variables.push(("FX_PERMISSION_MODE".into(), settings::FX_PERMISSION_MODE.into()));
+            let launch = acp::Launch { name: "fx", program, args: vec!["acp".into()], folder, variables };
+            acp::start(launch, &prompt, session, tx).await?
+        }
         _ => claude::start(program, folder, &prompt, session, &variables, tx).await?,
     };
     *agent.driver.lock().unwrap() = Some(driver);

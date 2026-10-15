@@ -6,8 +6,8 @@ and the update window shows it.
 
 ## [Unreleased]
 
-- Coding agents work the way Grok Bot's do. A bot hands a job to Claude Code, Codex, OpenCode, or
-  pi under a short title, and the chat shows "Messaged" and "Message from" markers with the agent's
+- Coding agents work the way Grok Bot's do. A bot hands a job to Claude Code, Codex, OpenCode,
+  pi, or fx under a short title, and the chat shows "Messaged" and "Message from" markers with the agent's
   logo instead of a card. Click one to follow the agent's work as Cursor shows it: what it thought
   and said, the files it explored, the commands it ran, and its edits with lines added and removed.
   The chat's details list the agents under Coding, and when an agent finishes, its message lands in

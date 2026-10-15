@@ -1603,7 +1603,7 @@ const (
 )
 
 // CodingAgentKinds are the coding agents a bot can run, in the account's default order.
-var CodingAgentKinds = []string{"claude", "codex", "opencode", "pi"}
+var CodingAgentKinds = []string{"claude", "codex", "opencode", "pi", "fx"}
 
 // CodingAgentName is a coding agent's product name, which is not translated.
 func CodingAgentName(kind string) string {
@@ -1614,6 +1614,8 @@ func CodingAgentName(kind string) string {
 		return "OpenCode"
 	case "pi":
 		return "pi"
+	case "fx":
+		return "fx"
 	}
 	return "Claude Code"
 }

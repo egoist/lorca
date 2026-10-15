@@ -329,7 +329,7 @@ func TestCodingAgentSettings(t *testing.T) {
 	m, tt := settingsWindowTester(t, 900)
 	m.showSettings(model.PaneCodingAgents)
 	settle(tt)
-	for _, text := range []string{"Claude Code", "Codex", "OpenCode", "pi", "Installed · 2.3.1 (Claude Code)", "Not installed on this Device"} {
+	for _, text := range []string{"Claude Code", "Codex", "OpenCode", "pi", "fx", "Installed · 2.3.1 (Claude Code)", "Not installed on this Device"} {
 		if !tt.HasText(text) {
 			t.Errorf("no %q in %q", text, tt.Texts())
 		}

@@ -1,5 +1,5 @@
 //! An agent that speaks the Agent Client Protocol (agentclientprotocol.com) over stdio, as
-//! OpenCode does (`opencode acp`): JSON-RPC, a session in the folder (`session/new`, or
+//! OpenCode (`opencode acp`) and Vercel's fx (`fx acp`) do: JSON-RPC, a session in the folder (`session/new`, or
 //! `session/load` to resume one), and a prompt per message (`session/prompt`), which answers
 //! once the turn is over. What it does arrives as `session/update` notifications; what needs a
 //! decision comes as `session/request_permission`, which Lorca answers allow once or reject.
@@ -276,8 +276,16 @@ fn merge(step: &mut ToolStep, update: &Value, folder: &Path) {
             _ => {}
         }
     }
-    if !text.is_empty() {
-        step.output = transcript::output(&text.join("\n"));
+    // fx reports a command's result apart (`command_result`), and its text as a cut-off JSON
+    // record of where the output went, which reads as nothing.
+    match update["command_result"]["exit_code"].as_i64() {
+        Some(code) => {
+            if code != 0 && step.status == "done" {
+                step.status = "failed".into();
+            }
+        }
+        None if !text.is_empty() => step.output = transcript::output(&text.join("\n")),
+        None => {}
     }
 }
 
@@ -423,5 +431,9 @@ mod tests {
         let mut edit = ToolStep { kind: "other".into(), status: "running".into(), ..ToolStep::default() };
         merge(&mut edit, &json!({ "kind": "edit", "locations": [{ "path": "/work/shop/b.txt" }], "content": [{ "type": "diff", "path": "/work/shop/b.txt", "oldText": null, "newText": "hi\nthere" }] }), folder);
         assert_eq!((edit.title.as_str(), edit.path.as_deref(), edit.added, edit.removed), ("b.txt", Some("b.txt"), Some(2), Some(0)));
+        // fx's command result: its exit code, without the record its text holds.
+        let mut push = ToolStep { kind: "execute".into(), title: "git push".into(), status: "running".into(), ..ToolStep::default() };
+        merge(&mut push, &json!({ "status": "completed", "content": [{ "type": "content", "content": { "type": "text", "text": "{\"session_id\":null,\"state\":\"comp" } }], "command_result": { "kind": "command", "exit_code": 1 } }), folder);
+        assert_eq!((push.status.as_str(), push.output.as_deref()), ("failed", None));
     }
 }

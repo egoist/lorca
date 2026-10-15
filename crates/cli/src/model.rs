@@ -330,7 +330,7 @@ pub enum Body {
     /// reads it in the turn it wakes for it (`crate::coding`).
     AgentMessage {
         agent_id: String,
-        /// `claude`, `codex`, `opencode`, or `pi`.
+        /// `claude`, `codex`, `opencode`, `pi`, or `fx`.
         agent_kind: String,
         title: String,
         text: String,
@@ -501,7 +501,7 @@ impl ReplyTo {
 pub struct AgentRun {
     /// The bot's handle for it, across turns: `agent-3f9a2c1d`.
     pub id: String,
-    /// `claude` (Claude Code), `codex`, `opencode`, or `pi`.
+    /// `claude` (Claude Code), `codex`, `opencode`, `pi`, or `fx`.
     pub kind: String,
     /// What the bot calls the job, which names the agent wherever it shows: "Docs: use
     /// mygo.json in the launcher examples".
@@ -549,14 +549,15 @@ impl AgentRun {
 
 /// The coding agents a bot can run, by the name the bot and the apps use: the account's default
 /// order of preference.
-pub const CODING_AGENT_KINDS: [&str; 4] = ["claude", "codex", "opencode", "pi"];
+pub const CODING_AGENT_KINDS: [&str; 5] = ["claude", "codex", "opencode", "pi", "fx"];
 
-/// A coding agent's name: "Claude Code", "Codex", "OpenCode", "pi".
+/// A coding agent's name: "Claude Code", "Codex", "OpenCode", "pi", "fx".
 pub fn coding_agent_name(kind: &str) -> &'static str {
     match kind {
         "codex" => "Codex",
         "opencode" => "OpenCode",
         "pi" => "pi",
+        "fx" => "fx",
         _ => "Claude Code",
     }
 }
@@ -570,7 +571,7 @@ pub struct CodingAgents {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CodingAgentChoice {
-    /// `claude`, `codex`, `opencode`, or `pi`.
+    /// `claude`, `codex`, `opencode`, `pi`, or `fx`.
     pub kind: String,
     pub enabled: bool,
 }
