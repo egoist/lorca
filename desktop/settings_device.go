@@ -92,6 +92,9 @@ func (s settingsPane) device(c *ui.Context, m *mainWindow) {
 			if !unknown {
 				s.mark(c, keyValueRow(c, k, L("OS"), device.OS.DisplayName()+" · "+device.OSVersion, false, nil), L("OS"))
 			}
+			if device.App != nil {
+				s.appUpdateRow(c, k, device, *device.App)
+			}
 			if device.Update != nil {
 				s.cliUpdateRow(c, k, device, *device.Update)
 			}
@@ -225,28 +228,59 @@ func renameDevice(w *appWindow, device *model.Device) {
 	})
 }
 
+// updateRowValue is a version and how its update goes, for the app's and the CLI's rows, and
+// whether to offer Update: while a newer version waits and the Runner is online.
+func updateRowValue(device *model.Device, version string, update model.DeviceUpdate) (value string, offersUpdate bool) {
+	latest := update.Latest
+	switch {
+	case update.State == "installing":
+		return L("%@ · Installing %@…", version, latest), false
+	case update.State == "restarting":
+		return L("%@ · Restarts into %@ once no bot is at work", version, latest), false
+	case update.State == "installed":
+		return L("%@ · %@ is installed; restart lorca serve to run it", version, latest), false
+	case latest != "":
+		return L("%@ · %@ is available", version, latest), device.Status == model.StatusOnline
+	case update.Error != "":
+		return version + " · " + update.Error, false
+	case update.Auto:
+		return L("%@ · Up to date", version), false
+	}
+	return L("%@ · Up to date · automatic updates off", version), false
+}
+
+// appUpdateRow is the version of the desktop app on a Runner, how its update goes, and Update while
+// a newer version waits and the Runner is online. This computer's Update opens the update window;
+// another Runner's app installs its latest version and relaunches once no bot is at work there.
+func (s settingsPane) appUpdateRow(c *ui.Context, k *card, device *model.Device, app model.DeviceApp) {
+	p := colors(c)
+	value, offersUpdate := updateRowValue(device, app.Version, app.Update)
+	action := ""
+	if offersUpdate {
+		action = L("Update")
+	}
+	rowElement, row := actionRow(c.Key("app"), k, L("Lorca app"), actionRowOptions{Value: value, Tint: &p.Label2, Tooltip: app.Update.Error, Action: action})
+	s.mark(c, rowElement, L("Lorca app"))
+	if !row.Action {
+		return
+	}
+	if device.IsThisDevice && updatesEnabled() {
+		checkForUpdates()
+		return
+	}
+	id, name, w := device.ID, device.Name, s.w
+	store.UpdateDeviceApp(id, func(err error) {
+		if err != nil {
+			w.showAlert(alertOptions{Message: L("Couldn’t update %@", name), Informative: model.ErrorText(err)}, nil)
+		}
+	})
+}
+
 // cliUpdateRow is the version of a CLI that updates itself, how its update goes, and Update while
 // a newer release waits and the Runner is online.
 func (s settingsPane) cliUpdateRow(c *ui.Context, k *card, device *model.Device, update model.DeviceUpdate) {
 	p := colors(c)
-	version, latest := device.Version, update.Latest
-	value, offersUpdate := "", false
-	switch {
-	case update.State == "installing":
-		value = L("%@ · Installing %@…", version, latest)
-	case update.State == "restarting":
-		value = L("%@ · Restarts into %@ once no bot is at work", version, latest)
-	case update.State == "installed":
-		value = L("%@ · %@ is installed; restart lorca serve to run it", version, latest)
-	case latest != "":
-		value, offersUpdate = L("%@ · %@ is available", version, latest), device.Status == model.StatusOnline
-	case update.Error != "":
-		value = version + " · " + update.Error
-	case update.Auto:
-		value = L("%@ · Up to date", version)
-	default:
-		value = L("%@ · Up to date · automatic updates off", version)
-	}
+	value, offersUpdate := updateRowValue(device, device.Version, update)
 	action := ""
 	if offersUpdate {
 		action = L("Update")

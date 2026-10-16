@@ -1201,6 +1201,16 @@ class Engine {
     useStore.setState((s) => ({ devices: s.devices.map((d) => (d.id === id && d.update ? { ...d, update: { ...d.update, latest, state: "installing", error: undefined } } : d)) }));
   }
 
+  /// Asks the desktop app on a Runner, through the relay, to install its latest version, which it
+  /// relaunches into once no bot is at work there. Rejects with the Runner's words, or when it does
+  /// not answer. "Installing" shows at once; the Runner's `machine` blob confirms it.
+  async updateDeviceApp(id: string) {
+    const answer = await core.request<{ version: string; latest?: string | null; installing?: boolean }>("device.update_app", { id });
+    if (!answer.installing || !answer.latest) return;
+    const latest = answer.latest;
+    useStore.setState((s) => ({ devices: s.devices.map((d) => (d.id === id && d.app ? { ...d, app: { ...d.app, latest, state: "installing", error: undefined } } : d)) }));
+  }
+
   /// Whether `lorca service` keeps a Runner's CLI running, asked of the Runner through the core.
   serviceStatus(id: string) {
     return core.request<{ installed: boolean; running: boolean }>("device.service_status", { id });

@@ -271,6 +271,7 @@ async fn join(app: &Arc<App>, pairing_string: &str, device_name: Option<String>)
         channels: Vec::new(),
         version: crate::config::VERSION.into(),
         update: None,
+        app: None,
         updated_at: now_unix(),
     };
     let reply_key = keys::random_32();

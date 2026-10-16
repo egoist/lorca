@@ -1572,7 +1572,7 @@ mod tests {
         let entry = snapshot["devices"].as_array().unwrap().iter().find(|d| d["id"] == silent.as_str()).unwrap();
         assert_eq!((entry["name"].as_str(), entry["os"].as_str(), entry["is_this_device"].as_bool()), (Some(""), Some(""), Some(false)));
 
-        let device = Device { id: silent.clone(), name: "Laptop".into(), model: String::new(), os: "windows".into(), os_version: String::new(), box_pubkey: String::new(), plugins: Vec::new(), channels: Vec::new(), version: String::new(), update: None, updated_at: now };
+        let device = Device { id: silent.clone(), name: "Laptop".into(), model: String::new(), os: "windows".into(), os_version: String::new(), box_pubkey: String::new(), plugins: Vec::new(), channels: Vec::new(), version: String::new(), update: None, app: None, updated_at: now };
         upsert_device(&mut app.state.lock().unwrap().devices, device);
         assert!(unknown().is_empty(), "its blob landed");
         assert!(settle_unknown_machines(app));

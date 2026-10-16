@@ -441,3 +441,32 @@ func TestRenameDeviceInSettings(t *testing.T) {
 		t.Fatalf("name not taken back: %+v", device)
 	}
 }
+
+// A Runner's desktop app shows its version and the newer one waiting; Update, only while the
+// Runner is online, asks that app to install it.
+func TestDeviceAppUpdateRow(t *testing.T) {
+	m, tt := settingsWindowTester(t, 900)
+	m.showSettingsDevice("dev-closet")
+	m.showSettings(model.PaneDevice)
+	settle(tt)
+	if !tt.HasText(L("Lorca app")) || !tt.HasText(L("%@ · %@ is available", "0.4.2", "0.4.3")) {
+		t.Fatalf("no app row: %q", tt.Texts())
+	}
+	if tt.HasText(L("Update")) {
+		t.Fatal("Update offered for an offline Runner")
+	}
+	store.Device("dev-closet").Status = model.StatusOnline
+	tt.Frame()
+	settle(tt)
+	renderTo(t, tt, "settings-device-app-update")
+	if err := tt.Click(L("Update")); err != nil {
+		t.Fatal(err)
+	}
+	settle(tt)
+	if app := store.Device("dev-closet").App; app.Update.State != "installing" {
+		t.Fatalf("app %+v", app)
+	}
+	if !tt.HasText(L("%@ · Installing %@…", "0.4.2", "0.4.3")) {
+		t.Fatalf("no progress: %q", tt.Texts())
+	}
+}

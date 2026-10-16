@@ -292,6 +292,9 @@ pub struct App {
     /// installs over its own binary.
     #[cfg(feature = "cli")]
     pub updates: crate::update::Updater,
+    /// What the desktop app that runs this CLI says of its own updates.
+    #[cfg(feature = "cli")]
+    pub app_updates: crate::app_update::AppUpdates,
     /// Connected MCP servers.
     #[cfg(feature = "runner")]
     pub mcp: crate::plugins::mcp::Pool,
@@ -411,6 +414,8 @@ impl App {
             catalog: crate::catalog::Updates::default(),
             #[cfg(feature = "cli")]
             updates: crate::update::Updater::default(),
+            #[cfg(feature = "cli")]
+            app_updates: crate::app_update::AppUpdates::default(),
             #[cfg(feature = "runner")]
             mcp: crate::plugins::mcp::Pool::new(),
             #[cfg(feature = "runner")]
@@ -713,6 +718,7 @@ impl App {
             channels: self.channels.statuses(),
             version: config::VERSION.into(),
             update: self.update_status(),
+            app: self.app_status(),
             updated_at: config::now_unix(),
         })
     }
@@ -722,6 +728,18 @@ impl App {
         #[cfg(feature = "cli")]
         {
             self.updates.status()
+        }
+        #[cfg(not(feature = "cli"))]
+        {
+            None
+        }
+    }
+
+    /// The desktop app that runs this CLI, while it is connected and updates itself.
+    pub fn app_status(&self) -> Option<crate::model::AppStatus> {
+        #[cfg(feature = "cli")]
+        {
+            self.app_updates.status()
         }
         #[cfg(not(feature = "cli"))]
         {
@@ -887,7 +905,7 @@ impl App {
         let budgets = self.budgets.local_snapshots(self);
         let watching = self.watched_chat.lock().unwrap().clone();
         let fingerprint = format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
             device.id,
             device.name,
             device.model,
@@ -897,6 +915,7 @@ impl App {
             serde_json::to_string(&device.channels).unwrap_or_default(),
             device.version,
             serde_json::to_string(&device.update).unwrap_or_default(),
+            serde_json::to_string(&device.app).unwrap_or_default(),
             serde_json::to_string(&turns).unwrap_or_default(),
             serde_json::to_string(&budgets).unwrap_or_default(),
             watching.as_deref().unwrap_or_default()
@@ -2175,6 +2194,7 @@ impl App {
                     "channels": device.channels,
                     "version": device.version,
                     "update": device.update,
+                    "app": device.app,
                 })
             })
             .collect();

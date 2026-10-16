@@ -1497,4 +1497,5 @@ var zh = map[string]string{
 	"Drag to reorder": "拖动以调整顺序",
 	"coding agent code worktree pull request order preference": "编程智能体 代码 工作树 拉取请求 顺序 偏好",
 	"coding agent installed version":                           "编程智能体 已安装 版本",
+	"Lorca app":                                                "Lorca 应用",
 }

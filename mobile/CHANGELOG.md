@@ -6,6 +6,10 @@ when it offers the update.
 
 ## [Unreleased]
 
+- Update Lorca on a computer from your phone: its Device screen shows the Lorca app's version, and
+  Update installs the newer one there. That Lorca restarts into it once its bots finish what they
+  are doing.
+
 ## [1.0.8]
 
 - Coding agents are set per Runner: each Device keeps its own agents, in its own order and each on

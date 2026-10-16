@@ -109,6 +109,7 @@ func (a *appDelegate) didFinishLaunching() {
 		a.cli.onState = func(state string) {
 			if state == "connected" {
 				go a.askIdentity()
+				go remoteUpdates.connected()
 			}
 			a.publishState()
 		}
@@ -205,6 +206,10 @@ func (a *appDelegate) cliEvent(name string, frame []byte) {
 		Data json.RawMessage `json:"data"`
 	}
 	_ = json.Unmarshal(frame, &payload)
+	if name == "app.update.install" {
+		go remoteUpdates.install()
+		return
+	}
 	post(func() { store.HandleEvent(name, payload.Data) })
 	if name != "identity.changed" && name != "snapshot" {
 		return

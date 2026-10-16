@@ -68,8 +68,16 @@ export interface Device {
   version?: string;
   /// Only on a Runner whose CLI replaces itself (installed with lorca.app's script).
   update?: UpdateStatus | null;
+  /// The desktop app that runs the Runner's CLI, while it is open and updates itself.
+  app?: AppStatus | null;
   /// The relay lists the machine, but it never sent its `machine` blob: no name, no `os`.
   unknown?: boolean;
+}
+
+/// The desktop app on a Runner: its version, and its updates, which `state` `restarting` says
+/// wait for the Runner's bots before the app relaunches into the new version.
+export interface AppStatus extends UpdateStatus {
+  version: string;
 }
 
 /// A self-updating CLI's updates, as its Runner lists them in its `machine` blob.

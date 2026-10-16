@@ -1062,4 +1062,5 @@ export const zh: Record<string, string> = {
   "Installed · {version}": "已安装 · {version}",
   "Installed": "已安装",
   "None installed": "均未安装",
+  "Lorca app": "Lorca 应用",
 };

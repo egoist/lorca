@@ -3063,6 +3063,49 @@ func (s *Store) UpdateDevice(id string, done func(error)) {
 	s.simple(done, "device.update", map[string]any{"id": id})
 }
 
+// UpdateDeviceApp asks the desktop app on another Runner to install its latest version, which it
+// relaunches into once no bot is at work there; the Runner's `machine` blob says how it goes.
+func (s *Store) UpdateDeviceApp(id string, done func(error)) {
+	if s.IsMock {
+		if device := s.Device(id); device != nil && device.App != nil {
+			app := *device.App
+			app.Update.State = "installing"
+			device.App = &app
+			s.emit(Event{Kind: EventRosterChanged})
+		}
+		s.post(func() { done(nil) })
+		return
+	}
+	s.simple(done, "device.update_app", map[string]any{"id": id})
+}
+
+// AppUpdateReport is what this app tells its CLI of its own updates, which the CLI puts in this
+// Device's `machine` blob as `app`.
+type AppUpdateReport struct {
+	Version string  `json:"version"`
+	Auto    bool    `json:"auto"`
+	Latest  *string `json:"latest,omitempty"`
+	State   string  `json:"state,omitempty"`
+	Error   *string `json:"error,omitempty"`
+}
+
+// ReportAppUpdate tells the CLI how this app's updates stand. It blocks: call it from a goroutine.
+func (s *Store) ReportAppUpdate(report AppUpdateReport) error {
+	if s.IsMock {
+		return nil
+	}
+	return s.request("app.update_status", report, nil)
+}
+
+// RelaunchWhenIdle returns once no bot is at work on this Runner and the CLI has sent what it
+// queued for the relay, which may be hours. It blocks: call it from a goroutine.
+func (s *Store) RelaunchWhenIdle() error {
+	if s.IsMock {
+		return nil
+	}
+	return s.request("app.relaunch_when_idle", nil, nil)
+}
+
 // ForgetIdentity unpairs this Device. The CLI asks the relay to drop its key, best effort, then
 // forgets the identity here; the `identity.changed` it sends brings back onboarding.
 func (s *Store) ForgetIdentity(done func(error)) {

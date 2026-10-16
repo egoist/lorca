@@ -6,6 +6,10 @@ and the update window shows it.
 
 ## [Unreleased]
 
+- Update Lorca on another computer from this one: its Devices pane shows the Lorca app's version,
+  and Update installs the newer one there. That Lorca restarts into it once its bots finish what
+  they are doing.
+
 ## [0.1.14]
 
 - The Attention panel opens as a popover. Each item has Dismiss, Mark as Resolved, and Open buttons,

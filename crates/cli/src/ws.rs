@@ -117,7 +117,11 @@ async fn upgrade(State(server): State<Server>, headers: HeaderMap, ws: WebSocket
     ws.on_upgrade(move |socket| connection(server.app, socket))
 }
 
+/// Numbers the local connections, so what one said of itself goes when it closes.
+static CONNECTIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 async fn connection(app: Arc<App>, socket: WebSocket) {
+    let connection = CONNECTIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let (mut sink, mut stream) = socket.split();
     let (out_tx, mut out_rx) = mpsc::channel::<String>(256);
     let mut events = app.events.subscribe();
@@ -149,7 +153,13 @@ async fn connection(app: Arc<App>, socket: WebSocket) {
                 let app = app.clone();
                 let out = out_tx.clone();
                 tokio::spawn(async move {
-                    let response = match dispatch(&app, &request.method, request.params).await {
+                    let result = match request.method.as_str() {
+                        // The desktop app on this connection, about its own updates.
+                        #[cfg(feature = "cli")]
+                        "app.update_status" => crate::app_update::report(&app, connection, request.params),
+                        _ => dispatch(&app, &request.method, request.params).await,
+                    };
+                    let response = match result {
                         Ok(result) => json!({ "id": request.id, "result": result }),
                         Err(message) => json!({ "id": request.id, "error": { "message": message } }),
                     };
@@ -174,4 +184,6 @@ async fn connection(app: Arc<App>, socket: WebSocket) {
     writer.abort();
     // The app that said what it was watching is gone.
     app.watch_chat(None);
+    #[cfg(feature = "cli")]
+    crate::app_update::disconnected(&app, connection);
 }
