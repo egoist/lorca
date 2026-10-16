@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -142,6 +143,105 @@ func TestOnboardingBotName(t *testing.T) {
 	onboardingSettle(tt)
 	if o.step != onboardingDone || o.firstBot().Name != "Planner" {
 		t.Fatalf("step %d, bot %q", o.step, o.firstBot().Name)
+	}
+}
+
+// Skip for Now on the bot step keeps the name and leaves the provider for later, without a key.
+func TestOnboardingBotSkip(t *testing.T) {
+	o, tt := onboardingDemo(t)
+	o.show(onboardingBot)
+	onboardingSettle(tt)
+	bot := o.firstBot()
+	provider := bot.Provider
+	o.botName = "Planner"
+	o.pickProvider("chatgpt")
+	onboardingSettle(tt)
+	onboardingExpect(t, tt, L("Skip for Now"), L("Sign in with %@", "ChatGPT"))
+	onboardingClick(t, tt, L("Skip for Now"))
+	if o.step != onboardingDone {
+		t.Fatalf("step %d after Skip", o.step)
+	}
+	if bot := o.firstBot(); bot.Name != "Planner" || bot.Provider != provider {
+		t.Fatalf("bot %q on %q, was on %q", bot.Name, bot.Provider, provider)
+	}
+
+	// Without a key Continue waits, and Skip for Now still goes on.
+	o.show(onboardingBot)
+	onboardingSettle(tt)
+	o.pickProvider("deepseek")
+	onboardingSettle(tt)
+	onboardingClick(t, tt, L("Continue"))
+	if o.step != onboardingBot {
+		t.Fatalf("Continue went on without a key")
+	}
+	onboardingClick(t, tt, L("Skip for Now"))
+	if o.step != onboardingDone {
+		t.Fatalf("step %d after Skip without a key", o.step)
+	}
+}
+
+// While a key is checked, Continue and Skip for Now wait beside the spinner: pressing Continue again
+// keeps the step, the key, and the status.
+func TestOnboardingBusyKeepsStep(t *testing.T) {
+	for _, step := range []onboardingStep{onboardingBot, onboardingProvider} {
+		o, tt := onboardingDemo(t)
+		o.show(step)
+		onboardingSettle(tt)
+		checking := &onboardingStatus{text: L("Checking the key with %@…", "DeepSeek")}
+		o.apiKey, o.busy, o.status = "sk-test", true, checking
+		onboardingSettle(tt)
+		onboardingRender(t, tt, "busy-"+strconv.Itoa(int(step)))
+		onboardingClick(t, tt, L("Continue"))
+		tt.Key(0, ui.KeyEnter)
+		onboardingSettle(tt)
+		onboardingClick(t, tt, L("Skip for Now"))
+		if step == onboardingBot {
+			o.saveFirstBot()
+			onboardingSettle(tt)
+		}
+		if o.step != step || o.apiKey != "sk-test" || o.status != checking {
+			t.Fatalf("step %d → %d, key %q, status %+v", step, o.step, o.apiKey, o.status)
+		}
+		onboardingExpect(t, tt, L("Checking the key with %@…", "DeepSeek"))
+	}
+}
+
+// A sign-in waiting on the browser: the bot step offers Cancel Sign-In, which keeps the step, and
+// picking another provider stops it too, so its key can be checked.
+func TestOnboardingSignInCancels(t *testing.T) {
+	o, tt := onboardingDemo(t)
+	o.show(onboardingBot)
+	onboardingSettle(tt)
+	signIn := func() {
+		o.pickProvider("chatgpt")
+		o.busy, o.signingIn = true, true
+		o.status = &onboardingStatus{text: L("Waiting for the browser…")}
+		onboardingSettle(tt)
+	}
+	signIn()
+	onboardingExpect(t, tt, L("Cancel Sign-In"), L("Waiting for the browser…"))
+	onboardingRender(t, tt, "bot-signing-in")
+	attempt := o.attempt
+	onboardingClick(t, tt, L("Cancel Sign-In"))
+	if o.step != onboardingBot || o.busy || o.signingIn || o.status != nil || o.attempt == attempt {
+		t.Fatalf("step %d, busy %v, signing in %v, status %+v", o.step, o.busy, o.signingIn, o.status)
+	}
+	onboardingExpect(t, tt, L("Skip for Now"), L("Sign in with %@", "ChatGPT"))
+
+	signIn()
+	onboardingClick(t, tt, "ChatGPT")
+	if err := tt.ChooseMenuItem("DeepSeek"); err != nil {
+		t.Fatalf("menu %q: %v", tt.Menu(), err)
+	}
+	onboardingSettle(tt)
+	if o.providerKind != "deepseek" || o.busy || o.signingIn {
+		t.Fatalf("provider %q, busy %v, signing in %v", o.providerKind, o.busy, o.signingIn)
+	}
+	o.apiKey = "sk-test"
+	onboardingSettle(tt)
+	onboardingClick(t, tt, L("Continue"))
+	if o.step != onboardingDone {
+		t.Fatalf("step %d after Continue", o.step)
 	}
 }
 
