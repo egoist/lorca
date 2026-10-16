@@ -68,8 +68,12 @@ func invalidateWindows() {
 	for _, w := range windows() {
 		w.invalidate()
 	}
-	if app.main != nil && app.main.attention.flyout != nil {
-		app.main.attention.flyout.Invalidate()
+	if app.main != nil {
+		for _, flyout := range []flyoutWindow{app.main.attention.flyout, app.main.tasks.flyout} {
+			if flyout != nil {
+				flyout.Invalidate()
+			}
+		}
 	}
 }
 

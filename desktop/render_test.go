@@ -133,13 +133,19 @@ func TestRenderRunningCommand(t *testing.T) {
 		tt.Frame()
 	}
 	renderTo(t, tt, "command-card")
+	flyouts := stubFlyouts(t)
 	if err := tt.Click(L("Running tasks (%d)", 1)); err != nil {
 		t.Fatal(err)
 	}
-	tt.Frame()
-	renderTo(t, tt, "running-tasks")
-	if !tt.HasText(L("Run in Background")) {
-		t.Errorf("no Run in Background in %q", tt.Texts())
+	settle(tt)
+	if len(*flyouts) != 1 {
+		t.Fatalf("%d flyouts open", len(*flyouts))
+	}
+	f := (*flyouts)[0]
+	settleFlyout(f)
+	renderTo(t, f.tt, "running-tasks")
+	if !f.tt.HasText(L("Run in Background")) {
+		t.Errorf("no Run in Background in %q", f.tt.Texts())
 	}
 }
 

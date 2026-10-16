@@ -31,7 +31,8 @@ type attentionState struct {
 	height int
 }
 
-// flyoutWindow is what the attention flyout needs of a mygo flyout; tests stand one in.
+// flyoutWindow is what the header's flyouts (Attention, Running tasks) need of a mygo flyout;
+// tests stand one in.
 type flyoutWindow interface {
 	Close()
 	Invalidate()
@@ -96,8 +97,12 @@ func (m *mainWindow) attentionButton(c *ui.Context) {
 }
 
 func (m *mainWindow) openAttention(anchor ui.Rect) {
+	// One header flyout shows at a time.
+	if m.tasks.open {
+		m.closeRunningTasks()
+	}
 	s := &m.attention
-	s.height = m.attentionHeight()
+	s.height = flyoutHeight(attentionWidth, m.attentionPanel)
 	var flyout flyoutWindow
 	flyout = openFlyout(m.win, anchor, attentionWidth, s.height, m.attentionFlyout, func() {
 		if s.flyout == flyout {
@@ -132,34 +137,25 @@ func (m *mainWindow) toggleAttention() {
 	m.invalidate()
 }
 
-// attentionHeight is the panel's height, laid out offscreen, for the flyout to open at: a window
-// sized after it opens jumps.
-func (m *mainWindow) attentionHeight() int {
-	var height float32
-	// An element's bounds are its last layout's: the second pass reads the first's.
-	tt := ui.NewTester(func(c *ui.Context) { height = m.attentionPanel(c).Bounds().H }, attentionWidth, 1000)
-	tt.Frame()
-	return max(int(math.Ceil(float64(height))), 1)
-}
-
 // attentionFlyout is the flyout's content: the panel, which the flyout follows as the list
 // changes while it shows.
 func (m *mainWindow) attentionFlyout(c *ui.Context) {
-	panel := m.attentionPanel(c)
-	s := &m.attention
-	if h := int(math.Ceil(float64(panel.Bounds().H))); h > 0 && h != s.height && s.flyout != nil {
-		s.height = h
-		s.flyout.SetContentSize(attentionWidth, h)
-	}
+	fitFlyout(m.attention.flyout, &m.attention.height, attentionWidth, m.attentionPanel(c))
 }
 
-// attentionPanel is what the flyout draws. On macOS it is a system popover, whose material shows
-// through; elsewhere the window draws nothing, and the panel its own background.
+// attentionPanel is what the flyout draws.
 func (m *mainWindow) attentionPanel(c *ui.Context) ui.Element {
+	return flyoutPanel(c, attentionWidth).Children(func() { m.attentionList(c) })
+}
+
+// flyoutPanel is the root of a header flyout's content, `width` wide. On macOS the flyout is a
+// system popover, whose material shows through; elsewhere the window draws nothing, and the panel
+// its own background.
+func flyoutPanel(c *ui.Context, width int) ui.Element {
 	applyTheme(c)
 	p := colors(c)
 	c.Root().Background(ui.Transparent)
-	panel := ui.Column(c).Width(attentionWidth).Shrink(0)
+	panel := ui.Column(c).Width(float32(width)).Shrink(0)
 	switch {
 	case c.Vibrancy():
 	case runtime.GOOS == "windows":
@@ -167,8 +163,26 @@ func (m *mainWindow) attentionPanel(c *ui.Context) ui.Element {
 	default:
 		panel.Background(p.Popover).Radius(10).Border(0.5, p.ShadowEdge)
 	}
-	panel.Children(func() { m.attentionList(c) })
 	return panel
+}
+
+// flyoutHeight is the height of what `panel` draws, laid out offscreen, for a flyout to open at: a
+// window sized after it opens jumps.
+func flyoutHeight(width int, panel func(c *ui.Context) ui.Element) int {
+	var height float32
+	// An element's bounds are its last layout's: the second pass reads the first's.
+	tt := ui.NewTester(func(c *ui.Context) { height = panel(c).Bounds().H }, width, 1000)
+	tt.Frame()
+	return max(int(math.Ceil(float64(height))), 1)
+}
+
+// fitFlyout sizes `flyout`, while it shows, to `panel`'s height as its content changes; `height`
+// is the one it has.
+func fitFlyout(flyout flyoutWindow, height *int, width int, panel ui.Element) {
+	if h := int(math.Ceil(float64(panel.Bounds().H))); h > 0 && h != *height && flyout != nil {
+		*height = h
+		flyout.SetContentSize(width, h)
+	}
 }
 
 func (m *mainWindow) attentionList(c *ui.Context) {

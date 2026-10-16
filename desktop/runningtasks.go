@@ -12,8 +12,8 @@ import (
 // A chat's running tasks, after the macOS app's RunningTasksViewController: the commands its bots
 // have running in their terminals, each with what it does in the bot's words, who runs it and for
 // how long, the command (a click shows all of it), its last lines, and Stop, with Run in Background
-// while the bot's call still waits on it. One that ends while the list is open stays, saying how it
-// ended, until the list closes.
+// while the bot's call still waits on it, in a flyout under the header's button, as Attention's. One
+// that ends while the list is open stays, saying how it ended, until the list closes.
 
 type runningTask struct {
 	id           string
@@ -53,19 +53,25 @@ func (t runningTask) status(now time.Time) string {
 	return strings.Join(parts, " · ")
 }
 
-// runningTasksState is the popover's own while it is open: the commands it has listed, so one that
+// runningTasksWidth is the flyout's, as the Mac's popover.
+const runningTasksWidth = 420
+
+// runningTasksState is the flyout's own while it is open: the commands it has listed, so one that
 // ends stays, and what went wrong with Stop or Run in Background, by command.
 type runningTasksState struct {
-	open    bool
-	chatID  string
-	listed  map[string]bool
-	errors  map[string]string
-	busy    map[string]bool
-	hadAny  bool
-	wasOpen bool
+	// open is the flyout showing, or asked for before the button had a place to anchor it.
+	open   bool
+	flyout flyoutWindow
+	// height is the flyout's, fitted to its content.
+	height int
+	chatID string
+	listed map[string]bool
+	errors map[string]string
+	busy   map[string]bool
+	hadAny bool
 }
 
-// runningTasks are the chat's tasks for the popover: the commands running for long enough, and
+// runningTasks are the chat's tasks for the flyout: the commands running for long enough, and
 // those listed since it opened that have ended.
 func (s *runningTasksState) tasks(chatID string) []runningTask {
 	chat := store.Chat(chatID)
@@ -103,12 +109,15 @@ func (s *runningTasksState) tasks(chatID string) []runningTask {
 }
 
 // runningTasksButton is the chat's running commands in the header: shown while it has any, or
-// while their popover is open, with how many as a badge once there is more than one.
+// while their flyout is open, with how many as a badge once there is more than one.
 func (m *mainWindow) runningTasksButton(c *ui.Context, chatID string) {
 	p := colors(c)
 	s := &m.tasks
 	if s.chatID != chatID {
-		// The popover belongs to the chat on screen.
+		// The flyout belongs to the chat on screen.
+		if s.open {
+			m.closeRunningTasks()
+		}
 		*s = runningTasksState{chatID: chatID}
 	}
 	count := 0
@@ -118,7 +127,7 @@ func (m *mainWindow) runningTasksButton(c *ui.Context, chatID string) {
 	if count == 0 && !s.open {
 		return
 	}
-	holder := ui.Box(c)
+	holder := ui.Box(c.Key("running-tasks"))
 	var button ui.Element
 	holder.Children(func() {
 		button = hoverButton(c, hoverButtonOptions{Symbol: "terminal", Tooltip: L("Running tasks"), Label: L("Running tasks (%d)", count), Active: s.open})
@@ -128,17 +137,60 @@ func (m *mainWindow) runningTasksButton(c *ui.Context, chatID string) {
 			})
 		}
 	})
-	if button.Clicked() && (count > 0 || s.open) {
-		s.open = !s.open
+	if button.Clicked() {
+		if s.open {
+			m.closeRunningTasks()
+		} else if count > 0 {
+			s.open = true
+		}
 	}
-	if s.open && !s.wasOpen {
-		s.listed, s.errors, s.busy, s.hadAny = map[string]bool{}, map[string]string{}, map[string]bool{}, false
+	// The button is placed a frame after it first shows: the flyout opens under it then.
+	if s.open && s.flyout == nil {
+		if anchor := button.Bounds(); anchor.W > 0 {
+			m.openRunningTasks(anchor)
+		} else {
+			c.Invalidate()
+		}
 	}
-	s.wasOpen = s.open
-	ui.PopoverBase(c, button, &s.open, func(panel ui.Element) {
-		popoverPanel(c, panel).Width(420)
-		m.runningTasksList(c, chatID)
+}
+
+func (m *mainWindow) openRunningTasks(anchor ui.Rect) {
+	// One header flyout shows at a time.
+	if m.attention.open {
+		m.closeAttention()
+	}
+	s := &m.tasks
+	s.listed, s.errors, s.busy, s.hadAny = map[string]bool{}, map[string]string{}, map[string]bool{}, false
+	s.height = flyoutHeight(runningTasksWidth, m.runningTasksPanel)
+	var flyout flyoutWindow
+	flyout = openFlyout(m.win, anchor, runningTasksWidth, s.height, m.runningTasksFlyout, func() {
+		if s.flyout == flyout {
+			s.flyout, s.open = nil, false
+			m.invalidate()
+		}
 	})
+	s.flyout = flyout
+}
+
+func (m *mainWindow) closeRunningTasks() {
+	s := &m.tasks
+	flyout := s.flyout
+	s.flyout, s.open = nil, false
+	if flyout != nil {
+		flyout.Close()
+	}
+	m.invalidate()
+}
+
+// runningTasksFlyout is the flyout's content: the panel, which the flyout follows as the list
+// changes while it shows.
+func (m *mainWindow) runningTasksFlyout(c *ui.Context) {
+	fitFlyout(m.tasks.flyout, &m.tasks.height, runningTasksWidth, m.runningTasksPanel(c))
+}
+
+// runningTasksPanel is what the flyout draws.
+func (m *mainWindow) runningTasksPanel(c *ui.Context) ui.Element {
+	return flyoutPanel(c, runningTasksWidth).Children(func() { m.runningTasksList(c, m.tasks.chatID) })
 }
 
 func (m *mainWindow) runningTasksList(c *ui.Context, chatID string) {
@@ -149,7 +201,7 @@ func (m *mainWindow) runningTasksList(c *ui.Context, chatID string) {
 	if len(tasks) > 0 {
 		s.hadAny = true
 	} else if s.hadAny {
-		s.open = false
+		m.closeRunningTasks()
 		return
 	}
 	now := c.Now()
@@ -197,7 +249,7 @@ func (m *mainWindow) runningTasksList(c *ui.Context, chatID string) {
 					})
 					ui.Text(c, task.status(now)).FontSize(11).TextColor(p.Label2)
 					if commandBlock(c, "$ "+model.FirstLine(task.command), 1) {
-						s.open = false
+						m.closeRunningTasks()
 						m.presentCommandSheet(L("%@'s command", task.botName), task.command)
 					}
 					if task.output != "" {
