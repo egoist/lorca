@@ -48,6 +48,12 @@ func notificationFor(message *model.Message) *chatNotification {
 	case body.Kind == model.BodyTool && body.Tool.Run != nil && body.Tool.Run.State == model.CommandAsking:
 		base.kind, base.body = notifyPermission, L("Confirmation needed: %@", "$ "+model.FirstLine(body.Tool.Run.Command))
 		return &base
+	// A coding agent's report is to the user, who reviews its work: it alerts as a reply does. Why
+	// one ended on its own is its bot's to tell.
+	case body.Kind == model.BodyAgentMessage && body.AgentMessage != nil && !body.AgentMessage.Failed:
+		title := firstNonEmpty(body.AgentMessage.Title, model.CodingAgentName(body.AgentMessage.AgentKind))
+		base.kind, base.body = notifyReply, L("Message from %@: %@", title, body.AgentMessage.Text)
+		return &base
 	case body.Kind == model.BodyText:
 		if message.State.Kind == model.StateFailed {
 			base.kind, base.body = notifyFailure, L("Reply failed: %@", message.State.Error)
@@ -150,8 +156,9 @@ func (n *notifier) storeChanged(event model.Event) {
 	}
 }
 
-// Structured summaries/escalations alert on arrival, once per message, separately from
-// the generic turn-finished path. Preferences and read state are checked after the grace.
+// Structured summaries/escalations and a coding agent's report alert on arrival, once per message,
+// separately from the generic turn-finished path, since no turn of the bot's carries them.
+// Preferences and read state are checked after the grace.
 func (n *notifier) attentionChanged(chatID, messageID string) {
 	chat := store.Chat(chatID)
 	if chat == nil {
@@ -162,7 +169,8 @@ func (n *notifier) attentionChanged(chatID, messageID string) {
 		return
 	}
 	notification := notificationFor(message)
-	if notification == nil || notification.kind != notifySummary && notification.kind != notifyUrgent || n.announcedAttention[messageID] {
+	arrives := notification != nil && (notification.kind == notifySummary || notification.kind == notifyUrgent || message.Body.Kind == model.BodyAgentMessage)
+	if !arrives || n.announcedAttention[messageID] {
 		return
 	}
 	n.announcedAttention[messageID] = true

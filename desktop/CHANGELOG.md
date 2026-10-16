@@ -6,6 +6,12 @@ and the update window shows it.
 
 ## [Unreleased]
 
+- A bot hands a coding agent your request in your words, with only where the repository is and what
+  you already said, and no plan, checklist, branch, or way to check it of its own. The agent decides
+  how to work, pushes, opens a pull request, and reports to you with the commands it ran and what
+  they printed. Its report notifies you as a reply does; the bot no longer checks its work or
+  follows up on its own, and speaks up only when the agent ends on its own.
+
 ## [0.1.15]
 
 - On a Mac the menu bar has a Lorca menu, with About (the standard about panel), Check for

@@ -233,7 +233,7 @@ async fn run_budgeted_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) 
     if browser && bot.permissions.as_ref().is_none_or(|policy| policy.allows_connection(crate::browser::PLUGIN_ID)) {
         tools.push(Arc::new(crate::browser::SessionTool { app: app.clone(), bot: bot.clone(), chat_id: chat.meta.id.clone() }));
     }
-    // Claude Code or Codex on this Runner, which the bot starts and supervises.
+    // A coding agent on this Runner, which the bot hands the user's request to.
     if job.kind != crate::workflows::SAMPLE_JOB {
         tools.push(Arc::new(crate::coding::CodingAgentTool {
             app: app.clone(),
@@ -1877,10 +1877,13 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
     if job.kind != crate::workflows::SAMPLE_JOB {
         prompt.push_str(
             "\nFor a larger coding job in a repository on this Runner (a feature, a fix with tests, a refactor), or when the user \
-             asks for Claude Code, Codex, OpenCode, pi, or fx, hand it to a coding agent with coding_agent: it works on its own in the \
-             repository while you supervise. Give it a short title and a full brief, tell the user you started it, and end your \
-             turn; when its message arrives, check its work against the request, send it follow-ups, and tell the user how it \
-             went, with its pull request when it opened one. Its commands go through Auto-review as yours do.\n",
+             asks for Claude Code, Codex, OpenCode, pi, or fx, hand it to a coding agent with coding_agent and leave the job to it. \
+             Give it a short title and the user's request in their words, with only facts it cannot find, such as where the \
+             repository is; it decides how to do the job, where and on which branch, and how to check it. Tell the user you \
+             started it and end your turn. It pushes its work, opens a pull request, and reports to the user in the chat with the \
+             commands it ran and their output; the user reviews it, so do not check its work or follow up on your own. What the \
+             user then says about the job, pass on to it with coding_agent send, in their words. Its commands go through \
+             Auto-review as yours do.\n",
         );
     }
     if let Some(runner) = runner {

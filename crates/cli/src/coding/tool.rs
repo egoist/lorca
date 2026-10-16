@@ -33,20 +33,22 @@ pub struct CodingAgentTool {
 }
 
 const DESCRIPTION: &str = "Hand a coding job to a coding agent on your Runner (Claude Code, Codex, OpenCode, pi, or fx, as the user set up \
-in Settings → Coding Agents) and supervise it. `start` runs one on `prompt`, under a short `title` that names the job for the user \
-(\"Docs: use mygo.json in the launcher examples\"), in `folder` (default: your working directory), which it works in as it is: \
-it decides how, whether to make a branch or a worktree of its own, as when the user runs it in a terminal; say in the prompt if the \
-user asked for one. `prompt` is what the user asked for, in their words, plus what only you can tell the agent: the folder, what you \
-already found, how to check the work, and whether the user asked for a pull request. Do not replace their request with a plan, a \
-checklist, or your guesses at the fix: the agent decides how to do the job. While an agent has a job, leave the job to it. \
-`start` returns the agent's id at once and the agent works on its own: do not wait for it \
-or check on it in the same turn, tell the user you started it. When it is done, or ends on its own, what it said arrives in the chat \
-as a message from it and you get a turn: check its work, then send it a follow-up or tell the user how it went. `read` shows its \
-transcript since you last read it (or its last `lines`), `send` gives it `message`, taken up once it is done with what it does now, \
-or at once with `interrupt: true`, which stops that first; an agent whose process stopped starts again on its session. `stop` ends it, \
-`list` shows your agents in this chat. Every command it runs goes through Auto-review as yours do. Saved secrets never go in a \
-prompt or a message: for a job that needs one, such as publishing a package, name your command secrets in `secrets`, and the agent \
-has each as $NAME in its environment.";
+in Settings → Coding Agents). You pass the user's request on; the agent decides how to do the job and reports to the user itself. \
+`start` runs one on `prompt`, under a short `title` that names the job for the user (\"Docs: use mygo.json in the launcher \
+examples\"), in `folder` (default: your working directory), the repository or folder the job is in. `prompt` is what the user asked \
+for, in their words, plus only facts you know and the agent cannot find: where the repository is, and what the user already said \
+about the job earlier in the chat, in their words too. Add nothing of your own: no plan, checklist, acceptance criteria, guess at \
+the fix, scope, way to build or check it, commands to run, or branch or worktree to use. The agent decides all of that, where in \
+the folder it works and whether on a branch of its own included, and it pushes its work, opens a pull request, and ends with a \
+report for the user: what it did, the commands it ran with their output, and the pull request's link. `start` returns the agent's \
+id at once: tell the user you started it and end your turn. Do not check on it or review its work. When it is done, its report \
+lands in the chat as its message to the user, and you get no turn for it; when it ends on its own, you get a turn to tell the \
+user. `send` gives it `message`, which is what the user tells it, in their words, taken up once it is done with what it does now, \
+or at once with `interrupt: true`, which stops that first; an agent whose process stopped starts again on its session. `read` \
+shows its transcript since you last read it (or its last `lines`), for when the user asks how it stands. `stop` ends it, `list` \
+shows your agents in this chat. Every command it runs goes through Auto-review as yours do. Saved secrets never go in a prompt or \
+a message: for a job that needs one, such as publishing a package, name your command secrets in `secrets`, and the agent has each \
+as $NAME in its environment.";
 
 #[async_trait]
 impl Tool for CodingAgentTool {
@@ -62,12 +64,12 @@ impl Tool for CodingAgentTool {
             "properties": {
                 "action": { "type": "string", "enum": ["start", "read", "send", "stop", "list"] },
                 "title": { "type": "string", "description": "start: a short title for the job, a few words the user sees wherever the agent shows." },
-                "prompt": { "type": "string", "description": "start: what the user asked for, in their words, with what only you can tell the agent." },
+                "prompt": { "type": "string", "description": "start: what the user asked for, in their words, with only the facts you know and the agent cannot find, such as where the repository is." },
                 "agent": { "type": "string", "enum": KINDS, "description": "start: which agent, only when the user asked for one. Default: the first the user turned on that this Runner has." },
-                "folder": { "type": "string", "description": "start: the repository or folder to work in, absolute, ~/…, or relative to your working directory." },
+                "folder": { "type": "string", "description": "start: the repository or folder the job is in, absolute, ~/…, or relative to your working directory. The agent decides where in it to work, and whether on a branch or worktree of its own." },
                 "secrets": { "type": "array", "items": { "type": "string" }, "description": "start: names of your saved command secrets the job needs, given to the agent as environment variables. Every command it runs is then reviewed knowing which." },
                 "id": { "type": "string", "description": "read, send, stop: the agent's id." },
-                "message": { "type": "string", "description": "send: the follow-up." },
+                "message": { "type": "string", "description": "send: what the user tells the agent, in their words." },
                 "interrupt": { "type": "boolean", "description": "send: stop what it does now and take this message at once." },
                 "lines": { "type": "integer", "description": "read: its last lines instead of what is new." }
             },
@@ -206,18 +208,24 @@ impl CodingAgentTool {
             None => super::home_relative(&place.folder),
         };
         Ok(format!(
-            "Started {} ({id}) on “{title}” in {place}. It works on its own: when it is done, or ends, what it said arrives in the chat and you get a turn. Don't wait for it or check on it now; tell the user you started it. Meanwhile coding_agent read {id} shows its transcript, send gives it a follow-up, and stop ends it.",
+            "Started {} ({id}) on “{title}” in {place}. It works on its own and reports to the user in the chat when it is done, with its pull request; you get a turn only if it ends on its own. Tell the user you started it and end your turn. When the user asks, coding_agent read {id} shows its transcript, send passes it what they say, and stop ends it.",
             name(&kind)
         ))
     }
 }
 
-/// The job as the agent reads it: the bot's prompt, and where it works.
+/// The job as the agent reads it: the user's request the bot passed on, where it is, and what to
+/// hand the user back, since the user reviews the work and nobody checks it before.
 fn brief(prompt: &str, place: &workspace::Place, secrets: &[String]) -> String {
     let folder = place.folder.display();
     let mut brief = prompt.trim().to_string();
-    brief.push_str(&format!("\n\nYou work in {folder}."));
-    brief.push_str(" When you are done, end with a short summary of what you did and how you checked it. If you open a pull request, give its link.");
+    brief.push_str(&format!("\n\nThe job is in {folder}."));
+    brief.push_str(
+        " How you do it is yours to decide: where you work, whether on a branch or a worktree of your own, and how you check it. \
+         The user reviews your work, and nobody checks it before. Unless the request says otherwise, push your work and open a pull \
+         request when you are done. End with your report to the user: what you did, each command you ran to check it with what it \
+         printed, and the pull request's link, or why there is none.",
+    );
     if !secrets.is_empty() {
         let names = secrets.iter().map(|name| format!("${name}")).collect::<Vec<_>>().join(", ");
         brief.push_str(&format!(
@@ -250,7 +258,7 @@ fn state_words(record: &super::Record) -> String {
     match record.state.as_str() {
         "starting" => "starting".into(),
         "working" => "working".into(),
-        "idle" => "done, waiting for a follow-up".into(),
+        "idle" => "done".into(),
         _ => format!("ended ({})", record.outcome.as_deref().unwrap_or(&record.state)),
     }
 }

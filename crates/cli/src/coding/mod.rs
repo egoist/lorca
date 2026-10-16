@@ -1,9 +1,11 @@
-//! Coding agents a bot runs on its Runner and supervises: Claude Code, Codex, OpenCode, pi, or fx,
-//! in a folder there, as it is, on a prompt and under a title the bot gives the job.
+//! Coding agents a bot hands jobs to on its Runner: Claude Code, Codex, OpenCode, pi, or fx, in a
+//! folder there, as it is, on the user's request the bot passes on and under a title it gives the
+//! job. The agent decides how to do the job, pushes it, and opens a pull request; the user reviews it.
 //! The agent is a process of its own that outlives the turn that started it. The bot keeps its id
-//! across turns, reads its transcript, sends it follow-ups (queued, or cutting in), and stops it.
-//! When the agent is done with what it was asked, or ends on its own, what it said arrives in the
-//! chat as a message from it, and the bot gets a turn to check its work. Every command it runs
+//! across turns, and when the user asks, reads its transcript, passes it what they say (queued, or
+//! cutting in), and stops it. When the agent is done with what it was asked, what it said arrives
+//! in the chat as its report to the user, and the bot gets no turn for it; when it ends on its
+//! own, the bot gets a turn to tell the user. Every command it runs
 //! goes through the bot's Access and Auto-review, as the bot's own commands do, and what the
 //! review asks the user shows on the row that started it.
 //!
@@ -795,14 +797,15 @@ fn ended(app: &Arc<App>, agent: &Arc<Agent>, end: driver::Ended, generation: u64
     }
 }
 
-/// Puts what the agent said, or why it ended, in the chat as a message from it, and wakes its
-/// bot to hear it.
+/// Puts what the agent said, or why it ended, in the chat as a message from it. What it said when
+/// done is its report to the user, which alerts as a reply does; why it ended wakes its bot.
 fn tell(app: &Arc<App>, agent: &Arc<Agent>, text: &str, failed: bool) {
     let record = agent.record();
     let mut text = without_secrets(app, text.trim().to_string());
     if text.chars().count() > MESSAGE_CHARS {
         text = format!("{}…", text.chars().take(MESSAGE_CHARS).collect::<String>());
     }
+    let notice = format!("{}: {text}", record.title);
     let message = Message::new(
         &record.chat_id,
         Author::Bot { bot_id: record.bot_id.clone() },
@@ -810,6 +813,16 @@ fn tell(app: &Arc<App>, agent: &Arc<Agent>, text: &str, failed: bool) {
     );
     let message_id = message.id.clone();
     app.upsert_message(message, true);
+    // Done: the user reviews the work from its report, and the bot gets no turn for it.
+    if !failed {
+        app.coding_agents.sync(app, agent);
+        save(app);
+        if let (Some(chat), Some(bot)) = (app.chat(&record.chat_id), app.bot(&record.bot_id)) {
+            crate::push::reply(app, &chat, &bot, &notice);
+        }
+        return;
+    }
+    // Ended on its own: the bot hears why, to tell the user or start it again.
     agent.record.lock().unwrap().unheard = Some(message_id.clone());
     app.coding_agents.sync(app, agent);
     save(app);
@@ -827,8 +840,9 @@ fn tell(app: &Arc<App>, agent: &Arc<Agent>, text: &str, failed: bool) {
     });
 }
 
-/// What an `agent` turn opens with, beside the agent's message the bot reads in the chat: what
-/// came of its work and what to do. None when a turn heard it already.
+/// What an `agent` turn opens with, beside the message the bot reads in the chat: why the agent
+/// ended and what to do. None when a turn heard it already. Only an agent that ended on its own
+/// wakes its bot; one that is done reports to the user.
 pub fn wake_cue(app: &App, job: &crate::model::Job) -> Option<String> {
     let agent = app.coding_agents.all().into_iter().find(|agent| agent.record.lock().unwrap().unheard.as_deref() == Some(job.trigger_message_id.as_str()))?;
     let record = {
@@ -838,28 +852,14 @@ pub fn wake_cue(app: &App, job: &crate::model::Job) -> Option<String> {
     };
     save(app);
     let who = format!("{} ({}), the coding agent you started on “{}”", name(&record.kind), record.id, record.title);
-    let place = match &record.branch {
-        Some(branch) => format!("It works in {} on branch {branch}.", home_relative(&record.folder)),
-        None => format!("It works in {}.", home_relative(&record.folder)),
-    };
-    let cue = if record.state == "failed" {
-        let tail = agent.transcript.lock().unwrap().last_lines(12);
-        let tail = if tail.trim().is_empty() { String::new() } else { format!(" Its last lines:\n{tail}\n") };
-        format!(
-            "[{who}, has ended: {}. Its last message in the chat says why.{tail} Tell the user, or send it a message with coding_agent send to start it again on its session.]",
-            record.outcome.as_deref().unwrap_or("it exited")
-        )
-    } else {
-        let changes = match record.changes {
-            Some(AgentChanges { files: 0, .. }) => " It changed no files.".to_string(),
-            Some(changes) => format!(" It changed {} file{} (+{} −{}).", changes.files, if changes.files == 1 { "" } else { "s" }, changes.added, changes.removed),
-            None => String::new(),
-        };
-        let pull_request = record.pull_request.as_ref().map(|link| format!(" Its pull request: {link}.")).unwrap_or_default();
-        format!(
-            "[{who}, is done; its message in the chat says what it did. {place}{changes}{pull_request} Check its work against what you asked (coding_agent read shows its transcript), then send it a follow-up with coding_agent send, or tell the user how it went.]"
-        )
-    };
+    let tail = agent.transcript.lock().unwrap().last_lines(12);
+    let tail = if tail.trim().is_empty() { String::new() } else { format!(" Its last lines:\n{tail}\n") };
+    let cue = format!(
+        "[{who}, has ended on its own: {}. Its last message in the chat says why.{tail} Tell the user why in a line or two. When it ended \
+         for a passing reason, such as a lost connection, you may start it again on its session with coding_agent send and a message \
+         that asks it to go on, adding nothing of your own; do not take the job over or change it.]",
+        record.outcome.as_deref().unwrap_or("it exited")
+    );
     Some(without_secrets(app, cue))
 }
 
@@ -900,7 +900,7 @@ async fn approve(app: &Arc<App>, agent: &Arc<Agent>, approval: Approval) -> Resu
                 return Ok(());
             }
             let mut description = format!(
-                "{who}, a coding agent this bot started, wants to run this shell command as the user on {runner_name}, with full filesystem, process, credential, and network access. Working directory: {}.",
+                "{who}, a coding agent this bot started, wants to run this shell command as the user on {runner_name}, with full filesystem, process, credential, and network access. Working directory: {}. Lorca asks every coding agent to push its work and open a pull request when it is done, unless the user's request says otherwise.",
                 home_relative(&folder)
             );
             if !record.secrets.is_empty() {
@@ -947,8 +947,8 @@ async fn approve(app: &Arc<App>, agent: &Arc<Agent>, approval: Approval) -> Resu
         let why = reason.as_deref().unwrap_or("Auto-review is off, so every command asks");
         return Err(format!(
             "This needs the user's permission ({why}), and nobody is watching the run that started you, so it did not run. Go on \
-             with work that does not depend on it, or stop and name this action exactly in your last message, so the bot that \
-             started you can ask the user."
+             with work that does not depend on it, or stop and name this action exactly in your last message, so the user \
+             can decide."
         ));
     }
     // One question at a time.

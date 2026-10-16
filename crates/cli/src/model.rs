@@ -325,9 +325,10 @@ pub enum Body {
         to: String,
         reason: String,
     },
-    /// What a coding agent said when it was done with what it was asked, or why it ended on its
-    /// own (`failed`). The apps show it as "Message from ⬢ Title"; the bot that runs the agent
-    /// reads it in the turn it wakes for it (`crate::coding`).
+    /// What a coding agent said when it was done with what it was asked, its report to the user,
+    /// or why it ended on its own (`failed`). The apps show it as "Message from ⬢ Title"; the
+    /// bot that runs the agent reads it in its history, and wakes for it only when it is `failed`
+    /// (`crate::coding`).
     AgentMessage {
         agent_id: String,
         /// `claude`, `codex`, `opencode`, `pi`, or `fx`.
@@ -789,8 +790,9 @@ impl Message {
     }
 
 
-    /// A reply, failure, or pending confirmation the user has not seen. Tool activity and
-    /// updates to an answered question do not add to the count.
+    /// A reply, failure, or pending confirmation the user has not seen, or a coding agent's
+    /// report to the user. Tool activity and updates to an answered question do not add to the
+    /// count, nor does why an agent ended, which its bot's reply tells.
     pub fn counts_unread(&self) -> bool {
         if !matches!(self.author, Author::Bot { .. }) || self.notification == Some(crate::attention::Notification::Quiet) {
             return false;
@@ -799,6 +801,7 @@ impl Message {
             Body::Text { .. } => matches!(self.state, MessageState::Complete | MessageState::Failed { .. }),
             Body::Permission { .. } => self.is_complete() && self.confirmation().is_some(),
             Body::Tool { .. } => self.confirmation().is_some(),
+            Body::AgentMessage { failed, .. } => !failed,
             _ => false,
         }
     }
@@ -1174,8 +1177,8 @@ pub struct Job {
     pub task_context: Option<crate::tasks::Task>,
     /// `turn` for a user message in a DM, `room_turn` for one member's turn in a group,
     /// `message` for a teammate's message_bot, `routine` for a run of a routine, `command` for
-    /// a command the bot left running that ended, `agent` for what a coding agent the bot runs
-    /// did, `event` for a service event an event subscription's inbox admitted.
+    /// a command the bot left running that ended, `agent` for a coding agent the bot runs that
+    /// ended on its own, `event` for a service event an event subscription's inbox admitted.
     pub kind: String,
     pub trigger_message_id: String,
     /// A durable delegated request or the continuation that reads its report.

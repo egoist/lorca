@@ -398,15 +398,12 @@ async fn question(app: &App) -> (String, Option<String>, Option<String>) {
 }
 
 #[tokio::test]
-async fn claude_code_works_in_the_folder_asks_in_the_chat_and_its_message_wakes_the_bot() {
+async fn claude_code_works_in_the_folder_asks_in_the_chat_and_reports_to_the_user() {
     let scratch = setup().await;
     let app = &scratch.app;
     auto_review_off(app);
     let tool = tool(&scratch);
     let row = start_row(app, "call-1");
-    // Held, so the turn that tells the bot waits, and the test reads what it would.
-    let chat_lock = app.chat_lock("chat");
-    let held = chat_lock.lock().await;
 
     let started = call(&tool, "call-1", json!({ "action": "start", "agent": "claude", "title": "Login: fix the Safari bug", "folder": "shop", "prompt": "Fix the login bug\nwith a test" })).await.unwrap();
     assert!(started.starts_with("Started Claude Code (agent-") && started.contains("(on branch main)") && started.contains("“Login: fix the Safari bug”"), "{started}");
@@ -436,20 +433,21 @@ async fn claude_code_works_in_the_folder_asks_in_the_chat_and_its_message_wakes_
     let kinds: Vec<&str> = items.iter().map(|item| item.kind.as_str()).collect();
     assert_eq!(kinds, vec!["status", "prompt", "thought", "tool", "tool", "text"], "{items:?}");
     assert_eq!(items[0].text, format!("Working in {} on main", home_relative(&record.folder)));
-    assert!(items[1].text.starts_with("Fix the login bug\nwith a test\n\nYou work in "), "{}", items[1].text);
+    // The user's request as the bot passed it on, then where the job is and what to hand back.
+    assert!(items[1].text.starts_with("Fix the login bug\nwith a test\n\nThe job is in "), "{}", items[1].text);
+    assert!(items[1].text.contains("push your work and open a pull request") && items[1].text.contains("each command you ran"), "{}", items[1].text);
     let push = items[3].tool.as_ref().unwrap();
     assert_eq!((push.kind.as_str(), push.title.as_str(), push.status.as_str(), push.output.as_deref()), ("execute", "git push origin feature", "done", Some("pushed")));
     let edit = items[4].tool.as_ref().unwrap();
     assert_eq!((edit.kind.as_str(), edit.title.as_str(), edit.added), ("edit", "README.md", Some(1)));
 
-    // What it said lands in the chat as its message, and the bot wakes to hear it, once.
+    // What it said lands in the chat as its report to the user, unread like a reply, and the
+    // bot gets no turn to check it.
     let (message_id, agent_id, text, failed) = eventually("its message", || agent_messages(app).pop()).await;
     assert_eq!((agent_id.as_str(), text.as_str(), failed), (agent.id().as_str(), "Fixed it and opened https://github.com/acme/shop/pull/7", false));
-    let job = crate::runtime::agent_job(app, "chat", "b1", &message_id);
-    let cue = wake_cue(app, &job).expect("the bot hears it");
-    assert!(cue.contains("is done") && cue.contains("on branch main") && cue.contains("It changed 1 file (+1 −0)") && cue.contains("pull/7"), "{cue}");
-    assert!(wake_cue(app, &job).is_none(), "heard once");
-    drop(held);
+    assert!(app.message("chat", &message_id).unwrap().counts_unread());
+    assert!(agent.record().unheard.is_none());
+    assert!(wake_cue(app, &crate::runtime::agent_job(app, "chat", "b1", &message_id)).is_none(), "the bot does not wake for it");
 
     // A follow-up while it waits; the bot reads what is new since it last read.
     let id = agent.id();
@@ -584,8 +582,9 @@ async fn an_agent_that_ends_on_its_own_says_why_in_the_chat() {
     assert_eq!(failed.outcome.as_deref(), Some("Claude Code exited with code 3: out of credits"));
     let (message_id, _, text, failed) = eventually("its message", || agent_messages(app).pop()).await;
     assert_eq!((text.as_str(), failed), ("Claude Code exited with code 3: out of credits", true));
+    assert!(!app.message("chat", &message_id).unwrap().counts_unread(), "the bot's reply tells the user");
     let cue = wake_cue(app, &crate::runtime::agent_job(app, "chat", "b1", &message_id)).unwrap();
-    assert!(cue.contains("has ended: Claude Code exited with code 3"), "{cue}");
+    assert!(cue.contains("has ended on its own: Claude Code exited with code 3") && cue.contains("Tell the user"), "{cue}");
 }
 
 #[tokio::test]
@@ -646,7 +645,7 @@ async fn codex_runs_read_only_commands_at_once_and_reports_its_plan() {
     assert!(items.iter().any(|item| item.kind == "plan" && item.plan[0].status == "in_progress"), "{items:?}");
     assert!(items.iter().any(|item| item.tool.as_ref().is_some_and(|step| step.title == "git status" && step.status == "done")), "{items:?}");
     let list = call(&tool, "call-2", json!({ "action": "list" })).await.unwrap();
-    assert!(list.contains(&agent.id()) && list.contains("Codex “Readme”: done, waiting for a follow-up"), "{list}");
+    assert!(list.contains(&agent.id()) && list.contains("Codex “Readme”: done in "), "{list}");
     call(&tool, "call-3", json!({ "action": "stop", "id": agent.id() })).await.unwrap();
     assert_eq!(card(app, &row).state, "stopped");
     assert!(call(&tool, "call-4", json!({ "action": "read", "id": "agent-nope" })).await.unwrap_err().contains("no coding agent"));
@@ -850,16 +849,14 @@ async fn a_saved_secret_reaches_only_the_environment_the_bot_names_it_for() {
     let (asked, command, _) = question(app).await;
     assert_eq!(command.as_deref(), Some("npm publish --token {{secret:NPM_TOKEN}}"));
     assert!(crate::plugins::mcp::answer(app, &asked, Decision::Allowed));
-    let (message_id, _, text, _) = eventually("its message", || agent_messages(app).pop()).await;
+    let (_, _, text, _) = eventually("its message", || agent_messages(app).pop()).await;
     assert_eq!(text, "Published with {{secret:NPM_TOKEN}}");
 
     let received = std::fs::read_to_string(record.folder.join("received.txt")).unwrap();
     assert!(!received.contains(value) && received.contains("{{secret:NPM_TOKEN}}") && received.contains("$NPM_TOKEN"), "{received}");
     assert!(!std::fs::read_to_string(programs().join("args.log")).unwrap().contains(value));
 
-    // Its transcript, its file, the cue, and the chat hold only the placeholder.
-    let cue = wake_cue(app, &crate::runtime::agent_job(app, "chat", "b1", &message_id)).unwrap();
-    assert!(!cue.contains(value), "{cue}");
+    // Its transcript, its file, and the chat hold only the placeholder.
     assert!(!std::fs::read_to_string(transcript::file(&app.config.home, &record.id)).unwrap().contains(value));
     let transcript = serve(app, "coding.transcript", &json!({ "chat_id": "chat", "message_id": row })).await.unwrap();
     assert!(!transcript.to_string().contains(value) && transcript.to_string().contains("{{secret:NPM_TOKEN}}"), "{transcript}");

@@ -283,7 +283,7 @@ func TestRenderCodingAgents(t *testing.T) {
 	renderBoth(t, tt, "coding-page-finished")
 }
 
-func TestTheAskingAgentNotifies(t *testing.T) {
+func TestAnAgentNotifiesWhenItAsksAndWhenItReports(t *testing.T) {
 	demoWindow(t)
 	chat := store.Chat("chat-patch")
 	// Its card asks and notifies; its row, which may be far up the chat, does not.
@@ -298,11 +298,15 @@ func TestTheAskingAgentNotifies(t *testing.T) {
 	if row := model.AgentRowOf(chat, "agent-b85e4f10"); asks(row) || notificationFor(row) != nil {
 		t.Error("the asking agent's row asks too")
 	}
-	// What an agent said pushes nothing; the bot's reply after it does.
-	for _, message := range chat.Messages {
-		if message.Body.Kind == model.BodyAgentMessage && notificationFor(message) != nil {
-			t.Error("an agent's message notifies")
-		}
+	// An agent's report to the user notifies as a reply does; why one ended is its bot's to tell.
+	report := &model.Message{Author: card.Author, Body: model.Body{Kind: model.BodyAgentMessage,
+		AgentMessage: &model.AgentMessage{AgentKind: "claude", Title: "Login", Text: "Fixed it.\nhttps://github.com/acme/shop/pull/7"}}}
+	if notification := notificationFor(report); notification == nil || notification.kind != notifyReply || notification.body != L("Message from %@: %@", "Login", "Fixed it.\nhttps://github.com/acme/shop/pull/7") {
+		t.Errorf("report notification %+v", notification)
+	}
+	report.Body.AgentMessage.Failed = true
+	if notificationFor(report) != nil {
+		t.Error("an agent that ended on its own notifies")
 	}
 }
 
