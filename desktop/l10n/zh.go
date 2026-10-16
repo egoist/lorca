@@ -794,7 +794,7 @@ var zh = map[string]string{
 	"Paste an %@ API key to continue.": "请粘贴 %@ API 密钥以继续。",
 	"Paste and Match Style":            "粘贴并匹配样式",
 	"Paste the JSON a server's README gives, or a whole mcpServers block from Claude Desktop or Cursor, into any field.": "可以把服务器 README 中的 JSON，或 Claude Desktop、Cursor 的整个 mcpServers 配置块，粘贴到任意一栏。",
-	"Paste the twelve groups from your backup phrase. Everything else is re-derived and unwrapped from the relay.":       "粘贴备份短语中的十二组字符。其余内容会重新派生，并从中继解开。",
+	"Paste the 13 groups from your backup phrase. Everything else is re-derived and unwrapped from the relay.":           "粘贴备份短语中的 13 组字符。其余内容会重新派生，并从中继解开。",
 	"Pause":                      "暂停",
 	"Pause %@":                   "暂停 %@",
 	"Paused":                     "已暂停",

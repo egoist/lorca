@@ -70,10 +70,11 @@ func TestOnboardingCreate(t *testing.T) {
 	// Return presses Create a New Identity, the welcome's default button.
 	tt.Key(0, ui.KeyEnter)
 	onboardingSettle(tt)
-	if o.step != onboardingCreate || len(o.phrase) != 12 {
+	// 32 bytes of base32 are 52 letters, 13 groups of four.
+	if o.step != onboardingCreate || len(o.phrase) != 13 {
 		t.Fatalf("step %d, phrase %q", o.step, o.phrase)
 	}
-	onboardingExpect(t, tt, L("Your backup phrase"), "k4mq", "m5yq", "12", L("Copy Phrase"), L("I wrote this phrase down somewhere safe"))
+	onboardingExpect(t, tt, L("Your backup phrase"), "dla2", "g5pq", "13", L("Copy Phrase"), L("I wrote this phrase down somewhere safe"))
 	onboardingRender(t, tt, "create")
 
 	// Continue waits for the check box.
@@ -162,7 +163,7 @@ func TestOnboardingRestore(t *testing.T) {
 	if o.step != onboardingRestore {
 		t.Fatalf("Restore ran without a phrase")
 	}
-	tt.Type("k4mq 7rth 2bnz wq5f j3xd pv82 ct6m 9hsa e7lw 4knr zb3u m5yq")
+	tt.Type(strings.Join(model.MockBackupPhrase, " "))
 	tt.Key(0, ui.KeyEnter)
 	onboardingSettle(tt)
 	if o.step != onboardingProvider || o.origin != onboardingRestored {

@@ -406,7 +406,7 @@ func (o *onboardingWindow) view(c *ui.Context) {
 				}
 				defaultButton = o.joinStep(c, onboardingJoinStep{
 					title:       L("Restore your identity"),
-					subtitle:    L("Paste the twelve groups from your backup phrase. Everything else is re-derived and unwrapped from the relay."),
+					subtitle:    L("Paste the 13 groups from your backup phrase. Everything else is re-derived and unwrapped from the relay."),
 					placeholder: "k4mq 7rth 2bnz …",
 					note:        note,
 					action:      L("Restore"),
@@ -512,8 +512,25 @@ func (o *onboardingWindow) stepLayout(c *ui.Context, s onboardingStepOptions, bo
 	})
 }
 
-func (o *onboardingWindow) createStep(c *ui.Context) *onboardingButton {
+// phraseGrid is the backup phrase's 13 groups, numbered, seven to a row. The groups are one
+// selection, which a drag runs across instead of moving the window; their numbers stay out of it.
+func phraseGrid(c *ui.Context, phrase []string) {
 	p := colors(c)
+	tracks := make([]ui.Track, 7)
+	for i := range tracks {
+		tracks[i] = ui.Fixed(72)
+	}
+	ui.Grid(c).Selectable().ColumnTracks(tracks...).Gap(8).Children(func() {
+		for i, word := range phrase {
+			ui.Row(c).Height(34).Gap(2).Padding(0, 0, 0, 8).Radius(7).Background(p.Code).Children(func() {
+				ui.Text(c, strconv.Itoa(i+1)).Width(16).FontSize(10).TextColor(p.Label3).FontFeatures("tnum").SingleLine().Unselectable()
+				ui.Text(c, word).Font(monoFont).FontSize(13).FontWeight(500).SingleLine()
+			})
+		}
+	})
+}
+
+func (o *onboardingWindow) createStep(c *ui.Context) *onboardingButton {
 	next := onboardingButton{title: L("Continue"), disabled: !o.savedPhrase, run: func() {
 		if o.firstBot() != nil {
 			o.show(onboardingBot)
@@ -527,16 +544,7 @@ func (o *onboardingWindow) createStep(c *ui.Context) *onboardingButton {
 		next:     next,
 	}, func() {
 		ui.Column(c).AlignItems(ui.Start).Gap(16).Children(func() {
-			// The words are one selection, which a drag runs across instead of moving the window;
-			// their numbers stay out of it.
-			ui.Grid(c).Selectable().ColumnTracks(ui.Fixed(128), ui.Fixed(128), ui.Fixed(128), ui.Fixed(128)).Gap(8).Children(func() {
-				for i, word := range o.phrase {
-					ui.Row(c).Height(34).Gap(2).Padding(0, 0, 0, 9).Radius(7).Background(p.Code).Children(func() {
-						ui.Text(c, strconv.Itoa(i+1)).Width(16).FontSize(10).TextColor(p.Label3).FontFeatures("tnum").SingleLine().Unselectable()
-						ui.Text(c, word).Font(monoFont).FontSize(13).FontWeight(500).SingleLine()
-					})
-				}
-			})
+			phraseGrid(c, o.phrase)
 			copyButton(c, strings.Join(o.phrase, " "), copyOptions{Title: L("Copy Phrase"), Bordered: true})
 			ui.Checkbox(c, &o.savedPhrase, L("I wrote this phrase down somewhere safe")).Gap(7).FontSize(13)
 		})

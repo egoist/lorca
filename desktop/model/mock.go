@@ -632,7 +632,8 @@ func devopsThread() []*Message {
 }
 
 // MockBackupPhrase is the demo's backup phrase, for onboarding without a CLI.
-var MockBackupPhrase = []string{"k4mq", "7rth", "2bnz", "wq5f", "j3xd", "pv82", "ct6m", "9hsa", "e7lw", "4knr", "zb3u", "m5yq"}
+// It is a real one: 32 bytes in base32, 13 groups of four, as the CLI makes them.
+var MockBackupPhrase = []string{"dla2", "rose", "5nga", "6a3k", "o3qi", "empu", "7iaz", "nspd", "jaow", "zymz", "xkqs", "t3ua", "g5pq"}
 
 // mockPlaybooks are the demo's skills: two of the Developer's and a draft it proposed, and one for
 // the Launch room.
