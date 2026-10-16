@@ -262,7 +262,7 @@ func (m *mainWindow) chatRowView(c *ui.Context, chat *model.Chat, row chatRow, s
 			m.messageCell(c, chat, message, row.groupStart, row.stack, showsAvatar, s)
 		case model.BodyTool:
 			if body.Tool.IsAgentMessage() {
-				m.agentRow(c, chat, message, cardAvatar, row.groupStart)
+				m.agentRow(c, chat, message, row.groupStart)
 			} else if body.Tool.Run != nil {
 				m.commandCard(c, chat, message, cardAvatar, row.groupStart)
 			} else {

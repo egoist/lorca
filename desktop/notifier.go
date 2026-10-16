@@ -48,10 +48,6 @@ func notificationFor(message *model.Message) *chatNotification {
 	case body.Kind == model.BodyTool && body.Tool.Run != nil && body.Tool.Run.State == model.CommandAsking:
 		base.kind, base.body = notifyPermission, L("Confirmation needed: %@", "$ "+model.FirstLine(body.Tool.Run.Command))
 		return &base
-	case body.Kind == model.BodyTool && body.Tool.Agent != nil && body.Tool.Agent.State == model.AgentAsking && body.Tool.Agent.Question != nil:
-		agent := body.Tool.Agent
-		base.kind, base.body = notifyPermission, L("Confirmation needed: %@", agent.Name()+": $ "+model.FirstLine(agent.Question.Command))
-		return &base
 	case body.Kind == model.BodyText:
 		if message.State.Kind == model.StateFailed {
 			base.kind, base.body = notifyFailure, L("Reply failed: %@", message.State.Error)
@@ -193,8 +189,7 @@ func allowsNotification(notification *chatNotification) bool {
 func asks(message *model.Message) bool {
 	body := message.Body
 	return body.Kind == model.BodyPermission && body.Request.IsPending() ||
-		body.Kind == model.BodyTool && body.Tool.Run != nil && body.Tool.Run.State == model.CommandAsking ||
-		body.Kind == model.BodyTool && body.Tool.Agent != nil && body.Tool.Agent.State == model.AgentAsking
+		body.Kind == model.BodyTool && body.Tool.Run != nil && body.Tool.Run.State == model.CommandAsking
 }
 
 func (n *notifier) rememberPermissions() {

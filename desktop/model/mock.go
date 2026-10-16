@@ -523,11 +523,16 @@ func developerThread() []*Message {
 				ID: "agent-b85e4f10", Kind: "codex", Title: "Settings: add a dark mode toggle",
 				Task:   "Add a dark mode toggle to the Settings page, after the Appearance row.",
 				Folder: "~/Projects/site", Branch: "dark-mode-toggle", State: AgentAsking,
-				Question: &AgentQuestion{Command: "git push -u origin dark-mode-toggle", Reason: "Pushing sends the branch to GitHub, where others can see it.", Rule: "push coding agents' branches to GitHub", HasRule: true},
-				Device:   "Studio", StartedAt: minutesAgo(5), UpdatedAt: minutesAgo(1),
+				Device: "Studio", StartedAt: minutesAgo(5), UpdatedAt: minutesAgo(1),
 			},
 		}}, minutesAgo(5)),
 		mockMessage(BotAuthor("bot-patch"), textBody("I asked Claude Code to fix the Chinese page too. Codex is adding the dark mode toggle on a branch of its own."), minutesAgo(5)),
+		// What the asking agent asks: a card of its own at the end of the chat.
+		mockMessage(BotAuthor("bot-patch"), Body{Kind: BodyPermission, Request: &PermissionRequest{
+			PluginID: "computer", PluginName: "Studio", Tool: "bash", Summary: "$ git push -u origin dark-mode-toggle", Command: "git push -u origin dark-mode-toggle",
+			Reason: "Codex, the coding agent on “Settings: add a dark mode toggle”, asks to run this. Pushing sends the branch to GitHub, where others can see it.",
+			Rule:   "push coding agents' branches to GitHub", HasRule: true, Decision: DecisionPending,
+		}}, minutesAgo(1)),
 	}
 }
 

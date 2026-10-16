@@ -86,7 +86,13 @@ func TestSaveAsSkill(t *testing.T) {
 	tt := ui.NewTester(m.frame(m.view), 1180, 900)
 	settle(tt)
 	chat := store.Chat("chat-patch")
-	reply := chat.Messages[len(chat.Messages)-1]
+	// The bot's last reply; an agent's question card ends the chat after it.
+	var reply *model.Message
+	for _, message := range chat.Messages {
+		if message.Body.Kind == model.BodyText && message.Author.Kind == model.AuthorBot {
+			reply = message
+		}
+	}
 	s := m.presentPlaybookCapture(chat.ID, reply)
 	settleTransitions(tt)
 	wantText(t, tt, L("Save as Skill"), L("You"), "Developer")

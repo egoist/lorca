@@ -495,8 +495,8 @@ impl ReplyTo {
 }
 
 /// A coding agent a bot runs on its Runner (`crate::coding`), as the row of the `coding_agent`
-/// call that started it carries it: what it was asked and where it works, how it stands, what it
-/// asks the user, and what came of it.
+/// call that started it carries it: what it was asked and where it works, how it stands, and
+/// what came of it.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct AgentRun {
     /// The bot's handle for it, across turns: `agent-3f9a2c1d`.
@@ -514,11 +514,10 @@ pub struct AgentRun {
     pub folder: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
-    /// `starting`, `working`, `asking` (a `question` waits for the user), `idle` (done with
-    /// what it was asked; it takes a follow-up). Once it ended: `failed` or `stopped`.
+    /// `starting`, `working`, `asking` (its question waits for the user on a permission card
+    /// in the chat), `idle` (done with what it was asked; it takes a follow-up). Once it ended:
+    /// `failed` or `stopped`.
     pub state: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub question: Option<AgentQuestion>,
     /// Why it ended, in words: "Stopped", "Claude Code exited with code 1".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
@@ -601,28 +600,6 @@ pub struct AgentChanges {
     pub files: u32,
     pub added: u32,
     pub removed: u32,
-}
-
-/// What a coding agent asks the user, when Auto-review asks: whether it may run `command` (or
-/// do what `command` says, for a change or a tool), answered with `chats.permission`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-pub struct AgentQuestion {
-    /// `command`.
-    pub kind: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub command: Option<String>,
-    /// Why Auto-review asked.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    /// The plain-language rule Always allow adds, which Auto-review proposed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rule: Option<String>,
-}
-
-/// One line about what a coding agent asks, for a notification: "Claude Code: $ git push".
-pub fn agent_question_summary(agent: &AgentRun, question: &AgentQuestion) -> String {
-    let what = format!("$ {}", question.command.as_deref().unwrap_or("").lines().next().unwrap_or("").trim());
-    format!("{}: {}", coding_agent_name(&agent.kind), what.chars().take(180).collect::<String>())
 }
 
 /// A `bash` call as its card shows it: Auto-review checking it, the question it asks, the
@@ -835,7 +812,6 @@ impl Message {
                 let line = run.command.lines().next().unwrap_or("").trim();
                 Some(format!("$ {}", line.chars().take(180).collect::<String>()))
             }
-            Body::Tool { agent: Some(agent), .. } if agent.state == "asking" => agent.question.as_ref().map(|question| crate::model::agent_question_summary(agent, question)),
             _ => None,
         }
     }

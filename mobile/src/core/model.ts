@@ -403,10 +403,10 @@ export interface CommandRun {
 }
 
 /// A coding agent a bot runs on its Runner, as the row of the `coding_agent` call that started it
-/// carries it: what the bot titled the job and where it works, how it stands, what it asks the user,
-/// and what came of it. The transcript shows the row as "Messaged ⬢ Title", Details lists it under
-/// Coding, and its page reads `coding.transcript`. A question is answered like a command's
-/// (`chats.permission`); Stop is `coding.stop`.
+/// carries it: what the bot titled the job and where it works, how it stands, and what came of it.
+/// The transcript shows the row as "Messaged ⬢ Title", Details lists it under Coding, and its page
+/// reads `coding.transcript`. While it asks, its question is a pending `permission` message at the
+/// end of the chat, a shell command's card; Stop is `coding.stop`.
 export interface AgentRun {
   /** The bot's handle for it, `agent-3f9a2c1d`; empty until it started, and for good when the start failed. */
   id: string;
@@ -421,8 +421,6 @@ export interface AgentRun {
   branch?: string;
   /** `idle`: done with what it was asked, it takes a follow-up. */
   state: "starting" | "working" | "asking" | "idle" | "failed" | "stopped";
-  /** Only while it asks. */
-  question?: AgentQuestion;
   /** Why it ended, in words. */
   outcome?: string;
   pull_request?: string;
@@ -434,15 +432,6 @@ export interface AgentRun {
   started_at?: number;
   /** Unix seconds: its last change of state. */
   updated_at?: number;
-}
-
-/// What a coding agent asks the user when Auto-review asks: whether it may run `command`.
-export interface AgentQuestion {
-  kind: "command";
-  command?: string;
-  reason?: string;
-  /** The rule Always allow adds. */
-  rule?: string;
 }
 
 /// One of a Runner's coding agents, from `coding.agents`: on or off, installed there or not, and

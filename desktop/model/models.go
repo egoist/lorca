@@ -1620,23 +1620,6 @@ func CodingAgentName(kind string) string {
 	return "Claude Code"
 }
 
-// AgentQuestion is what a coding agent asks the user when Auto-review asks: whether it may run a
-// command, answered as a command card's question is (`chats.permission`).
-type AgentQuestion struct {
-	Command string
-	Reason  string
-	Rule    string
-	HasRule bool
-}
-
-// Decisions are the buttons it offers. Always allow only with a rule to add.
-func (q *AgentQuestion) Decisions() []Answer {
-	if !q.HasRule {
-		return []Answer{{L("Allow once"), "allow"}, {L("Deny"), "deny"}}
-	}
-	return []Answer{{L("Allow once"), "allow"}, {L("Always allow"), "always"}, {L("Deny"), "deny"}}
-}
-
 // AgentChanges is what a coding agent's work changed against the commit it started from.
 type AgentChanges struct {
 	Files   int `json:"files"`
@@ -1645,8 +1628,8 @@ type AgentChanges struct {
 }
 
 // AgentRun is a coding agent a bot runs on its Runner, as the row of the `coding_agent` call that
-// started it carries it: the bot's title for the job, where it works, how it stands, what it asks,
-// and what came of it.
+// started it carries it: the bot's title for the job, where it works, how it stands, and what came
+// of it. While it asks, its question is a permission card of its own at the end of the chat.
 type AgentRun struct {
 	// ID is the bot's handle for it, empty until it started (and for good when the start failed).
 	ID string
@@ -1657,7 +1640,6 @@ type AgentRun struct {
 	Folder      string
 	Branch      string
 	State       AgentState
-	Question    *AgentQuestion
 	Outcome     string
 	PullRequest string
 	Changes     *AgentChanges

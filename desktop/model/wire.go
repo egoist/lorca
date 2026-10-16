@@ -132,19 +132,13 @@ type WireRun struct {
 }
 
 type WireAgent struct {
-	ID       string  `json:"id"`
-	Kind     string  `json:"kind"`
-	Title    *string `json:"title"`
-	Task     *string `json:"task"`
-	Folder   *string `json:"folder"`
-	Branch   *string `json:"branch"`
-	State    string  `json:"state"`
-	Question *struct {
-		Kind    string  `json:"kind"`
-		Command *string `json:"command"`
-		Reason  *string `json:"reason"`
-		Rule    *string `json:"rule"`
-	} `json:"question"`
+	ID          string        `json:"id"`
+	Kind        string        `json:"kind"`
+	Title       *string       `json:"title"`
+	Task        *string       `json:"task"`
+	Folder      *string       `json:"folder"`
+	Branch      *string       `json:"branch"`
+	State       string        `json:"state"`
 	Outcome     *string       `json:"outcome"`
 	PullRequest *string       `json:"pull_request"`
 	Changes     *AgentChanges `json:"changes"`
@@ -174,9 +168,6 @@ func ToAgentRun(wire *WireAgent) *AgentRun {
 	}
 	if wire.UpdatedAt != nil {
 		agent.UpdatedAt = seconds(*wire.UpdatedAt)
-	}
-	if q := wire.Question; q != nil && q.Kind == "command" {
-		agent.Question = &AgentQuestion{Command: str(q.Command), Reason: str(q.Reason), Rule: str(q.Rule), HasRule: q.Rule != nil}
 	}
 	return agent
 }

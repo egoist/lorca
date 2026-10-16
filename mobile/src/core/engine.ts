@@ -887,15 +887,9 @@ class Engine {
   /// answer did not reach the Runner, such as it being offline, and the card asks again.
   async answerPermission(chatId: string, messageId: string, decision: "allow" | "always" | "deny") {
     const decided: "always" | "denied" | "allowed" = decision === "always" ? "always" : decision === "deny" ? "denied" : "allowed";
-    // A permission card shows the answer; a command's card moves on to running, or ends; a coding
-    // agent's question goes.
+    // A permission card shows the answer; a command's card moves on to running, or ends.
     const answered = (m: Message): Message => {
       if (m.body.kind === "permission") return { ...m, body: { ...m.body, decision: decided } };
-      if (m.body.kind === "tool" && m.body.agent?.state === "asking") {
-        // Answered either way, it goes back to work: a denied command is the agent's to deal with.
-        const agent = { ...m.body.agent, state: "working" as const, question: undefined };
-        return { ...m, body: { ...m.body, agent } };
-      }
       if (m.body.kind === "tool" && m.body.run?.state === "asking") {
         const run = { ...m.body.run, decision: decided, state: decided === "denied" ? ("denied" as const) : ("running" as const), rule: decided === "always" ? m.body.run.rule : undefined };
         return { ...m, body: { ...m.body, run } };

@@ -60,10 +60,10 @@ func agentMarker(c *ui.Context, lead, kind, title, text, full string, tint *ui.C
 	return clicked
 }
 
-// agentRow is a coding agent's start or a message the bot sent one: its marker, and while the
-// agent asks, the permission card under it. A start that failed has no page: its marker shows
-// why in a popover.
-func (m *mainWindow) agentRow(c *ui.Context, chat *model.Chat, message *model.Message, cardAvatar *avatarContent, groupStart bool) {
+// agentRow is a coding agent's start or a message the bot sent one: its marker. What the agent
+// asks is a permission card of its own at the end of the chat. A start that failed has no page:
+// its marker shows why in a popover.
+func (m *mainWindow) agentRow(c *ui.Context, chat *model.Chat, message *model.Message, groupStart bool) {
 	tool := message.Body.Tool
 	agent := model.MessagedAgent(chat, tool)
 	kind, rowID := "", message.ID
@@ -89,11 +89,6 @@ func (m *mainWindow) agentRow(c *ui.Context, chat *model.Chat, message *model.Me
 		if agentMarker(c, L("Messaged"), kind, model.AgentLabel(chat, tool), text, full, nil, groupStart) {
 			m.presentAgentPage(chatID, rowID)
 		}
-		if a := tool.Agent; a != nil && a.State == model.AgentAsking && a.Question != nil {
-			cardFrame(c, cardAvatar, false, agentQuestionTitle(a)+": "+a.Question.Command, func() {
-				m.agentQuestion(c, chatID, message.ID, a)
-			})
-		}
 	})
 }
 
@@ -115,40 +110,6 @@ func (m *mainWindow) agentMessageRow(c *ui.Context, chat *model.Chat, message *m
 	ui.Column(c.Key("agent-message:" + message.ID)).Children(func() {
 		if agentMarker(c, L("Message from"), said.AgentKind, title, said.Text, full, tint, groupStart) && row != nil {
 			m.presentAgentPage(chat.ID, row.ID)
-		}
-	})
-}
-
-// MARK: - The question
-
-func agentQuestionTitle(agent *model.AgentRun) string {
-	return L("%@ wants to run a command", agent.Name())
-}
-
-// agentQuestion is what a coding agent asks, as a command card asks it: the command in a block
-// that opens it whole, why Auto-review asked, Allow once, Always allow with a rule, and Deny.
-func (w *appWindow) agentQuestion(c *ui.Context, chatID, messageID string, agent *model.AgentRun) {
-	p := colors(c)
-	q := agent.Question
-	title := agentQuestionTitle(agent)
-	ui.Row(c).Size(18, 18).Center().TextColor(p.Accent).Children(func() { symbol(c, "hand.raised", 17, 1.9) })
-	ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Children(func() {
-		ui.Text(c, title).FontSize(12.5).FontWeight(600).FixedLineHeight(17).SingleLine().Tooltip(title)
-		if commandBlock(c, "$ "+q.Command, 2) {
-			w.presentCommandSheet(title, q.Command)
-		}
-		if q.Reason != "" {
-			ui.Text(c, q.Reason).Margin(7, 0, 0, 0).FontSize(11.5).LineHeight(1.35).TextColor(p.Label2)
-		}
-		ui.Row(c).Wrap().Gap(6).Margin(10, 0, 0, 0).Children(func() {
-			for _, choice := range q.Decisions() {
-				if pushButton(c.Key(choice.Decision), choice.Title, pushOptions{Small: true}).Clicked() {
-					store.AnswerPermission(chatID, messageID, choice.Decision)
-				}
-			}
-		})
-		if q.HasRule {
-			ui.Text(c, L("Always allow adds the rule “%@”.", q.Rule)).Margin(8, 0, 0, 0).FontSize(11).LineHeight(1.35).TextColor(p.Label2)
 		}
 	})
 }
@@ -270,7 +231,7 @@ func (t *agentPage) close() {
 	}
 }
 
-// presentAgentPage shows a coding agent's page: how it stands, what it asks, its transcript, and
+// presentAgentPage shows a coding agent's page: how it stands, its transcript, and
 // what its work changed. Follow-ups go through the bot, so the page has no composer.
 func (w *appWindow) presentAgentPage(chatID, messageID string) {
 	chat := store.Chat(chatID)
@@ -342,12 +303,6 @@ func (t *agentPage) view(c *ui.Context, s *sheet, w *appWindow) {
 				}
 			})
 		})
-		if agent.State == model.AgentAsking && agent.Question != nil {
-			ui.Row(c).AlignItems(ui.Start).Gap(8).Margin(0, 20, 14, 20).Padding(11, 12, 12, 12).Radius(12).
-				Background(p.BotBubble).Border(1, p.BotBubbleBorder).Label(agentQuestionTitle(agent)).Children(func() {
-				w.agentQuestion(c, t.chatID, t.messageID, agent)
-			})
-		}
 		ui.Box(c).Height(1).Background(p.Separator)
 		body := ui.Scroll(c.Key("transcript")).Height(460).Shrink(1).MinHeight(120).Padding(14, 20, 18, 20).Label(L("Transcript"))
 		body.TrackScroll(&t.scroll)

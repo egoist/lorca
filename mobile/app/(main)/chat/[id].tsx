@@ -907,14 +907,7 @@ export default function ChatScreen() {
             />
           );
         case "agent":
-          return (
-            <AgentRow
-              row={item}
-              isGroup={speakers}
-              onOpen={openAgent}
-              onDecide={answerCard}
-            />
-          );
+          return <AgentRow row={item} onOpen={openAgent} />;
         case "working":
           return <WorkingRow chatId={id} bots={item.bots} isGroup={isGroup} />;
         case "status":

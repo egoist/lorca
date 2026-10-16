@@ -14,7 +14,7 @@ use crate::model::{AutoReviewRule, Bot, CommandRun};
 use crate::plugins::mcp::{self, Decision};
 use crate::plugins::review::{self, Action, Outcome, Trigger};
 
-const LOCAL_TARGET_ID: &str = "computer";
+pub(crate) const LOCAL_TARGET_ID: &str = "computer";
 
 /// Reviews every shell call before `bash` receives it. A returned result blocks the call;
 /// `None` lets it execute unchanged with the Runner user's normal authority. With Auto-review
@@ -408,7 +408,7 @@ fn home_relative(path: &Path) -> String {
     }
 }
 
-fn command_summary(command: &str) -> String {
+pub(crate) fn command_summary(command: &str) -> String {
     let one_line = command.split_whitespace().collect::<Vec<_>>().join(" ");
     let shown: String = one_line.chars().take(180).collect();
     format!("$ {shown}{}", if one_line.chars().count() > 180 { "…" } else { "" })

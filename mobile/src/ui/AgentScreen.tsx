@@ -1,17 +1,17 @@
 // A coding agent's page, after Cursor's agent transcript and view-only like Grok Bot's exchange
 // view: its mark and title, its name, how it stands, where it works and on which Runner, its pull
-// request and Stop; what it asks, as in the chat; then its steps in order (the prompt, Lorca's own
-// lines, thoughts, what it said, the tools it used with reads and searches in a row folded into one
-// line, its plan, and errors), and what its work changed. It follows the agent while it is open,
-// asking the Runner again every five seconds, and keeps to the end unless the user scrolled up to
-// read; one that asks opens at its question instead. Follow-ups go through the bot, so there is no composer.
+// request and Stop; then its steps in order (the prompt, Lorca's own lines, thoughts, what it said,
+// the tools it used with reads and searches in a row folded into one line, its plan, and errors),
+// and what its work changed. It follows the agent while it is open, asking the Runner again every
+// five seconds, and keeps to the end unless the user scrolled up to read. While it asks, its
+// question is a card at the end of the chat. Follow-ups go through the bot, so there is no composer.
 
 import { Stack, useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useRef, useState, type ReactNode } from "react";
 import { ActivityIndicator, Platform, ScrollView, StyleSheet, Text, useWindowDimensions, View, type ColorValue } from "react-native";
 import { engine } from "../core/engine";
 import { agentIsOpen, agentIsRunning, agentName, agentTitle, pullRequestLabel, type AgentItem, type AgentRun, type AgentToolStep } from "../core/model";
-import { useBotMap, useChat } from "../core/store";
+import { useChat } from "../core/store";
 import { t, useLanguage } from "../i18n";
 import { AgentLogo } from "./AgentLogo";
 import { alert } from "./alert";
@@ -22,7 +22,6 @@ import { openLink } from "./outputs";
 import { Pressable } from "./Pressable";
 import { Symbol } from "./Symbol";
 import { Font, usePalette } from "./theme";
-import { AgentAskCard } from "./transcript";
 
 /// How often the transcript is asked for again while the agent is open and on screen.
 const REFRESH_MS = 5000;
@@ -36,7 +35,6 @@ export function AgentScreen({ chatId, messageId, presented }: { chatId: string; 
   const router = useRouter();
   const p = usePalette();
   const chat = useChat(chatId);
-  const bots = useBotMap();
   const { width } = useWindowDimensions();
   const [paneWidth, setPaneWidth] = useState(width);
   const [items, setItems] = useState<AgentItem[] | null>(null);
@@ -49,9 +47,8 @@ export function AgentScreen({ chatId, messageId, presented }: { chatId: string; 
   // in when the row is not loaded.
   const card = (row?.body.kind === "tool" ? row.body.agent : undefined) ?? fetched;
   const open = card ? agentIsOpen(card) : true;
-  const bot = row?.author.kind === "bot" ? bots.get(row.author.bot_id) : undefined;
-  // It opens at its latest step, unless it asks: then at its question, on top.
-  const atEnd = useRef(card?.state !== "asking");
+  // It opens at its latest step.
+  const atEnd = useRef(true);
 
   useFocusEffect(
     useCallback(() => {
@@ -91,10 +88,6 @@ export function AgentScreen({ chatId, messageId, presented }: { chatId: string; 
       setStopping(false);
     }
   };
-
-  const decide = useCallback((message: NonNullable<typeof row>, decision: "allow" | "always" | "deny") => {
-    engine.answerPermission(message.chat_id, message.id, decision).catch((e) => alert(t("Could not answer"), e instanceof Error ? e.message : String(e)));
-  }, []);
 
   const where = card ? [agentName(card.kind), agentStatusWord(card), card.branch, card.device].filter(Boolean).join(" · ") : "";
   const blocks = items ? transcriptBlocks(items) : [];
@@ -155,12 +148,6 @@ export function AgentScreen({ chatId, messageId, presented }: { chatId: string; 
                 ) : null}
               </View>
             ) : null}
-          </View>
-        ) : null}
-
-        {row && card?.state === "asking" ? (
-          <View style={styles.ask}>
-            <AgentAskCard message={row} agent={card} bot={bot} isGroup={false} onDecide={decide} />
           </View>
         ) : null}
 
@@ -367,7 +354,6 @@ const styles = StyleSheet.create({
   actions: { flexDirection: "row", gap: 8, marginTop: 4 },
   action: { flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
   actionText: { fontSize: 13, fontWeight: "600" },
-  ask: { marginHorizontal: -12, paddingBottom: 6 },
   prompt: { borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, padding: 12, gap: 6, marginVertical: 4 },
   promptLabel: { fontSize: 12, fontWeight: "600" },
   body: { fontSize: 15, lineHeight: 21 },

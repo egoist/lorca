@@ -1803,13 +1803,6 @@ func (s *Store) AnswerPermission(chatID, messageID, decision string) {
 				request.Summary = L("Starting the sign-in…")
 			}
 			message.Body.Request = &request
-		case body.Kind == BodyTool && body.Tool.Agent != nil && body.Tool.Agent.Question != nil:
-			// The agent goes back to work either way: a denied command is its to work around.
-			tool := *body.Tool
-			agent := *tool.Agent
-			agent.Question, agent.State = nil, AgentWorking
-			tool.Agent = &agent
-			message.Body.Tool = &tool
 		case body.Kind == BodyTool && body.Tool.Run != nil && body.Tool.Run.State == CommandAsking:
 			tool := *body.Tool
 			run := *tool.Run
@@ -1949,7 +1942,7 @@ func (s *Store) finishMockAgent(chatID, messageID string, state AgentState) {
 		}
 		tool := *message.Body.Tool
 		agent := *tool.Agent
-		agent.State, agent.Question, agent.UpdatedAt = state, nil, time.Now()
+		agent.State, agent.UpdatedAt = state, time.Now()
 		if state == AgentStopped {
 			agent.Outcome = "Stopped"
 		}

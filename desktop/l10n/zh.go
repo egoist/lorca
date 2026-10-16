@@ -1407,7 +1407,6 @@ var zh = map[string]string{
 	"Drafted from a recording": "根据录制起草",
 
 	// Coding agents.
-	"%@ wants to run a command":  "%@ 想要运行命令",
 	"Could not stop %@":          "无法停止 %@",
 	"Nothing yet":                "暂无内容",
 	"Working|coding agent":       "工作中",

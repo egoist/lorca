@@ -821,7 +821,6 @@ export const zh: Record<string, string> = {
   "Turn Off Workflow": "关闭工作流",
   "Cancel Setup": "取消设置",
   "Setup|workflow questions": "设置",
-  "{agent} wants to run a command": "{agent} 想要运行命令",
   "Nothing yet": "暂无内容",
   "Working|coding agent": "工作中",
   "Stopped|coding agent": "已停止",

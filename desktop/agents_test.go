@@ -23,19 +23,16 @@ func TestTheAgentRowsDecodeFromTheCLI(t *testing.T) {
 	start := decodeMessage(t, `{"id":"m1","chat_id":"c1","author":{"kind":"bot","bot_id":"b1"},"state":{"kind":"complete"},"created_at":1,
 	 "body":{"kind":"tool","name":"coding_agent","summary":"Started","detail":"Add dark mode\n\nTo Settings.","is_running":false,
 	  "agent":{"id":"agent-1","kind":"codex","title":"Settings: dark mode","task":"Add dark mode","folder":"~/x/dark","branch":"dark",
-	   "state":"asking","question":{"kind":"command","command":"git push","reason":"It publishes.","rule":"push branches"},
+	   "state":"asking",
 	   "pull_request":"https://github.com/acme/shop/pull/7","changes":{"files":4,"added":12,"removed":3},
 	   "device":"Workbench","started_at":1792069627.1,"updated_at":1792069700.4}}}`)
 	agent := model.AgentOf(start)
 	if agent == nil || !start.Body.Tool.IsShown() || !start.Body.Tool.IsAgentMessage() {
 		t.Fatalf("no agent shown: %+v", start.Body.Tool)
 	}
-	if agent.Name() != "Codex" || agent.Label() != "Settings: dark mode" || agent.Question == nil || len(agent.Question.Decisions()) != 3 ||
+	if agent.Name() != "Codex" || agent.Label() != "Settings: dark mode" || agent.State != model.AgentAsking ||
 		agent.PullNumber() != "#7" || agent.Changes == nil || agent.Changes.Added != 12 || agent.UpdatedAt.Unix() != 1792069700 {
-		t.Errorf("decoded %+v %+v", agent, agent.Question)
-	}
-	if got := agentQuestionTitle(agent); got != "Codex wants to run a command" {
-		t.Errorf("title %q", got)
+		t.Errorf("decoded %+v", agent)
 	}
 	// A message to it names it; the chat's start row has its title and kind.
 	send := decodeMessage(t, `{"id":"m2","chat_id":"c1","author":{"kind":"bot","bot_id":"b1"},"state":{"kind":"complete"},"created_at":2,
@@ -157,8 +154,9 @@ func TestTheTranscriptFoldsReadsAndSearches(t *testing.T) {
 	}
 }
 
-// TestRenderCodingAgents draws the developer's chat with its agents' markers, the asking card, and
-// the Coding section; answers the card; opens an agent's page and a fold in it.
+// TestRenderCodingAgents draws the developer's chat with its agents' markers, the card the asking
+// agent's question ends the chat with, and the Coding section; answers the card; opens an agent's
+// page and a fold in it.
 func TestRenderCodingAgents(t *testing.T) {
 	m := demoWindow(t)
 	m.selectChat("chat-patch")
@@ -173,7 +171,8 @@ func TestRenderCodingAgents(t *testing.T) {
 	}
 	working := model.AgentOf(model.AgentRowOf(chat, "agent-3f9a2c1d"))
 	for _, text := range []string{
-		"Codex wants to run a command", "$ git push -u origin dark-mode-toggle", "Always allow",
+		"Developer wants to run a command on Studio", "git push -u origin dark-mode-toggle", "Always allow",
+		"Codex, the coding agent on “Settings: add a dark mode toggle”, asks to run this. Pushing sends the branch to GitHub, where others can see it.",
 		agentMarkerText(L("Messaged"), "Settings: add a dark mode toggle", model.AgentOf(asking).Task),
 		agentMarkerText(L("Messaged"), working.Title, "Fix the same link on the Chinese download page too, and cover it in the test."),
 		"CODING", "Needs attention · dark-mode-toggle", "Working · fix-docs-link", "Ready for review · #7",
@@ -201,7 +200,7 @@ func TestRenderCodingAgents(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	settle(tt)
 
-	// The asking agent's page leads with its question.
+	// The asking agent's page says it needs attention.
 	m.presentAgentPage(chat.ID, asking.ID)
 	settleTransitions(tt)
 	if !tt.HasText("Codex · Needs attention · dark-mode-toggle · Studio") {
@@ -217,8 +216,8 @@ func TestRenderCodingAgents(t *testing.T) {
 		t.Fatal(err)
 	}
 	settle(tt)
-	if agent := model.AgentOf(chat.Message(asking.ID)); agent.State != model.AgentWorking || agent.Question != nil || tt.HasText("Codex wants to run a command") {
-		t.Errorf("the answer left %+v", agent)
+	if card := chat.Messages[len(chat.Messages)-1]; card.Body.Kind != model.BodyPermission || card.Body.Request.Decision != model.DecisionAllowed || tt.HasText(L("Allow once")) {
+		t.Errorf("the answer left %+v", card.Body.Request)
 	}
 
 	// The working agent's row in Details opens its page.
@@ -287,13 +286,17 @@ func TestRenderCodingAgents(t *testing.T) {
 func TestTheAskingAgentNotifies(t *testing.T) {
 	demoWindow(t)
 	chat := store.Chat("chat-patch")
-	row := model.AgentRowOf(chat, "agent-b85e4f10")
-	notification := notificationFor(row)
-	if notification == nil || notification.kind != notifyPermission || notification.body != L("Confirmation needed: %@", "Codex: $ git push -u origin dark-mode-toggle") {
+	// Its card asks and notifies; its row, which may be far up the chat, does not.
+	card := chat.Messages[len(chat.Messages)-1]
+	notification := notificationFor(card)
+	if notification == nil || notification.kind != notifyPermission || notification.body != L("Confirmation needed: %@", "$ git push -u origin dark-mode-toggle") {
 		t.Fatalf("notification %+v", notification)
 	}
-	if !asks(row) {
-		t.Error("the asking agent is not a question")
+	if !asks(card) {
+		t.Error("the asking agent's card is not a question")
+	}
+	if row := model.AgentRowOf(chat, "agent-b85e4f10"); asks(row) || notificationFor(row) != nil {
+		t.Error("the asking agent's row asks too")
 	}
 	// What an agent said pushes nothing; the bot's reply after it does.
 	for _, message := range chat.Messages {
@@ -402,7 +405,7 @@ func TestAFailedStartShowsWhy(t *testing.T) {
 	store.Update(row.ID, chat.ID, func(message *model.Message) {
 		tool := *message.Body.Tool
 		agent := *tool.Agent
-		agent.ID, agent.State, agent.Question, agent.Outcome = "", model.AgentFailed, nil, "None of the coding agents the user turned on (Codex) is installed on this Runner."
+		agent.ID, agent.State, agent.Outcome = "", model.AgentFailed, "None of the coding agents the user turned on (Codex) is installed on this Runner."
 		tool.Agent = &agent
 		message.Body.Tool = &tool
 	})

@@ -33,7 +33,7 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 
 use crate::app::App;
-use crate::model::{AgentChanges, AgentQuestion, AgentRun, Author, Body, Message};
+use crate::model::{AgentChanges, AgentRun, Author, Body, Message};
 use driver::{Approval, Driver, Event};
 use transcript::{Item, Transcript};
 
@@ -158,8 +158,8 @@ pub struct Agent {
     record: Mutex<Record>,
     driver: Mutex<Option<Arc<dyn Driver>>>,
     transcript: Mutex<Transcript>,
-    /// What it asks the user now, on the row that started it.
-    question: Mutex<Option<AgentQuestion>>,
+    /// A question of its waits for the user in the chat.
+    asks: AtomicBool,
     /// One question to the user at a time.
     asking: tokio::sync::Mutex<()>,
     /// When it last showed something new.
@@ -179,7 +179,7 @@ impl Agent {
             record: Mutex::new(record),
             driver: Mutex::new(None),
             transcript: Mutex::new(transcript),
-            question: Mutex::new(None),
+            asks: AtomicBool::new(false),
             asking: tokio::sync::Mutex::new(()),
             active_at: Mutex::new(Instant::now()),
             budget: Mutex::new(None),
@@ -289,7 +289,6 @@ impl Agents {
         let Body::Tool { agent: Some(card), .. } = &mut message.body else { return };
         if card.is_open() {
             card.state = "stopped".into();
-            card.question = None;
             card.outcome = Some("Stopped".into());
             card.updated_at = Some(crate::config::now_secs());
             app.upsert_message(message, true);
@@ -330,13 +329,12 @@ impl Agents {
     /// The card for `agent`, as it stands.
     fn card(&self, app: &App, agent: &Agent) -> AgentRun {
         let record = agent.record();
-        let question = agent.question.lock().unwrap().clone().filter(|_| record.state == "working" || record.state == "starting");
+        let asks = agent.asks.load(Ordering::SeqCst) && (record.state == "working" || record.state == "starting");
         let device = app.bot(&record.bot_id).and_then(|bot| app.device(&bot.runner_id)).map(|device| device.name);
         // The card goes to every Device: what the agent was asked, asks, or ended on, without a
         // saved secret, as a command's card.
         let redactions = crate::secrets::Redactions::load(app);
         let clean = |text: String| redactions.text(&text).unwrap_or(text);
-        let question = question.map(|question| AgentQuestion { command: question.command.map(clean), ..question });
         AgentRun {
             id: record.id,
             kind: record.kind,
@@ -344,8 +342,7 @@ impl Agents {
             task: clean(record.task),
             folder: home_relative(&record.folder),
             branch: record.branch,
-            state: if question.is_some() { "asking".into() } else { record.state },
-            question,
+            state: if asks { "asking".into() } else { record.state },
             outcome: record.outcome.map(clean),
             pull_request: record.pull_request,
             changes: record.changes,
@@ -418,7 +415,7 @@ impl Agents {
                     record.ended_at = Some(crate::config::now_secs());
                 }
             }
-            *agent.question.lock().unwrap() = None;
+            agent.asks.store(false, Ordering::SeqCst);
             self.sync(app, &agent);
         }
         save(app);
@@ -624,7 +621,7 @@ pub(crate) async fn send(app: &Arc<App>, agent: &Arc<Agent>, text: &str, interru
 /// Stops the agent; its card says `reason`.
 pub(crate) fn stop(app: &Arc<App>, agent: &Arc<Agent>, reason: &str) {
     agent.stopping.store(true, Ordering::SeqCst);
-    *agent.question.lock().unwrap() = None;
+    agent.asks.store(false, Ordering::SeqCst);
     let driver = agent.driver.lock().unwrap().take();
     {
         let mut record = agent.record.lock().unwrap();
@@ -652,7 +649,7 @@ async fn supervise(app: Arc<App>, agent: Arc<Agent>, mut events: mpsc::Unbounded
         let active_at = *agent.active_at.lock().unwrap();
         let idle = agent.record.lock().unwrap().state == "idle";
         // Done and quiet for long: it stops, and a follow-up resumes it.
-        if idle && agent.question.lock().unwrap().is_none() && Instant::now() >= active_at + IDLE_LIMIT {
+        if idle && !agent.asks.load(Ordering::SeqCst) && Instant::now() >= active_at + IDLE_LIMIT {
             if let Some(driver) = agent.driver.lock().unwrap().take() {
                 agent.stopping.store(true, Ordering::SeqCst);
                 tokio::spawn(async move { driver.stop().await });
@@ -767,7 +764,7 @@ fn ended(app: &Arc<App>, agent: &Arc<Agent>, end: driver::Ended, generation: u64
     }
     agent.driver.lock().unwrap().take();
     agent.hold.lock().unwrap().take();
-    *agent.question.lock().unwrap() = None;
+    agent.asks.store(false, Ordering::SeqCst);
     let stopping = agent.stopping.load(Ordering::SeqCst);
     let tell_bot = {
         let mut record = agent.record.lock().unwrap();
@@ -875,7 +872,7 @@ pub(crate) fn holds_secrets(names: &[String]) -> String {
 }
 
 /// Whether the agent may do what it asks: the bot's Access as it stands, then Auto-review, and
-/// the user on its row when the review asks.
+/// the user in the chat when the review asks.
 async fn approve(app: &Arc<App>, agent: &Arc<Agent>, approval: Approval) -> Result<(), String> {
     // Neither the review nor the card sees a saved secret the agent wrote out.
     let approval = match approval {
@@ -954,29 +951,44 @@ async fn approve(app: &Arc<App>, agent: &Arc<Agent>, approval: Approval) -> Resu
              started you can ask the user."
         ));
     }
-    // One question at a time, on its row.
+    // One question at a time.
     let _one = agent.asking.lock().await;
     if !agent.is_running() {
         return Err("Stopped".into());
     }
-    let always_rule = rule.clone().map(|text| crate::model::AutoReviewRule { id: uuid::Uuid::new_v4().to_string(), text, behavior: "allow".into(), tool: None });
-    let question = AgentQuestion { kind: "command".into(), command: Some(shown), reason, rule: always_rule.as_ref().map(|rule| rule.text.clone()) };
+    let always_rule = rule.map(|text| crate::model::AutoReviewRule { id: uuid::Uuid::new_v4().to_string(), text, behavior: "allow".into(), tool: None });
+    // The card is the bot's, so it says which of its agents asks.
+    let asks = if tool == "bash" { "asks to run this." } else { "asks for this." };
+    let who_asks = format!("{who}, the coding agent on “{}”, {asks}", without_secrets(app, record.title.clone()));
+    let reason = Some(match reason {
+        Some(reason) => format!("{who_asks} {reason}"),
+        None => who_asks,
+    });
     use crate::plugins::mcp::Decision;
-    match ask_on_card(app, agent, question, always_rule).await {
+    match ask_in_chat(app, agent, &bot.id, &runner_name, tool, &shown, reason, always_rule).await {
         Decision::Allowed | Decision::Always => Ok(()),
         Decision::Denied => Err("The user did not allow this in Lorca. Do not retry it; go on without it or stop and say what you needed.".into()),
         Decision::Expired => Err("Nobody answered in time, so it did not run. Go on without it or stop and say what you needed.".into()),
-        Decision::Dismissed => Err("The user wrote to the bot instead of answering, so it did not run. Go on without it or stop and say what you needed.".into()),
+        Decision::Dismissed => Err("Stopped".into()),
     }
 }
 
-/// Puts `question` on the agent's row and waits for the user's Allow or Deny from any Device
-/// (`chats.permission` names the row), as a command's card does.
-async fn ask_on_card(app: &Arc<App>, agent: &Arc<Agent>, question: AgentQuestion, always_rule: Option<crate::model::AutoReviewRule>) -> crate::plugins::mcp::Decision {
-    let (chat_id, message_id) = {
-        let record = agent.record.lock().unwrap();
-        (record.chat_id.clone(), record.message_id.clone())
-    };
+/// Asks the user whether the agent may do `shown`, on a card at the end of the chat as a command
+/// of the bot's own asks, and waits for the answer from any Device (`chats.permission` names the
+/// card). The agent's row reads `asking` meanwhile. The bot's turn does not wait on the card, so
+/// the user's messages to the bot leave it up; stopping the agent dismisses it.
+#[allow(clippy::too_many_arguments)]
+async fn ask_in_chat(
+    app: &Arc<App>,
+    agent: &Arc<Agent>,
+    bot_id: &str,
+    runner_name: &str,
+    tool: &str,
+    shown: &str,
+    reason: Option<String>,
+    always_rule: Option<crate::model::AutoReviewRule>,
+) -> crate::plugins::mcp::Decision {
+    let chat_id = agent.record.lock().unwrap().chat_id.clone();
     let cancel = tokio_util::sync::CancellationToken::new();
     // Stopping the agent stops the question.
     let watch = {
@@ -991,17 +1003,14 @@ async fn ask_on_card(app: &Arc<App>, agent: &Arc<Agent>, question: AgentQuestion
             }
         })
     };
-    let decision = crate::plugins::mcp::await_answer(app, &chat_id, &message_id, always_rule, &cancel, || {
-        *agent.question.lock().unwrap() = Some(question);
-        app.coding_agents.sync(app, agent);
-        if let Some(message) = app.message(&chat_id, &message_id) {
-            crate::push::permission(app, &message);
-        }
-    })
-    .await;
+    agent.asks.store(true, Ordering::SeqCst);
+    app.coding_agents.sync(app, agent);
+    let summary = crate::local_review::command_summary(shown);
+    let target = crate::local_review::LOCAL_TARGET_ID;
+    let decision = crate::plugins::mcp::ask_aside(app, &chat_id, bot_id, target, runner_name, tool, &summary, json!({ "command": shown }), reason, always_rule, &cancel).await;
     cancel.cancel();
     watch.abort();
-    *agent.question.lock().unwrap() = None;
+    agent.asks.store(false, Ordering::SeqCst);
     app.coding_agents.sync(app, agent);
     decision
 }

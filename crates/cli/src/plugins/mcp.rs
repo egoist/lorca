@@ -2913,6 +2913,44 @@ pub async fn ask_with_rule(
     always_rule: Option<AutoReviewRule>,
     cancel: &CancellationToken,
 ) -> Decision {
+    post_and_wait(app, chat_id, bot_id, plugin_id, plugin_name, tool, summary, arguments, reason, always_rule, Asker::Turn, cancel).await
+}
+
+/// A permission card no turn waits on, such as a coding agent's question: the user's messages
+/// in the chat go to the bot and leave it up, and it waits for its answer, `PERMISSION_TIMEOUT`,
+/// or `cancel`, which reads as dismissed.
+#[allow(clippy::too_many_arguments)]
+pub async fn ask_aside(
+    app: &Arc<App>,
+    chat_id: &str,
+    bot_id: &str,
+    plugin_id: &str,
+    plugin_name: &str,
+    tool: &str,
+    summary: &str,
+    arguments: Value,
+    reason: Option<String>,
+    always_rule: Option<AutoReviewRule>,
+    cancel: &CancellationToken,
+) -> Decision {
+    post_and_wait(app, chat_id, bot_id, plugin_id, plugin_name, tool, summary, arguments, reason, always_rule, Asker::Aside, cancel).await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn post_and_wait(
+    app: &Arc<App>,
+    chat_id: &str,
+    bot_id: &str,
+    plugin_id: &str,
+    plugin_name: &str,
+    tool: &str,
+    summary: &str,
+    arguments: Value,
+    reason: Option<String>,
+    always_rule: Option<AutoReviewRule>,
+    asker: Asker,
+    cancel: &CancellationToken,
+) -> Decision {
     let message = Message::new(
         chat_id,
         Author::Bot { bot_id: bot_id.to_string() },
@@ -2931,7 +2969,7 @@ pub async fn ask_with_rule(
             secret: None,
         },
     );
-    let decision = await_answer(app, chat_id, &message.id, always_rule, cancel, || {
+    let decision = wait_for_answer(app, chat_id, &message.id, always_rule, asker, cancel, || {
         app.upsert_message(message.clone(), true);
         crate::push::permission(app, &message);
     })
@@ -2947,6 +2985,16 @@ pub async fn ask_with_rule(
     decision
 }
 
+/// Who waits on a question, which decides what the user's messages in the chat do to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Asker {
+    /// The chat's turn, which a message from the user must reach: the message dismisses it.
+    Turn,
+    /// Something the turn does not wait on, such as a coding agent: the message goes to the bot
+    /// and the question stays up.
+    Aside,
+}
+
 /// Waits for the answer to the question row `message_id` asks in `chat_id`, from this Device
 /// or any paired one (`chats.permission` names the row), for `PERMISSION_TIMEOUT` at most.
 /// `ask` puts the question up once an answer can arrive; Stop answers Denied. A question never
@@ -2954,14 +3002,18 @@ pub async fn ask_with_rule(
 /// theirs still to read is dismissed without asking, and a message that arrives while it waits
 /// dismisses it (`dismiss_questions`). An Always allow adds `always_rule` before this returns.
 pub async fn await_answer(app: &Arc<App>, chat_id: &str, message_id: &str, always_rule: Option<AutoReviewRule>, cancel: &CancellationToken, ask: impl FnOnce()) -> Decision {
+    wait_for_answer(app, chat_id, message_id, always_rule, Asker::Turn, cancel, ask).await
+}
+
+async fn wait_for_answer(app: &Arc<App>, chat_id: &str, message_id: &str, always_rule: Option<AutoReviewRule>, asker: Asker, cancel: &CancellationToken, ask: impl FnOnce()) -> Decision {
     // A call stopped before its question went up puts nothing in the chat.
     if cancel.is_cancelled() {
         return Decision::Denied;
     }
     let (tx, rx) = tokio::sync::oneshot::channel();
-    app.pending_permissions.lock().unwrap().insert(message_id.to_string(), (chat_id.to_string(), tx));
+    app.pending_permissions.lock().unwrap().insert(message_id.to_string(), (chat_id.to_string(), asker, tx));
     // Checked once the question is registered, so a message landing in between still reaches it.
-    if app.steering_queue(chat_id).is_some_and(|queue| !queue.is_empty()) {
+    if asker == Asker::Turn && app.steering_queue(chat_id).is_some_and(|queue| !queue.is_empty()) {
         app.pending_permissions.lock().unwrap().remove(message_id);
         return Decision::Dismissed;
     }
@@ -2984,16 +3036,17 @@ pub async fn await_answer(app: &Arc<App>, chat_id: &str, message_id: &str, alway
 /// nothing waits on that message (answered already, or expired).
 pub fn answer(app: &Arc<App>, message_id: &str, decision: Decision) -> bool {
     match app.pending_permissions.lock().unwrap().remove(message_id) {
-        Some((_, tx)) => tx.send(decision).is_ok(),
+        Some((_, _, tx)) => tx.send(decision).is_ok(),
         None => false,
     }
 }
 
-/// The user wrote in `chat_id` while questions there waited for their answer: each is
-/// dismissed, so its action does not run and the turn goes on to read what they wrote.
+/// The user wrote in `chat_id` while questions there waited for their answer: each the turn
+/// waits on is dismissed, so its action does not run and the turn goes on to read what they
+/// wrote. A question asked aside stays up.
 pub fn dismiss_questions(app: &App, chat_id: &str) {
-    let dismissed: Vec<_> = app.pending_permissions.lock().unwrap().extract_if(|_, (chat, _)| chat == chat_id).collect();
-    for (_, (_, tx)) in dismissed {
+    let dismissed: Vec<_> = app.pending_permissions.lock().unwrap().extract_if(|_, (chat, asker, _)| chat == chat_id && *asker == Asker::Turn).collect();
+    for (_, (_, _, tx)) in dismissed {
         let _ = tx.send(Decision::Dismissed);
     }
 }

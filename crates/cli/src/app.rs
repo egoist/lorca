@@ -268,10 +268,10 @@ pub struct App {
     /// The questions this Device asked, by request id: the Runner asked, which alone answers, and
     /// where its answer goes.
     pub pending_responses: Mutex<HashMap<String, (String, tokio::sync::oneshot::Sender<Response>)>>,
-    /// Questions waiting for the user's answer, by the id of the row that asks: its chat, and
-    /// where the answer goes.
+    /// Questions waiting for the user's answer, by the id of the row that asks: its chat, who
+    /// waits on it, and where the answer goes.
     #[cfg(feature = "runner")]
-    pub pending_permissions: Mutex<HashMap<String, (String, tokio::sync::oneshot::Sender<crate::plugins::mcp::Decision>)>>,
+    pub pending_permissions: Mutex<HashMap<String, (String, crate::plugins::mcp::Asker, tokio::sync::oneshot::Sender<crate::plugins::mcp::Decision>)>>,
     /// Commands `bash` left running in their terminals, waiting for input.
     #[cfg(feature = "runner")]
     pub shell_sessions: crate::shell::Sessions,
