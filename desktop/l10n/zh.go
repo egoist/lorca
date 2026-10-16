@@ -1497,4 +1497,11 @@ var zh = map[string]string{
 	"coding agent code pull request order preference": "编程智能体 代码 拉取请求 顺序 偏好",
 	"coding agent installed version":                  "编程智能体 已安装 版本",
 	"Cancel Sign-In":                                  "取消登录",
+	"Backup phrase":                                   "备份短语",
+	"Show…":                                           "显示…",
+	"Restores your identity on another computer":      "可在另一台电脑上恢复你的身份",
+	"recovery restore master secret words":            "恢复 还原 主密钥 短语 recovery restore master secret words",
+	"Show the backup phrase?":                         "显示备份短语？",
+	"Anyone who sees it can restore your identity and read everything in your account. Make sure nobody else can see your screen.": "任何看到它的人都能恢复你的身份，并读取你账户里的所有内容。请确认没有其他人能看到你的屏幕。",
+	"Couldn’t show the backup phrase": "无法显示备份短语",
 }

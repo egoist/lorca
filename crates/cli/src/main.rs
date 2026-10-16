@@ -140,6 +140,8 @@ enum IdentityCommand {
     },
     /// Print the identity id and public keys.
     Show,
+    /// Print the backup phrase again. Only on the Device that holds the identity.
+    Phrase,
 }
 
 #[derive(Subcommands, Debug)]
@@ -410,6 +412,12 @@ async fn main() -> anyhow::Result<()> {
                     }
                     None => println!("No identity on this Device. Run `lorca identity new`."),
                 }
+                Ok(())
+            }
+            IdentityCommand::Phrase => {
+                let phrase = identity::phrase(&app)?;
+                println!("Backup phrase (anyone who has it has the identity):\n");
+                println!("  {}", phrase.join(" "));
                 Ok(())
             }
         },

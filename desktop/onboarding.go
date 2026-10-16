@@ -180,9 +180,13 @@ func (o *onboardingWindow) createIdentity() {
 		return
 	}
 	o.busy = true
+	// The identity is on disk before the phrase shows, so a launch after a quit or a crash before
+	// it is saved comes back to it.
+	setUnfinishedOnboarding(unfinishedPhrase)
 	store.CreateIdentity(func(phrase []string, err error) {
 		o.busy = false
 		if err != nil {
+			setUnfinishedOnboarding("")
 			o.presentError(model.ErrorText(err))
 			return
 		}
@@ -190,6 +194,25 @@ func (o *onboardingWindow) createIdentity() {
 		o.origin = onboardingCreated
 		o.show(onboardingCreate)
 	})
+}
+
+// resume picks up onboarding over an identity created here: the phrase step again with the phrase
+// the CLI re-derived, to be saved this time, or with none, the first bot.
+func (o *onboardingWindow) resume(phrase []string) {
+	o.origin = onboardingCreated
+	if phrase != nil {
+		o.phrase, o.savedPhrase = phrase, false
+		o.show(onboardingCreate)
+		return
+	}
+	o.show(onboardingBot)
+}
+
+// phraseSaved is Continue under the saved phrase: a launch from here on resumes at the first bot.
+func (o *onboardingWindow) phraseSaved() {
+	if prefs.get().UnfinishedOnboarding == unfinishedPhrase {
+		setUnfinishedOnboarding(unfinishedSetup)
+	}
 }
 
 // join restores from the phrase or pairs with the code typed. A computer that joined an account
@@ -581,6 +604,7 @@ func phraseGrid(c *ui.Context, phrase []string) {
 
 func (o *onboardingWindow) createStep(c *ui.Context) *onboardingButton {
 	next := onboardingButton{title: L("Continue"), disabled: !o.savedPhrase, run: func() {
+		o.phraseSaved()
 		if o.firstBot() != nil {
 			o.show(onboardingBot)
 		} else {

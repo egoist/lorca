@@ -108,6 +108,10 @@ func machineKeyEntry() settingsEntry {
 	return entry(model.PaneDevice, L("Machine key"), "", L("device os role runner last seen relay"))
 }
 
+func backupPhraseEntry() settingsEntry {
+	return entry(model.PaneDevice, L("Backup phrase"), "", L("recovery restore master secret words"))
+}
+
 func pairingEntry() settingsEntry {
 	return entry(model.PaneDevice, L("Pairing"), "", L("unpair remove device paired"))
 }
@@ -228,6 +232,9 @@ func entriesIn(pane model.SettingsPane, device *model.Device) []settingsEntry {
 		return append(out, servers...)
 	case model.PaneDevice:
 		if device != nil {
+			if device.IsThisDevice && store.IsIdentityDevice {
+				return []settingsEntry{machineKeyEntry(), backupPhraseEntry(), pairingEntry()}
+			}
 			return []settingsEntry{machineKeyEntry(), pairingEntry()}
 		}
 		return []settingsEntry{machineKeyEntry()}

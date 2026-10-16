@@ -24,6 +24,10 @@ A bot’s DM Profile card has the Mac's Access row (`disclosureRow`), which open
 
 A group's inspector has the Mac's Project section, and a row opens the same entry sheet (`project.go`): the entries a row each, a + menu that adds one, Check Now under a link, Open for a file, and the Mac's conflict alert when another Device saved first. `model/project_context.go` makes the `projects.*` calls; their replies come back on the store's main-thread queue, a sheet closed meanwhile ignores them, and `projects.changed` lists the group again. [Shared project context](project-context.md#the-apps) describes both apps.
 
+## Onboarding
+
+`onboarding.go` follows the Mac's onboarding ([macOS app](macos-app.md)). The phrase step shows the backup phrase's 13 groups seven to a row. The first bot step and the provider step each have Skip for Now: the bot step saves the name and description as they are and leaves the provider for later. While a key is checked, the provider picker, the key, Continue, and Skip for Now wait beside a spinner, and Continue pressed again keeps the step and what was typed. While a sign-in waits on the browser, the bot step offers Cancel Sign-In (`providers.auth.cancel`), picking another provider cancels it too, and the cancelled sign-in's answer changes nothing. An identity created here keeps `unfinishedOnboarding` in the preferences until onboarding finishes: `phrase` from the moment `identity.create` is sent, then `setup` once Continue is pressed under the saved phrase. A launch with the identity and that mark opens onboarding instead of the main window. With `phrase` it opens on the phrase step with the phrase the CLI re-derives (`identity.phrase`); with `setup` it opens on the first bot. Settings › Devices on the identity device has Backup phrase › Show…, which shows the same phrase after a confirmation ([Identity](identity.md)).
+
 ## Workflows
 
 The last onboarding page has Choose a Workflow… under Open Lorca, and the marketplace lists Workflows first; a workflow's page is the Mac's, as marketplace pages in `desktop/workflows.go` over `desktop/model/workflows.go`: [Workflow onboarding](workflows.md#the-apps).

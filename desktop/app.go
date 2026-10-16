@@ -228,11 +228,19 @@ func (a *appDelegate) identityChanged(has bool) {
 	if same {
 		return
 	}
-	prefs.update(PreferencesPatch{HadIdentity: &has})
+	patch := PreferencesPatch{HadIdentity: &has}
+	if !has {
+		patch.UnfinishedOnboarding = new(string)
+	}
+	unfinished := prefs.update(patch).UnfinishedOnboarding
 	post(func() {
 		if has {
 			if a.onboarding == nil && a.main == nil {
-				a.showMainWindow()
+				if unfinished != "" {
+					a.resumeOnboarding(unfinished)
+				} else {
+					a.showMainWindow()
+				}
 			}
 			return
 		}
@@ -254,14 +262,16 @@ func (a *appDelegate) identityChanged(has bool) {
 
 // mainWindowIsDue is whether the main window is the one to show: with an identity, and before
 // the CLI's first answer on a computer that had one, or once the app stops waiting for that
-// answer (the offline recovery controls).
+// answer (the offline recovery controls). Onboarding left unfinished over an identity created here
+// waits for the answer too, which resumes it.
 func (a *appDelegate) mainWindowIsDue() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	unfinished := prefs.get().UnfinishedOnboarding != ""
 	if a.hasIdentity != nil {
-		return *a.hasIdentity
+		return *a.hasIdentity && !unfinished
 	}
-	return prefs.get().HadIdentity || a.stoppedWaiting
+	return (prefs.get().HadIdentity && !unfinished) || a.stoppedWaiting
 }
 
 func (a *appDelegate) showMainWindowIfDue() {
@@ -413,6 +423,7 @@ func (a *appDelegate) endOnboarding() {
 	onboarding := a.onboarding
 	a.onboarding = nil
 	a.onboardingOverIdentity = false
+	setUnfinishedOnboarding("")
 	a.showMainWindow()
 	onboarding.win.Destroy()
 	if a.settings != nil {
@@ -420,6 +431,42 @@ func (a *appDelegate) endOnboarding() {
 		a.settings = nil
 		settings.win.Destroy()
 	}
+}
+
+// Where onboarding over an identity created here stopped (UnfinishedOnboarding).
+const (
+	unfinishedPhrase = "phrase"
+	unfinishedSetup  = "setup"
+)
+
+func setUnfinishedOnboarding(step string) {
+	if prefs.get().UnfinishedOnboarding != step {
+		prefs.update(PreferencesPatch{UnfinishedOnboarding: &step})
+	}
+}
+
+// resumeOnboarding opens onboarding where it stopped over an identity created here, which a quit,
+// a crash, or a restart left: the backup phrase again, which the CLI re-derives from the master
+// secret, or the first bot. A CLI with no phrase to show (this computer no longer holds the
+// identity) leaves nothing to resume, and the main window opens.
+func (a *appDelegate) resumeOnboarding(step string) {
+	if step != unfinishedPhrase {
+		a.presentOnboarding()
+		a.onboarding.resume(nil)
+		return
+	}
+	store.BackupPhrase(func(phrase []string, err error) {
+		if a.onboarding != nil || a.main != nil {
+			return
+		}
+		if err != nil || len(phrase) == 0 {
+			setUnfinishedOnboarding("")
+			a.showMainWindow()
+			return
+		}
+		a.presentOnboarding()
+		a.onboarding.resume(phrase)
+	})
 }
 
 // showOnboarding opens onboarding again, from Settings › Advanced. It hides the main window

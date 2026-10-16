@@ -7,7 +7,7 @@ Commands:
 - `lorca tasks list` / `get <id>` / `create '<JSON>'` / `update '<JSON>'` / `run '<JSON>'` — [durable work](tasks.md), through the local service for mutations; `-` reads JSON from stdin. Encrypted records, receipts, and run journals share `lorca.sqlite3`, and interrupted claims require explicit recovery.
 
 - `lorca serve` — the app connects here; `lorca` alone lists the commands and starts nothing, so a bot's `lorca` never starts a second service
-- `lorca identity new` / `identity restore <phrase>` / `identity show`
+- `lorca identity new` / `identity restore <phrase>` / `identity show` / `identity phrase` (the backup phrase again, on the identity device)
 - `lorca pair` — show a pairing string and wait; `lorca pair <string>` joins
 - `lorca provider set <kind> [api-key] [--base-url <url>]` — connect DeepSeek, Anthropic, OpenCode Zen (`opencode`), or OpenCode Go (`opencode-go`) with an API key, or open the browser sign-in for `chatgpt` and `grok`. The key is checked against the API first and read from stdin when omitted. `provider add <name> <base-url> [--api chat-completions|responses|messages|system-one|decisions] [--model <id>]… [--api-key-stdin]` adds a custom provider, its server checked first; `provider remove <kind>` (a custom provider's kind deletes it) / `provider list`. A running `lorca serve` carries out the change over the local websocket; with none, the command changes `credentials.json` itself and runs one sync pass
 - `lorca mcp list` / `get` / `add` / `add-json` / `remove` / `enable` / `disable` / `sign-in` / `sign-out` / `hide` / `show` / `reload` / `import` — the servers in `mcp.json`, through a running `lorca serve` or in that process ([MCP servers](mcp-servers.md#managing-it))

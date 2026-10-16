@@ -403,6 +403,47 @@ func TestRenderSettingsChinese(t *testing.T) {
 	}
 }
 
+// This computer, which holds the identity, shows its backup phrase again after a confirmation;
+// another Device has none to show.
+func TestSettingsShowBackupPhrase(t *testing.T) {
+	m, tt := settingsWindowTester(t, 900)
+	m.showSettings(model.PaneDevice)
+	settle(tt)
+	if !tt.HasText(L("Backup phrase")) {
+		t.Fatalf("no backup phrase row: %q", tt.Texts())
+	}
+	if err := tt.Click(L("Show…")); err != nil {
+		t.Fatal(err)
+	}
+	settle(tt)
+	if !tt.HasText(L("Show the backup phrase?")) || tt.HasText(model.MockBackupPhrase[0]) {
+		t.Fatalf("no confirmation before the phrase: %q", tt.Texts())
+	}
+	if err := tt.Click(L("Show")); err != nil {
+		t.Fatal(err)
+	}
+	settle(tt)
+	for _, text := range []string{L("Your backup phrase"), model.MockBackupPhrase[0], model.MockBackupPhrase[12], L("Copy Phrase")} {
+		if !tt.HasText(text) {
+			t.Fatalf("no %q: %q", text, tt.Texts())
+		}
+	}
+	renderTo(t, tt, "settings-device-phrase")
+	if err := tt.Click(L("Done")); err != nil {
+		t.Fatal(err)
+	}
+	settle(tt)
+	if m.hasSheet() {
+		t.Fatalf("the phrase stayed up")
+	}
+
+	m.showSettingsDevice("dev-studio")
+	settle(tt)
+	if tt.HasText(L("Backup phrase")) {
+		t.Errorf("another Device offers a backup phrase")
+	}
+}
+
 // Rename… in the Device pane asks for a name; Rename renames the Device, and a blank name takes back
 // the name the machine goes by.
 func TestRenameDeviceInSettings(t *testing.T) {

@@ -245,6 +245,49 @@ func TestOnboardingSignInCancels(t *testing.T) {
 	}
 }
 
+// Onboarding over an identity created here, left before the phrase was saved (a quit, a crash, a
+// restart), opens again on the phrase instead of the main window, then on the first bot once the
+// phrase is saved, until it finishes.
+func TestOnboardingResumesUnfinished(t *testing.T) {
+	o, tt := onboardingDemo(t)
+	yes := true
+	prefs.update(PreferencesPatch{HadIdentity: &yes})
+	setUnfinishedOnboarding(unfinishedPhrase)
+	if app.mainWindowIsDue() {
+		t.Fatalf("the main window is due before the CLI answers")
+	}
+	app.hasIdentity = &yes
+	if app.mainWindowIsDue() {
+		t.Fatalf("the main window is due over unfinished onboarding")
+	}
+
+	o.resume(model.MockBackupPhrase)
+	onboardingSettle(tt)
+	if o.step != onboardingCreate || o.savedPhrase || o.origin != onboardingCreated {
+		t.Fatalf("step %d, saved %v, origin %d", o.step, o.savedPhrase, o.origin)
+	}
+	onboardingExpect(t, tt, L("Your backup phrase"), model.MockBackupPhrase[0], model.MockBackupPhrase[12])
+	onboardingClick(t, tt, L("I wrote this phrase down somewhere safe"))
+	onboardingClick(t, tt, L("Continue"))
+	if o.step != onboardingBot || prefs.get().UnfinishedOnboarding != unfinishedSetup {
+		t.Fatalf("step %d, unfinished %q", o.step, prefs.get().UnfinishedOnboarding)
+	}
+
+	// Left on the first bot, it opens there.
+	again := newOnboardingWindow()
+	again.resume(nil)
+	if again.step != onboardingBot || again.origin != onboardingCreated {
+		t.Fatalf("step %d, origin %d", again.step, again.origin)
+	}
+	if app.mainWindowIsDue() {
+		t.Fatalf("the main window is due before the first bot")
+	}
+	setUnfinishedOnboarding("")
+	if !app.mainWindowIsDue() {
+		t.Fatalf("the main window is not due once onboarding finished")
+	}
+}
+
 // A restore, then the provider step with each kind of provider, and Skip for Now.
 func TestOnboardingRestore(t *testing.T) {
 	o, tt := onboardingDemo(t)

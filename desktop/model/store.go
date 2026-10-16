@@ -2996,6 +2996,21 @@ func (s *Store) CreateIdentity(done func([]string, error)) {
 	})
 }
 
+// BackupPhrase is the backup phrase again, which the CLI re-derives from the master secret this
+// Device keeps when it holds the identity.
+func (s *Store) BackupPhrase(done func([]string, error)) {
+	if s.IsMock {
+		s.post(func() { done(MockBackupPhrase, nil) })
+		return
+	}
+	Async(s, func() ([]string, error) {
+		shown, err := call[struct {
+			Phrase []string `json:"phrase"`
+		}](s, "identity.phrase", nil)
+		return shown.Phrase, err
+	}, done)
+}
+
 // UnpairDevice unpairs another Device. The CLI has the relay drop its key; the Device wipes its
 // copy of the account the next time it connects. Fails when the relay could not be told.
 func (s *Store) UnpairDevice(id string, done func(error)) {

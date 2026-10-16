@@ -116,6 +116,14 @@ func (s settingsPane) device(c *ui.Context, m *mainWindow) {
 			}
 			s.mark(c, keyValueRow(c, k, L("Last seen"), lastSeen, false, nil), L("Last seen"))
 			s.mark(c, keyValueRow(c, k, L("Relay"), settingsRelayText(), true, nil), L("Relay"))
+			if device.IsThisDevice && store.IsIdentityDevice {
+				phrase := backupPhraseEntry().row
+				phraseElement, show := actionRow(c.Key("phrase"), k, phrase, actionRowOptions{Value: L("Restores your identity on another computer"), Tint: &p.Label2, Action: L("Show…")})
+				s.mark(c, phraseElement, phrase)
+				if show.Action {
+					s.w.confirmShowPhrase()
+				}
+			}
 			pairing := pairingEntry().row
 			unpairElement, unpair := actionRow(c.Key("pairing"), k, pairing, actionRowOptions{Value: L("Paired to this account"), Tint: &p.Label2, Action: L("Unpair…")})
 			s.mark(c, unpairElement, pairing)
@@ -261,6 +269,38 @@ func (s settingsPane) cliUpdateRow(c *ui.Context, k *card, device *model.Device,
 			}
 		})
 	}
+}
+
+// confirmShowPhrase asks before showing the backup phrase, which the CLI re-derives from the master
+// secret this computer keeps, then shows it with Copy.
+func (w *appWindow) confirmShowPhrase() {
+	w.showAlert(alertOptions{
+		Message:     L("Show the backup phrase?"),
+		Informative: L("Anyone who sees it can restore your identity and read everything in your account. Make sure nobody else can see your screen."),
+		Buttons:     []alertButton{{Title: L("Show")}, {Title: L("Cancel")}},
+	}, func(answer int) {
+		if answer != 0 {
+			return
+		}
+		store.BackupPhrase(func(phrase []string, err error) {
+			if err != nil {
+				w.showAlert(alertOptions{Message: L("Couldn’t show the backup phrase"), Informative: model.ErrorText(err)}, nil)
+				return
+			}
+			w.showAlert(alertOptions{
+				Message:     L("Your backup phrase"),
+				Informative: L("This phrase is your master secret. It re-derives every key and unwraps everything on the relay. Write it down — nobody can reset it for you."),
+				Width:       600,
+				Buttons:     []alertButton{{Title: L("Done")}},
+				Accessory: func(c *ui.Context) {
+					ui.Column(c).AlignItems(ui.Start).Gap(12).Children(func() {
+						phraseGrid(c, phrase)
+						copyButton(c, strings.Join(phrase, " "), copyOptions{Title: L("Copy Phrase"), Bordered: true})
+					})
+				},
+			}, nil)
+		})
+	})
 }
 
 // confirmUnpair asks before unpairing a Device, then unpairs it. Another Device is unpaired by id;

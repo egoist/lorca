@@ -17,7 +17,7 @@ After Happy’s layering, the Device that creates or restores the identity is th
 
 AEAD envelopes are `nonce(24) || ciphertext` with the blob kind as associated data. Sealed boxes are libsodium `crypto_box_seal` (`crypto_box` crate); signatures are `ed25519-dalek`.
 
-Recovery: restore the master secret from the backup phrase → re-derive content keys → open the keyring the identity signed on the relay ([the account key](relay-trust.md#the-account-key)). The backup phrase is the identity.
+Recovery: restore the master secret from the backup phrase → re-derive content keys → open the keyring the identity signed on the relay ([the account key](relay-trust.md#the-account-key)). The backup phrase is the identity. The identity device re-derives it from `identity.json` whenever asked: `identity.phrase` answers it (a Device without the master secret has none), `lorca identity phrase` prints it, and the desktop app shows it from Settings › Devices (Backup phrase, Show…) after a confirmation.
 
 ## Pairing a Device
 

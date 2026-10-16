@@ -133,6 +133,10 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             identity::restore(app, &phrase, opt_string(&params, "device_name")).await.map_err(|e| e.to_string())?;
             Ok(json!({ "device_id": app.this_device_id() }))
         }
+        "identity.phrase" => {
+            let phrase = identity::phrase(app).map_err(|e| e.to_string())?;
+            Ok(json!({ "phrase": phrase }))
+        }
 
         "pair.start" => {
             let (nonce, pairing_string) = pairing::start(app.clone()).await.map_err(|e| e.to_string())?;
