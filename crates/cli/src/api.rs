@@ -193,6 +193,20 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             };
             crate::requests::ask(app, &id, "update.auto", json!({ "on": on })).await
         }
+        // The desktop app on another Runner by id, or on this one: installs its latest version
+        // and relaunches into it once no bot is at work there.
+        "device.update_app" => {
+            let id = opt_string(&params, "id").filter(|id| app.this_device_id().as_deref() != Some(id.as_str()));
+            let Some(id) = id else {
+                #[cfg(feature = "cli")]
+                return crate::app_update::install(app);
+                #[cfg(not(feature = "cli"))]
+                return Err("This Device has no desktop app.".into());
+            };
+            crate::requests::ask(app, &id, "app.update.install", json!({})).await
+        }
+        #[cfg(feature = "cli")]
+        "app.relaunch_when_idle" => crate::app_update::relaunch_when_idle(app).await,
         "identity.forget" => {
             crate::sync::revoke_self(app).await;
             app.forget_identity().map_err(|e| e.to_string())?;

@@ -88,7 +88,7 @@ func mockDevices() []*Device {
 	return []*Device{
 		{ID: "dev-workbench", Name: "Workbench", Model: "ThinkPad X1 Carbon Gen 13", OS: OSLinux, OSVersion: "Ubuntu 26.04", IsThisDevice: true, Status: StatusOnline, LastSeen: time.Now(), MachineKey: "mk_7c41…a09f", Plugins: mockPlugins(), Channels: mockChannels(), Version: "0.1.11"},
 		{ID: "dev-studio", Name: "Studio", Model: "Mac Studio (M3 Ultra)", OS: OSMacOS, OSVersion: "macOS 27.0", Status: StatusOnline, LastSeen: minutesAgo(1), MachineKey: "mk_1f88…23bd", Version: "0.1.10", Update: &DeviceUpdate{Auto: true, Latest: "0.1.11"}},
-		{ID: "dev-closet", Name: "Closet PC", Model: "Desktop", OS: OSWindows, OSVersion: "Windows 11 25H2", Status: StatusOffline, LastSeen: minutesAgo(184), MachineKey: "mk_c052…77e1", Version: "0.1.11"},
+		{ID: "dev-closet", Name: "Closet PC", Model: "Desktop", OS: OSWindows, OSVersion: "Windows 11 25H2", Status: StatusOffline, LastSeen: minutesAgo(184), MachineKey: "mk_c052…77e1", Version: "0.1.11", App: &DeviceApp{Version: "0.4.2", Update: DeviceUpdate{Latest: "0.4.3"}}},
 		{ID: "dev-phone", Name: "iPhone", Model: "iPhone 17 Pro", OS: OSIOS, OSVersion: "iOS 27.0", Status: StatusOnline, LastSeen: minutesAgo(12), MachineKey: "mk_9e3d…51c8"},
 	}
 }

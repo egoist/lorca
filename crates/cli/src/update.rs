@@ -592,26 +592,48 @@ async fn restart_when_idle(app: Arc<App>, version: String) {
     }
     let waiting = tokio::time::Instant::now();
     loop {
-        let patient = || waiting.elapsed() < Duration::from_secs(DAY);
-        while !is_idle(&app, patient()) {
-            tokio::time::sleep(Duration::from_secs(5)).await;
-        }
-        let flushed = tokio::time::Instant::now();
-        while flushed.elapsed() < Duration::from_secs(10) && app.store.first_outbox().ok().flatten().is_some() {
-            tokio::time::sleep(Duration::from_millis(250)).await;
-        }
-        if !patient() {
-            app.shell_sessions.shutdown(&app);
-            app.coding_agents.shutdown(&app).await;
-        }
-        app.save_state_now();
-        let Some(error) = restart_if_idle(&app, &version, patient()) else { continue };
+        let patient = wait_idle(&app, waiting).await;
+        let Some(error) = restart_if_idle(&app, &version, patient) else { continue };
         tracing::error!(%error, "restarting into the new release");
         set_status(&app, |status| {
             status.state = "installed".into();
             status.error = Some(format!("Lorca {version} is installed, but lorca serve could not restart into it: {error}"));
         });
         return;
+    }
+}
+
+/// Waits until this Runner is idle ([`is_idle`]), then for what it queued for the relay to go up
+/// (ten seconds at most), and saves its state. A day after `waiting` it stops the commands bots
+/// left running and the coding agents at work rather than wait on them for good. Answers whether
+/// it was still patient: a later check of [`is_idle`] counts those commands only then.
+async fn wait_idle(app: &Arc<App>, waiting: tokio::time::Instant) -> bool {
+    let patient = || waiting.elapsed() < Duration::from_secs(DAY);
+    while !is_idle(app, patient()) {
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
+    let flushed = tokio::time::Instant::now();
+    while flushed.elapsed() < Duration::from_secs(10) && app.store.first_outbox().ok().flatten().is_some() {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    let patient = patient();
+    if !patient {
+        app.shell_sessions.shutdown(app);
+        app.coding_agents.shutdown(app).await;
+    }
+    app.save_state_now();
+    patient
+}
+
+/// Returns once this Runner is idle and has sent what it queued, for the desktop app to relaunch
+/// into its new version, which stops this CLI and starts the new one it carries.
+pub async fn until_idle(app: &Arc<App>) {
+    let waiting = tokio::time::Instant::now();
+    loop {
+        let patient = wait_idle(app, waiting).await;
+        if is_idle(app, patient) {
+            return;
+        }
     }
 }
 

@@ -23,8 +23,8 @@ import { alert, prompt } from "../../../src/ui/alert";
 
 const OS_NAMES: Record<string, string> = { macos: "macOS", linux: "Linux", windows: "Windows", ios: "iOS", ipados: "iPadOS", android: "Android" };
 
-/// A self-updating Runner's CLI: its version, then where its updates stand.
-function cliStatus(version: string, update: UpdateStatus): string {
+/// A Runner's desktop app or self-updating CLI: its version, then where its updates stand.
+function updateStatus(version: string, update: UpdateStatus): string {
   const latest = update.latest ?? "";
   switch (update.state) {
     case "installing":
@@ -53,6 +53,7 @@ export default function DeviceScreen() {
   const relayUpdateRequired = useStore((s) => s.relayUpdateRequired);
   const relayUrl = useStore((s) => s.relayUrl);
   const [updating, setUpdating] = useState(false);
+  const [updatingApp, setUpdatingApp] = useState(false);
   // What an online Runner said of its service, asked each time the screen shows it.
   const [service, setService] = useState<{ id: string; installed: boolean; running: boolean }>();
   const isThis = device?.id === engine.deviceId;
@@ -130,6 +131,18 @@ export default function DeviceScreen() {
       .finally(() => setUpdating(false));
   }
 
+  // A newer version than the Runner's desktop app runs: the Lorca app row installs it, and the app
+  // relaunches into it once no bot is at work there.
+  const app = device.app;
+  const offersAppUpdate = !!app?.latest && !app.state;
+  function installAppUpdate(target: Device) {
+    setUpdatingApp(true);
+    engine
+      .updateDeviceApp(target.id)
+      .catch((error: unknown) => alert(t("Couldn’t update {name}", { name: deviceName(target) }), error instanceof Error ? error.message : String(error)))
+      .finally(() => setUpdatingApp(false));
+  }
+
   return (
     <>
       <Stack.Screen options={{ title: "" }} />
@@ -191,10 +204,25 @@ export default function DeviceScreen() {
         >
           <Row title={t("Machine key")} detail={device.machine_key} />
           {!device.unknown && <Row title={t("OS")} detail={device.os_version || osName} />}
+          {app && (
+            <Row
+              title={t("Lorca app")}
+              subtitle={updateStatus(app.version, app)}
+              subtitleLines={3}
+              onPress={offersAppUpdate && online && !updatingApp ? () => installAppUpdate(device) : undefined}
+              accessory={
+                updatingApp ? (
+                  <ActivityIndicator />
+                ) : offersAppUpdate ? (
+                  <Text style={[styles.action, { color: online ? p.tint : p.tertiaryLabel }]}>{t("Update")}</Text>
+                ) : undefined
+              }
+            />
+          )}
           {update && (
             <Row
               title={t("Lorca CLI")}
-              subtitle={cliStatus(device.version ?? "", update)}
+              subtitle={updateStatus(device.version ?? "", update)}
               subtitleLines={3}
               onPress={offersUpdate && online && !updating ? () => installUpdate(device) : undefined}
               accessory={

@@ -74,6 +74,10 @@ pub enum Event {
     /// notification extension.
     #[serde(rename = "account.key_changed")]
     AccountKeyChanged,
+    /// A Device asked the desktop app that runs this CLI to install its latest version and
+    /// relaunch into it once no bot is at work here.
+    #[serde(rename = "app.update.install")]
+    AppUpdateInstall,
 }
 
 /// Why this Device's last try to connect to the relay failed.

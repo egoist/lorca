@@ -950,6 +950,7 @@ mod tests {
             plugins: Vec::new(), channels: Vec::new(),
             version: String::new(),
             update: None,
+            app: None,
             updated_at: 1,
         });
         let cancel = CancellationToken::new();
@@ -1067,6 +1068,7 @@ mod tests {
             plugins: Vec::new(), channels: Vec::new(),
             version: String::new(),
             update: None,
+            app: None,
             updated_at: 1,
         });
         app.state.lock().unwrap().turns_online.insert("mac".into());
@@ -1098,6 +1100,7 @@ mod tests {
             plugins: Vec::new(), channels: Vec::new(),
             version: String::new(),
             update: None,
+            app: None,
             updated_at: 1,
         };
         app.state.lock().unwrap().device_seen.insert("mac".into(), 1);

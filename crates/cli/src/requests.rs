@@ -164,6 +164,8 @@ async fn answer(app: &Arc<App>, from: &str, request: &Request) -> Result<Value, 
         #[cfg(feature = "cli")]
         "update.auto" => crate::update::set_auto(app, body["on"].as_bool().ok_or("missing on")?),
         #[cfg(feature = "cli")]
+        "app.update.install" => crate::app_update::install(app),
+        #[cfg(feature = "cli")]
         "service.status" => crate::service::status_out(&app.config),
         other => Err(format!("Unknown request {other}")),
     }

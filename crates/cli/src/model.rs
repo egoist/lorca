@@ -57,8 +57,23 @@ pub struct Device {
     /// where an app updates the CLI it carries, and on phones.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub update: Option<UpdateStatus>,
+    /// The desktop app that carries this Runner's CLI and updates itself, while it is open: its
+    /// version and how its updates stand. Unset for a CLI on its own and on phones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app: Option<AppStatus>,
     #[serde(default)]
     pub updated_at: i64,
+}
+
+/// The desktop app on a Runner, as its `machine` blob tells every Device: its version and its
+/// updates, which any Device can ask it to install.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct AppStatus {
+    pub version: String,
+    /// `auto` installs a newer version by itself; `state` is `installing`, or `restarting` while
+    /// the installed version waits for the Runner's bots before the app relaunches into it.
+    #[serde(flatten)]
+    pub update: UpdateStatus,
 }
 
 /// A self-updating CLI's updates, as every Device sees them in its `machine` blob.

@@ -5,6 +5,8 @@
 
 pub mod api;
 pub mod app;
+#[cfg(feature = "cli")]
+pub mod app_update;
 pub mod attention;
 pub mod budgets;
 pub mod channels;

@@ -713,6 +713,9 @@ type Device struct {
 	// Update is how a CLI that replaces itself keeps current; nil where an app updates the CLI it
 	// carries, and on phones.
 	Update *DeviceUpdate
+	// App is the desktop app that runs this Runner's CLI, while it is open and updates itself:
+	// nil for a CLI on its own, an app that cannot update itself, and phones.
+	App *DeviceApp
 	// MachineName is the name the machine goes by, which a name the account gives the Device
 	// stands in for. Empty when it is Name.
 	MachineName string
@@ -728,6 +731,15 @@ type DeviceUpdate struct {
 	State string
 	// Error is why the last check or install failed, in the CLI's words.
 	Error string
+}
+
+// DeviceApp is the desktop app on a Runner, as its `machine` blob tells every Device: its version
+// and its updates, which any Device can ask it to install.
+type DeviceApp struct {
+	Version string
+	// Update is how its updates stand. State is "installing", "restarting" while the installed
+	// version waits for the Runner's bots before the app relaunches into it, or "".
+	Update DeviceUpdate
 }
 
 // IsRunner is derived from the OS alone: a desktop Device is a Runner and can be assigned bots.
