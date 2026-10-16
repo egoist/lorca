@@ -79,7 +79,7 @@ func autoReviewRulesEntry() settingsEntry {
 }
 
 func codingAgentsEntry() settingsEntry {
-	return entry(model.PaneCodingAgents, L("Coding Agents"), "", L("coding agent code worktree pull request order preference"))
+	return entry(model.PaneCodingAgents, L("Coding Agents"), "", L("coding agent code pull request order preference"))
 }
 
 // codingAgentEntry is an agent's row, by its product's name.

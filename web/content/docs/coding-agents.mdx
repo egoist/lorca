@@ -14,7 +14,7 @@ Ask the bot:
 
 The bot gives the job a short title and a brief, starts the agent, and the chat shows **Messaged ⬢ Login: fix the flaky test** with the agent's logo. Starting one needs **Shell commands** in the bot's [Access](/docs/access).
 
-In a git repository the agent never works in your checkout. It gets a worktree of its own in Lorca's folder, on a new branch made from the repository's current commit, named after the job. A later job can go on in the same branch. A folder that isn't a repository is worked in as it is.
+The agent works in the folder the bot gives it, as it would if you started it there in a terminal: it decides how, a branch or a worktree of its own included. If you want the work on a new branch or kept out of your checkout, say so, and the bot tells the agent.
 
 ## Which agent
 
@@ -22,7 +22,7 @@ Each computer that runs bots keeps its own list of the five, in your order of pr
 
 ## What it may do
 
-Every command the agent runs goes through the bot's Access and [Auto-review](/docs/auto-review), as the bot's own commands do. Commands that only read, and work inside its worktree, run at once; a push or a deploy is weighed against what you asked for. When Auto-review asks you, the card under the agent's marker reads "Claude Code wants to run a command" with the command, **Allow once**, **Always allow**, and **Deny**, on any of your devices.
+Every command the agent runs goes through the bot's Access and [Auto-review](/docs/auto-review), as the bot's own commands do. Commands that only read, and work inside its folder, run at once; a push or a deploy is weighed against what you asked for. When Auto-review asks you, the card under the agent's marker reads "Claude Code wants to run a command" with the command, **Allow once**, **Always allow**, and **Deny**, on any of your devices.
 
 A bot can give an agent [secrets](/docs/secrets) it saved for commands, such as `NPM_TOKEN` to publish a package. The agent has them in its environment; its transcript and messages show their names, never their values.
 

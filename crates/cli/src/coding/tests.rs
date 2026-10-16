@@ -281,7 +281,7 @@ async fn setup() -> Scratch {
     }
     let repo = home.join("work").join("shop");
     std::fs::create_dir_all(&repo).unwrap();
-    workspace::git(&repo, &["init", "-q"]).await.unwrap();
+    workspace::git(&repo, &["init", "-q", "-b", "main"]).await.unwrap();
     std::fs::write(repo.join("README.md"), "shop\n").unwrap();
     workspace::git(&repo, &["add", "."]).await.unwrap();
     workspace::git(&repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"]).await.unwrap();
@@ -382,7 +382,7 @@ async fn call(tool: &CodingAgentTool, call_id: &str, args: Value) -> Result<Stri
 }
 
 #[tokio::test]
-async fn claude_code_works_in_a_worktree_asks_on_its_row_and_its_message_wakes_the_bot() {
+async fn claude_code_works_in_the_folder_asks_on_its_row_and_its_message_wakes_the_bot() {
     let scratch = setup().await;
     let app = &scratch.app;
     auto_review_off(app);
@@ -392,12 +392,14 @@ async fn claude_code_works_in_a_worktree_asks_on_its_row_and_its_message_wakes_t
     let chat_lock = app.chat_lock("chat");
     let held = chat_lock.lock().await;
 
-    let started = call(&tool, "call-1", json!({ "action": "start", "agent": "claude", "title": "Login: fix the Safari bug", "folder": "shop", "worktree": "fix-login", "prompt": "Fix the login bug\nwith a test" })).await.unwrap();
-    assert!(started.starts_with("Started Claude Code (agent-") && started.contains("branch fix-login") && started.contains("“Login: fix the Safari bug”"), "{started}");
+    let started = call(&tool, "call-1", json!({ "action": "start", "agent": "claude", "title": "Login: fix the Safari bug", "folder": "shop", "prompt": "Fix the login bug\nwith a test" })).await.unwrap();
+    assert!(started.starts_with("Started Claude Code (agent-") && started.contains("(on branch main)") && started.contains("“Login: fix the Safari bug”"), "{started}");
     let agent = app.coding_agents.of("chat", "b1").pop().unwrap();
     let record = agent.record();
-    assert_eq!((record.kind.as_str(), record.branch.as_deref(), record.task.as_str(), record.title.as_str()), ("claude", Some("fix-login"), "Fix the login bug", "Login: fix the Safari bug"));
-    assert!(record.folder.starts_with(scratch.home.join("worktrees")));
+    assert_eq!((record.kind.as_str(), record.branch.as_deref(), record.task.as_str(), record.title.as_str()), ("claude", Some("main"), "Fix the login bug", "Login: fix the Safari bug"));
+    // It works in the folder itself: Lorca makes no worktree.
+    assert_eq!(record.folder, std::fs::canonicalize(&scratch.repo).unwrap());
+    assert!(!scratch.home.join("worktrees").exists());
 
     // Its push asks the user on its row, Auto-review being off; Allow lets it go on.
     let asking = card_when(app, &row, |card| card.state == "asking").await;
@@ -410,13 +412,13 @@ async fn claude_code_works_in_a_worktree_asks_on_its_row_and_its_message_wakes_t
     let done = card_when(app, &row, |card| card.state == "idle").await;
     assert_eq!(done.pull_request.as_deref(), Some("https://github.com/acme/shop/pull/7"));
     assert_eq!(done.changes, Some(AgentChanges { files: 1, added: 1, removed: 0 }));
-    assert_eq!((done.title.as_str(), done.branch.as_deref()), ("Login: fix the Safari bug", Some("fix-login")));
+    assert_eq!((done.title.as_str(), done.branch.as_deref()), ("Login: fix the Safari bug", Some("main")));
 
     // Its transcript is steps: where it works, what it was sent, thought, ran, edited, and said.
     let items = steps(app, &row).await;
     let kinds: Vec<&str> = items.iter().map(|item| item.kind.as_str()).collect();
     assert_eq!(kinds, vec!["status", "prompt", "thought", "tool", "tool", "text"], "{items:?}");
-    assert_eq!(items[0].text, "Worktree ready on fix-login");
+    assert_eq!(items[0].text, format!("Working in {} on main", home_relative(&record.folder)));
     assert!(items[1].text.starts_with("Fix the login bug\nwith a test\n\nYou work in "), "{}", items[1].text);
     let push = items[3].tool.as_ref().unwrap();
     assert_eq!((push.kind.as_str(), push.title.as_str(), push.status.as_str(), push.output.as_deref()), ("execute", "git push origin feature", "done", Some("pushed")));
@@ -428,7 +430,7 @@ async fn claude_code_works_in_a_worktree_asks_on_its_row_and_its_message_wakes_t
     assert_eq!((agent_id.as_str(), text.as_str(), failed), (agent.id().as_str(), "Fixed it and opened https://github.com/acme/shop/pull/7", false));
     let job = crate::runtime::agent_job(app, "chat", "b1", &message_id);
     let cue = wake_cue(app, &job).expect("the bot hears it");
-    assert!(cue.contains("is done") && cue.contains("on branch fix-login") && cue.contains("It changed 1 file (+1 −0)") && cue.contains("pull/7"), "{cue}");
+    assert!(cue.contains("is done") && cue.contains("on branch main") && cue.contains("It changed 1 file (+1 −0)") && cue.contains("pull/7"), "{cue}");
     assert!(wake_cue(app, &job).is_none(), "heard once");
     drop(held);
 

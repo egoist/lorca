@@ -229,7 +229,7 @@ func TestRenderCodingAgents(t *testing.T) {
 	if !m.hasSheet() {
 		t.Fatal("no agent page")
 	}
-	for _, text := range []string{"Claude Code · Working · fix-docs-link · Studio", "Prompt", "Show more", "Worktree ready on fix-docs-link",
+	for _, text := range []string{"Claude Code · Working · fix-docs-link · Studio", "Prompt", "Show more", "Working in ~/Projects/site on main",
 		"Thought for 3s", "Explored 3 files 2 searches", "Point the link at /docs/cli/install", "Not allowed: git push origin fix-docs-link",
 		"The link test failed: the Chinese page still links to /docs/install.", "Running bun test links", "Stop", "fix-docs-link"} {
 		if !tt.HasText(text) {
@@ -276,7 +276,7 @@ func TestRenderCodingAgents(t *testing.T) {
 	finished := model.AgentRowOf(chat, "agent-7d21e0b4")
 	m.presentAgentPage(chat.ID, finished.ID)
 	settleTransitions(tt)
-	for _, text := range []string{"#7", "+12 −3 in 4 files", "docs-use-mygo-json-1f2e", "Claude Code · Ready for review · docs-use-mygo-json-1f2e · Studio"} {
+	for _, text := range []string{"#7", "+12 −3 in 4 files", "docs-use-mygo-json", "Claude Code · Ready for review · docs-use-mygo-json · Studio"} {
 		if !tt.HasText(text) {
 			t.Errorf("no %q on the finished page: %q", text, tt.Texts())
 		}

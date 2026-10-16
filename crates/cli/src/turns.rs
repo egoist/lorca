@@ -1876,8 +1876,8 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
     if job.kind != crate::workflows::SAMPLE_JOB {
         prompt.push_str(
             "\nFor a larger coding job in a repository on this Runner (a feature, a fix with tests, a refactor), or when the user \
-             asks for Claude Code, Codex, OpenCode, pi, or fx, hand it to a coding agent with coding_agent: it works on its own in a \
-             git worktree while you supervise. Give it a short title and a full brief, tell the user you started it, and end your \
+             asks for Claude Code, Codex, OpenCode, pi, or fx, hand it to a coding agent with coding_agent: it works on its own in the \
+             repository while you supervise. Give it a short title and a full brief, tell the user you started it, and end your \
              turn; when its message arrives, check its work against the request, send it follow-ups, and tell the user how it \
              went, with its pull request when it opened one. Its commands go through Auto-review as yours do.\n",
         );

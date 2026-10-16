@@ -1,5 +1,5 @@
 //! Coding agents a bot runs on its Runner and supervises: Claude Code, Codex, OpenCode, pi, or fx,
-//! in a git worktree of a repository there, on a prompt and under a title the bot gives the job.
+//! in a folder there, as it is, on a prompt and under a title the bot gives the job.
 //! The agent is a process of its own that outlives the turn that started it. The bot keeps its id
 //! across turns, reads its transcript, sends it follow-ups (queued, or cutting in), and stops it.
 //! When the agent is done with what it was asked, or ends on its own, what it said arrives in the
@@ -514,7 +514,7 @@ pub(crate) async fn start(app: &Arc<App>, start: Start) -> Result<Arc<Agent>, St
     *agent.budget.lock().unwrap() = crate::budgets::current();
     app.coding_agents.agents.lock().unwrap().push(agent.clone());
     let place = match &start.place.branch {
-        Some(branch) => format!("Worktree ready on {branch}"),
+        Some(branch) => format!("Working in {} on {branch}", home_relative(&start.place.folder)),
         None => format!("Working in {}", home_relative(&start.place.folder)),
     };
     agent.add(app, Item::text("place", "status", &place));
@@ -733,8 +733,11 @@ async fn handle(app: &Arc<App>, agent: &Arc<Agent>, event: Event, generation: u6
                 (record.folder.clone(), record.base.clone())
             };
             if let Some(base) = base {
-                let changes = workspace::changes(&folder, &base).await;
-                agent.record.lock().unwrap().changes = changes;
+                // The agent may have moved to a branch of its own.
+                let (changes, branch) = (workspace::changes(&folder, &base).await, workspace::branch(&folder).await);
+                let mut record = agent.record.lock().unwrap();
+                record.changes = changes;
+                record.branch = branch.or(record.branch.take());
             }
             let said = said.or_else(|| agent.transcript.lock().unwrap().last_said()).unwrap_or_else(|| "Done.".into());
             tell(app, agent, &said, false);
@@ -926,7 +929,7 @@ async fn approve(app: &Arc<App>, agent: &Arc<Agent>, approval: Approval) -> Resu
     let cancel = tokio_util::sync::CancellationToken::new();
     let propose_rule = matches!(approval, Approval::Command { .. });
     let facts = match &approval {
-        Approval::Command { command } => crate::local_review::facts(app, command, &folder).await,
+        Approval::Command { command } => crate::local_review::facts(command, &folder).await,
         _ => Vec::new(),
     };
     let action = crate::plugins::review::Action { target_name: &runner_name, tool, description: &description, args: &args, script: None, facts: &facts, propose_rule };

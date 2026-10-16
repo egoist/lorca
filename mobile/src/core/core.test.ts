@@ -131,7 +131,7 @@ describe("model", () => {
   });
 
   test("a coding agent stops while it runs and has a page once it started", () => {
-    const agent = (state: AgentRun["state"], more: Partial<AgentRun> = {}): AgentRun => ({ id: "agent-1", kind: "claude", title: "Fix the login", task: "Fix it", folder: "~/.lorca/worktrees/site-1a2b3c/fix-it", branch: "fix-it", state, ...more });
+    const agent = (state: AgentRun["state"], more: Partial<AgentRun> = {}): AgentRun => ({ id: "agent-1", kind: "claude", title: "Fix the login", task: "Fix it", folder: "~/Projects/site", branch: "fix-it", state, ...more });
     expect(agentName("claude")).toBe("Claude Code");
     expect(agentName("codex")).toBe("Codex");
     expect(agentName("opencode")).toBe("OpenCode");

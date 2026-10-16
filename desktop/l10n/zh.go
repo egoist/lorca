@@ -1495,6 +1495,6 @@ var zh = map[string]string{
 	"Could not save the coding agents": "无法保存编程智能体设置",
 	"Bots on this Runner hand coding work to these agents. A bot uses the first one that's on and installed, unless you asked for another. Drag an agent to change the order.": "这台 Runner 上的智能体会把编程工作交给这些编程智能体，默认用排在最前、已开启且已安装的那一个，除非你指定了别的。拖动编程智能体可以调整顺序。",
 	"Drag to reorder": "拖动以调整顺序",
-	"coding agent code worktree pull request order preference": "编程智能体 代码 工作树 拉取请求 顺序 偏好",
-	"coding agent installed version":                           "编程智能体 已安装 版本",
+	"coding agent code pull request order preference": "编程智能体 代码 拉取请求 顺序 偏好",
+	"coding agent installed version":                  "编程智能体 已安装 版本",
 }

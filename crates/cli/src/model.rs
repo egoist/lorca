@@ -509,8 +509,7 @@ pub struct AgentRun {
     pub title: String,
     /// What it was asked: the prompt's first line.
     pub task: String,
-    /// Where it works, from the home folder: the worktree Lorca made for it, or a folder that
-    /// is not a repository.
+    /// Where it works, from the home folder: the folder the bot gave it.
     #[serde(default)]
     pub folder: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
