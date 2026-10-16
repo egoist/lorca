@@ -7,7 +7,8 @@
 //! holding and is final when it finds nothing, and, for what it flags, one that thinks and
 //! applies what the user asked for. A held action goes back to the bot, which reads why and
 //! finds another way or asks the user in the chat; after three holds in a row, or twenty in a
-//! turn, the user decides on a card instead. With Auto-review off, every such action asks.
+//! turn, the user decides on a card instead. A review no model could finish judges nothing, so
+//! the user decides on a card at once. With Auto-review off, every such action asks.
 //!
 //! [`review_prompt`]: super::review_prompt
 
@@ -19,11 +20,11 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::Value;
 use lorca_agent::provider::AssistantAccumulator;
-use lorca_agent::types::{LlmMessage, StopReason, UserMessage};
+use lorca_agent::types::{AssistantMessage, LlmMessage, StopReason, UserMessage};
 use lorca_agent::{ModelRequest, Provider, RequestHooks, RequestOptions, ThinkingLevel};
 use tokio_util::sync::CancellationToken;
 
-use super::review_prompt::{ALLOW_WHEN, DECISION_INSTRUCTIONS, FIRST_PASS, RULE_PROMPT, SECOND_PASS, SYSTEM_PROMPT};
+use super::review_prompt::{ALLOW_WHEN, DECIDE_NOW, DECISION_INSTRUCTIONS, FIRST_PASS, RULE_PROMPT, SECOND_PASS, SYSTEM_PROMPT};
 use crate::app::App;
 use crate::decisions::{Choice, Decider};
 use crate::model::{Author, Body, Bot, Message, Routine};
@@ -114,7 +115,8 @@ pub async fn decide(
 /// Reviews one action of the turn that `trigger` started. With Auto-review off it asks; on, its
 /// model ([`reviewer`](crate::providers::reviewer)) judges it ([`classify`]) against the chat
 /// that asked for it ([`request`]), the facts, and the user's rules. A hold goes back to the bot
-/// until it has had three in a row or twenty in the turn; then the user decides.
+/// until it has had three in a row or twenty in the turn; then the user decides. A review that
+/// could not run judged nothing, so it asks the user at once rather than holding the action.
 pub async fn review(app: &Arc<App>, bot: &Bot, chat_id: &str, trigger: &Trigger, action: Action<'_>, cancel: &CancellationToken) -> Outcome {
     let auto_review = app.auto_review();
     if !auto_review.is_enabled {
@@ -144,8 +146,12 @@ pub async fn review(app: &Arc<App>, bot: &Bot, chat_id: &str, trigger: &Trigger,
         Verdict::Unavailable(error) => {
             tracing::warn!(%error, tool = action.tool, "auto-review could not check an action");
             let reason = format!("Auto-review could not check this action ({error}).");
-            let note = format!("{reason} Nothing ran. This is usually brief: wait a moment, then run it again as it is.");
-            held(&turn, reason, None, note)
+            // A stopped turn asks nobody; the action does not run either way.
+            if cancel.is_cancelled() {
+                let note = format!("{reason} Nothing ran.");
+                return Outcome::Held { reason, rule: None, note };
+            }
+            Outcome::Ask { reason: Some(reason), rule: None }
         }
     }
 }
@@ -362,17 +368,43 @@ async fn classify(app: &Arc<App>, bot: &Bot, chat_id: &str, read: &Reading, canc
 async fn first_pass(app: &App, provider: &Arc<dyn Provider>, thinking: Option<ThinkingLevel>, text: &str, chat_id: &str, cancel: &CancellationToken) -> Result<First, String> {
     // Just the tag, unless the model thinks before it answers.
     let max_tokens = if thinking == Some(ThinkingLevel::Off) { 64 } else { 2048 };
-    let reply = ask_chat_model(app, provider, thinking, text, max_tokens, FIRST_PASS_TIME, chat_id, cancel).await?;
+    let reply = ask_chat_model(app, provider, thinking, vec![user(text)], max_tokens, FIRST_PASS_TIME, chat_id, cancel).await?.text();
     tracing::debug!(%reply, "auto-review first pass");
     // An answer it cannot read is a flag: the second pass looks closer.
     Ok(if first_answer(&reply) == Some(false) { First::Clear } else { First::Flagged(None) })
 }
 
-/// The second pass's verdict, after the model thinks it through.
+/// The second pass's verdict, after the model thinks it through. A model whose thinking runs
+/// out of room stopped mid-thought, where a verdict tag is one it may have gone on to reconsider,
+/// so that reply is not read: the model is asked to decide from what it weighed, a short answer
+/// that reuses the cached request and its thinking.
 async fn second_pass(app: &App, provider: &Arc<dyn Provider>, thinking: Option<ThinkingLevel>, read: &Reading, chat_id: &str, cancel: &CancellationToken) -> Result<Verdict, String> {
-    let reply = ask_chat_model(app, provider, thinking, &read.second_pass(), 4096, SECOND_PASS_TIME, chat_id, cancel).await?;
-    tracing::debug!(%reply, "auto-review second pass");
-    second_answer(&reply).ok_or_else(|| "it could not read its own answer".to_string())
+    let text = read.second_pass();
+    let reply = ask_chat_model(app, provider, thinking, vec![user(&text)], SECOND_PASS_TOKENS, SECOND_PASS_TIME, chat_id, cancel).await?;
+    tracing::debug!(reply = %reply.text(), stop = ?reply.stop_reason, "auto-review second pass");
+    if reply.stop_reason != StopReason::Length {
+        return second_answer(&reply.text()).ok_or_else(|| NO_VERDICT.to_string());
+    }
+    let messages = vec![user(&text), LlmMessage::Assistant(reply), user(DECIDE_NOW)];
+    let decided = ask_chat_model(app, provider, thinking, messages, DECIDE_NOW_TOKENS, SECOND_PASS_TIME, chat_id, cancel).await?;
+    tracing::debug!(reply = %decided.text(), stop = ?decided.stop_reason, "auto-review second pass, deciding");
+    if decided.stop_reason == StopReason::Length {
+        return Err(OUT_OF_ROOM.into());
+    }
+    second_answer(&decided.text()).ok_or_else(|| NO_VERDICT.to_string())
+}
+
+/// Why a second pass failed, as the card and the log say it.
+const OUT_OF_ROOM: &str = "its model ran out of room before answering";
+const NO_VERDICT: &str = "its model answered without a verdict";
+
+/// The second pass's room for its thinking and answer, and for the answer alone once its
+/// thinking ran out of room.
+const SECOND_PASS_TOKENS: u64 = 4096;
+const DECIDE_NOW_TOKENS: u64 = 1024;
+
+fn user(text: &str) -> LlmMessage {
+    LlmMessage::User(UserMessage::text(text.to_string()))
 }
 
 /// How long each pass may take before it counts as failed: a first pass that stalls is a flag,
@@ -380,21 +412,21 @@ async fn second_pass(app: &App, provider: &Arc<dyn Provider>, thinking: Option<T
 const FIRST_PASS_TIME: Duration = Duration::from_secs(10);
 const SECOND_PASS_TIME: Duration = Duration::from_secs(60);
 
-/// Asks a chat model with the review's rules as its system prompt, for its reply's text.
+/// Asks a chat model with the review's rules as its system prompt, for its reply.
 #[allow(clippy::too_many_arguments)]
 async fn ask_chat_model(
     app: &App,
     provider: &Arc<dyn Provider>,
     thinking: Option<ThinkingLevel>,
-    text: &str,
+    messages: Vec<LlmMessage>,
     max_tokens: u64,
     timeout: Duration,
     chat_id: &str,
     cancel: &CancellationToken,
-) -> Result<String, String> {
+) -> Result<AssistantMessage, String> {
     let request = ModelRequest {
         system_prompt: SYSTEM_PROMPT.into(),
-        messages: vec![LlmMessage::User(UserMessage::text(text.to_string()))],
+        messages,
         tools: Vec::new(),
         cache_points: Vec::new(),
         max_tokens: Some(max_tokens),
@@ -413,7 +445,7 @@ async fn ask_chat_model(
     if matches!(message.stop_reason, StopReason::Aborted | StopReason::Error) {
         return Err(message.error_message.unwrap_or_else(|| "no answer".into()));
     }
-    Ok(message.text())
+    Ok(message)
 }
 
 /// The reply after the model's thinking, where its answer is.
@@ -940,7 +972,8 @@ mod tests {
     }
 
     /// A chat-completions model behind `custom:fake` that answers with the replies in turn, an
-    /// empty reply standing for a server error, and keeps what it was asked.
+    /// empty reply standing for a server error and one starting `LENGTH:` for a reply cut off at
+    /// its token limit, and keeps what it was asked.
     async fn scripted_model(app: &App, replies: Vec<&str>) -> (Arc<Mutex<VecDeque<String>>>, Arc<Mutex<Vec<String>>>) {
         use axum::routing::post;
 
@@ -958,8 +991,12 @@ mod tests {
                     if reply.is_empty() {
                         return axum::response::Response::builder().status(500).body(axum::body::Body::from("overloaded")).unwrap();
                     }
+                    let (reply, finish) = match reply.strip_prefix("LENGTH:") {
+                        Some(cut) => (cut.to_string(), "length"),
+                        None => (reply, "stop"),
+                    };
                     let chunk = serde_json::json!({ "choices": [{ "index": 0, "delta": { "content": reply } }] });
-                    let done = serde_json::json!({ "choices": [{ "index": 0, "delta": {}, "finish_reason": "stop" }] });
+                    let done = serde_json::json!({ "choices": [{ "index": 0, "delta": {}, "finish_reason": finish } ] });
                     let stream = format!("data: {chunk}\n\ndata: {done}\n\ndata: [DONE]\n\n");
                     axum::response::Response::builder().header("content-type", "text/event-stream").body(axum::body::Body::from(stream)).unwrap()
                 }
@@ -1029,10 +1066,43 @@ mod tests {
         let Outcome::Held { reason, rule, note } = review(&app, &bot, &dm.meta.id, &trigger, push(), &cancel).await else { panic!() };
         assert_eq!((reason.as_str(), rule.as_deref()), ("It publishes the package on npm.", Some("publish packages on npm")));
         assert!(note.starts_with(HELD) && note.contains("It publishes the package on npm."), "{note}");
-        // A model that does not answer, twice, leaves the action held as unchecked.
-        let Outcome::Held { reason, note, .. } = review(&app, &bot, &dm.meta.id, &trigger, push(), &cancel).await else { panic!() };
-        assert!(reason.starts_with("Auto-review could not check this action"), "{reason}");
-        assert!(note.contains("run it again as it is"), "{note}");
+        // A model that does not answer, twice, judged nothing: the user decides.
+        let Outcome::Ask { reason, rule } = review(&app, &bot, &dm.meta.id, &trigger, push(), &cancel).await else { panic!() };
+        assert!(reason.unwrap().starts_with("Auto-review could not check this action"));
+        assert_eq!(rule, None);
+        assert!(replies.lock().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(home);
+    }
+
+    /// A review model whose thinking runs out of room stops mid-thought. Its reply is not read,
+    /// though it wrote a verdict it went on to reconsider: it decides from what it weighed. One
+    /// that cannot decide at all asks the user, rather than holding the action with no card.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_second_pass_cut_off_mid_thought_decides_from_what_it_weighed() {
+        let home = std::env::temp_dir().join(format!("lorca-review-cut-off-{}", uuid::Uuid::new_v4()));
+        let app = Arc::new(App::load(crate::config::Config { home: home.clone(), port: 0 }).unwrap());
+        crate::identity::create(&app, None).unwrap();
+        let mut bot = app.state.lock().unwrap().bots[0].clone();
+        bot.provider = "custom:fake".into();
+        let dm = app.dm_with(&bot.id, None).unwrap();
+        let mut ask = Message::new(&dm.meta.id, Author::You, Body::text("review pull request 413"));
+        ask.created_at = crate::config::now_secs();
+        app.upsert_message(ask.clone(), false);
+        let trigger = Trigger { message_id: ask.id.clone(), routine: None, event: None };
+        let cut = "LENGTH:<thinking>It pushes to someone's fork. So: <block>no</block>\nHmm, wait, let me reconsider the fork";
+        let decided = "</thinking><block>yes</block><category>Publishing</category><reason>It pushes to a fork the user never named.</reason><allow_rule></allow_rule>";
+        let (replies, asked) = scripted_model(&app, vec!["<block>yes</block>", cut, decided, "<block>yes</block>", cut, "LENGTH:</thinking>Hmm", cut, "LENGTH:</thinking>Hmm"]).await;
+        let cancel = CancellationToken::new();
+        let args = serde_json::json!({ "command": "git push git@github.com:someone/shop.git HEAD:fix" });
+        let push = || Action { target_name: "Workbench", tool: "bash", description: "Run this shell command.", args: &args, script: None, facts: &[], propose_rule: true };
+
+        let Outcome::Held { reason, .. } = review(&app, &bot, &dm.meta.id, &trigger, push(), &cancel).await else { panic!("the cut-off verdict was read") };
+        assert_eq!(reason, "It pushes to a fork the user never named.");
+        assert!(asked.lock().unwrap()[2].contains("You ran out of room before answering"));
+
+        let Outcome::Ask { reason, rule } = review(&app, &bot, &dm.meta.id, &trigger, push(), &cancel).await else { panic!() };
+        assert_eq!(reason.as_deref(), Some("Auto-review could not check this action (its model ran out of room before answering)."));
+        assert_eq!(rule, None);
         assert!(replies.lock().unwrap().is_empty());
         let _ = std::fs::remove_dir_all(home);
     }
