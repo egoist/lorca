@@ -109,6 +109,10 @@ pub(crate) struct Record {
     /// commands are weighed against the owner's task for it, never against the event's text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event: Option<crate::event_triggers::EventTask>,
+    /// A routine's run or an event started it, with nobody watching: what its review would ask
+    /// goes back to it at once, as an unattended turn's does, instead of waiting on a card.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unattended: bool,
 }
 
 impl Record {
@@ -480,6 +484,7 @@ pub(crate) struct Start {
     /// The bot's command secrets to give it as environment variables, by name.
     pub secrets: Vec<String>,
     pub event: Option<crate::event_triggers::EventTask>,
+    pub unattended: bool,
 }
 
 /// Starts an agent and follows it. It returns once the agent runs; its work goes on.
@@ -509,6 +514,7 @@ pub(crate) async fn start(app: &Arc<App>, start: Start) -> Result<Arc<Agent>, St
         unheard: None,
         secrets: start.secrets.clone(),
         event: start.event.clone(),
+        unattended: start.unattended,
     };
     let agent = Agent::new(record, Transcript::default());
     *agent.budget.lock().unwrap() = crate::budgets::current();
@@ -939,6 +945,15 @@ async fn approve(app: &Arc<App>, agent: &Arc<Agent>, approval: Approval) -> Resu
         crate::plugins::review::Outcome::Held { reason, .. } => return Err(crate::plugins::review::agent_note(&reason)),
         crate::plugins::review::Outcome::Ask { reason, rule } => (reason, rule),
     };
+    // Nobody watches the run that started it, so a question would wait for no one.
+    if record.unattended {
+        let why = reason.as_deref().unwrap_or("Auto-review is off, so every command asks");
+        return Err(format!(
+            "This needs the user's permission ({why}), and nobody is watching the run that started you, so it did not run. Go on \
+             with work that does not depend on it, or stop and name this action exactly in your last message, so the bot that \
+             started you can ask the user."
+        ));
+    }
     // One question at a time, on its row.
     let _one = agent.asking.lock().await;
     if !agent.is_running() {

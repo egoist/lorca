@@ -298,7 +298,7 @@ fn auto_review_off(app: &App) {
 }
 
 fn tool(scratch: &Scratch) -> CodingAgentTool {
-    CodingAgentTool { app: scratch.app.clone(), bot: scratch.bot.clone(), chat_id: "chat".into(), workdir: scratch.home.join("work"), trigger_message_id: "msg-trigger".into(), event: None }
+    CodingAgentTool { app: scratch.app.clone(), bot: scratch.bot.clone(), chat_id: "chat".into(), workdir: scratch.home.join("work"), trigger_message_id: "msg-trigger".into(), event: None, unattended: false }
 }
 
 /// The row a `coding_agent` start call puts up as it begins, as the turn does.
@@ -448,6 +448,33 @@ async fn claude_code_works_in_the_folder_asks_on_its_row_and_its_message_wakes_t
     let stopped = card_when(app, &row, |card| card.state == "stopped").await;
     assert_eq!(stopped.outcome.as_deref(), Some("Stopped"));
     assert!(agent.record().unheard.is_none());
+}
+
+/// An agent a routine's run or an event started has nobody to answer its questions: what its
+/// review would ask goes back to it at once, and it goes on, instead of waiting on a card.
+#[tokio::test]
+async fn an_unattended_agent_is_told_at_once_instead_of_asking_nobody() {
+    let scratch = setup().await;
+    let app = &scratch.app;
+    auto_review_off(app);
+    let mut tool = tool(&scratch);
+    tool.unattended = true;
+    let row = start_row(app, "call-1");
+    let chat_lock = app.chat_lock("chat");
+    let _held = chat_lock.lock().await;
+    call(&tool, "call-1", json!({ "action": "start", "agent": "claude", "title": "Nightly", "folder": "shop", "prompt": "Fix the login bug" })).await.unwrap();
+
+    let done = card_when(app, &row, |card| card.state == "idle").await;
+    assert_eq!(done.state, "idle");
+    assert!(app.pending_permissions.lock().unwrap().is_empty());
+    let agent = app.coding_agents.of("chat", "b1").pop().unwrap();
+    assert!(agent.record().unattended);
+    let push = steps_now(&agent).into_iter().find_map(|item| item.tool.filter(|step| step.kind == "execute")).unwrap();
+    assert_eq!(push.status, "denied");
+    // It hears why at once, with nothing waiting on the user.
+    let told = tokio::time::timeout(Duration::from_secs(5), approve(app, &agent, driver::Approval::Command { command: "git push origin main".into() })).await.expect("it waits on nobody");
+    assert!(told.unwrap_err().contains("nobody is watching the run that started you"));
+    assert!(app.pending_permissions.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -689,6 +716,7 @@ async fn a_bot_without_shell_access_starts_no_agent_and_its_agent_runs_nothing()
             unheard: None,
             secrets: Vec::new(),
             event: None,
+            unattended: false,
         },
         Transcript::default(),
     );

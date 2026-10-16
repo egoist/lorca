@@ -242,6 +242,7 @@ async fn run_budgeted_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) 
             workdir: workdir.clone(),
             trigger_message_id: trigger.message_id.clone(),
             event: trigger.event.clone(),
+            unattended,
         }));
     }
     tools.extend(memory_tools(app, &store, &chat));

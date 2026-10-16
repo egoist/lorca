@@ -27,6 +27,9 @@ pub struct CodingAgentTool {
     /// The event behind the turn, when one started it: the owner's task for it, whose text the
     /// review weighs the agent's commands against instead of the event's.
     pub event: Option<crate::event_triggers::EventTask>,
+    /// Nobody watches the turn (a routine's run or an event's): its agents' questions have
+    /// nobody to answer them.
+    pub unattended: bool,
 }
 
 const DESCRIPTION: &str = "Hand a coding job to a coding agent on your Runner (Claude Code, Codex, OpenCode, pi, or fx, as the user set up \
@@ -143,6 +146,7 @@ impl CodingAgentTool {
             workdir: self.workdir.clone(),
             trigger_message_id: self.trigger_message_id.clone(),
             event: self.event.clone(),
+            unattended: self.unattended,
         };
         let (call_id, args) = (call_id.to_string(), args.clone());
         let row = self.app.coding_agents.row(&self.chat_id, &call_id);
@@ -193,6 +197,7 @@ impl CodingAgentTool {
             prompt: brief(prompt, &place, &secrets),
             secrets,
             event: self.event.as_ref().map(|event| crate::event_triggers::EventTask { data: String::new(), ..event.clone() }),
+            unattended: self.unattended,
         };
         let agent = super::start(app, start).await?;
         let id = agent.id();
