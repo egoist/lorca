@@ -58,7 +58,7 @@ func limitsFixture(t *testing.T) (*mainWindow, *limitsTransport, *ui.Tester) {
 	m := demoWindow(t)
 	seed := store
 	f := &limitsTransport{}
-	store = model.NewStore(f, func(fn func()) { pendingPosts = append(pendingPosts, fn) }, false)
+	store = model.NewStore(f, testPost, false)
 	store.Devices, store.Bots, store.Chats, store.Routines, store.Budgets = seed.Devices, seed.Bots, seed.Chats, seed.Routines, seed.Budgets
 	store.Providers, store.Models, store.AutoReview = seed.Providers, seed.Models, seed.AutoReview
 	has := true

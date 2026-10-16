@@ -273,9 +273,14 @@ func TestAttentionRowRevealsItsMessage(t *testing.T) {
 	if err := f.tt.Click("Release notes draft"); err != nil {
 		t.Fatal(err)
 	}
+	// The pulse starts with the click and lasts 1.1 seconds of the clock, which a slow frame of the
+	// newly shown chat can outlast: look for it before the window draws.
+	if flash := m.chat.flashID; flash != cited {
+		t.Fatalf("flash %q", flash)
+	}
 	settle(tt)
-	if m.selection.ChatID != "chat-launch" || m.chat.flashID != cited || !f.isShut {
-		t.Fatalf("selection %q, flash %q", m.selection.ChatID, m.chat.flashID)
+	if m.selection.ChatID != "chat-launch" || !f.isShut {
+		t.Fatalf("selection %q, shut %v", m.selection.ChatID, f.isShut)
 	}
 	renderTo(t, tt, "attention-reveal")
 
