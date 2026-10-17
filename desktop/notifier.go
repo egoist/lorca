@@ -157,7 +157,7 @@ func (n *notifier) storeChanged(event model.Event) {
 }
 
 // Structured summaries/escalations and a coding agent's report alert on arrival, once per message,
-// separately from the generic turn-finished path, since no turn of the bot's carries them.
+// separately from the generic turn-finished path, since no turn of the bot's ends with them.
 // Preferences and read state are checked after the grace.
 func (n *notifier) attentionChanged(chatID, messageID string) {
 	chat := store.Chat(chatID)

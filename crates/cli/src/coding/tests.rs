@@ -404,9 +404,13 @@ async fn claude_code_works_in_the_folder_asks_in_the_chat_and_reports_to_the_use
     auto_review_off(app);
     let tool = tool(&scratch);
     let row = start_row(app, "call-1");
+    // Held, so the turn that relays its report waits, and the test reads what it would.
+    let chat_lock = app.chat_lock("chat");
+    let held = chat_lock.lock().await;
 
     let started = call(&tool, "call-1", json!({ "action": "start", "agent": "claude", "title": "Login: fix the Safari bug", "folder": "shop", "prompt": "Fix the login bug\nwith a test" })).await.unwrap();
     assert!(started.starts_with("Started Claude Code (agent-") && started.contains("(on branch main)") && started.contains("“Login: fix the Safari bug”"), "{started}");
+    assert!(started.contains("a turn to relay its report"), "{started}");
     let agent = app.coding_agents.of("chat", "b1").pop().unwrap();
     let record = agent.record();
     assert_eq!((record.kind.as_str(), record.branch.as_deref(), record.task.as_str(), record.title.as_str()), ("claude", Some("main"), "Fix the login bug", "Login: fix the Safari bug"));
@@ -442,12 +446,19 @@ async fn claude_code_works_in_the_folder_asks_in_the_chat_and_reports_to_the_use
     assert_eq!((edit.kind.as_str(), edit.title.as_str(), edit.added), ("edit", "README.md", Some(1)));
 
     // What it said lands in the chat as its report to the user, unread like a reply, and the
-    // bot gets no turn to check it.
+    // bot wakes, once, to relay it, and only that: no checking, building, judging, or follow-up.
     let (message_id, agent_id, text, failed) = eventually("its message", || agent_messages(app).pop()).await;
     assert_eq!((agent_id.as_str(), text.as_str(), failed), (agent.id().as_str(), "Fixed it and opened https://github.com/acme/shop/pull/7", false));
     assert!(app.message("chat", &message_id).unwrap().counts_unread());
-    assert!(agent.record().unheard.is_none());
-    assert!(wake_cue(app, &crate::runtime::agent_job(app, "chat", "b1", &message_id)).is_none(), "the bot does not wake for it");
+    assert_eq!(agent.record().unheard.as_deref(), Some(message_id.as_str()));
+    let job = crate::runtime::agent_job(app, "chat", "b1", &message_id);
+    let cue = wake_cue(app, &job).expect("the bot wakes to relay it");
+    assert!(cue.contains("is done") && cue.contains("its report to the user") && cue.contains("pull/7"), "{cue}");
+    assert!(cue.contains("Relay it to the user") && cue.contains("the commands it ran and what they printed") && cue.contains("This turn only relays"), "{cue}");
+    for asks in ["Check its work", "check its work against", "follow-up", "coding_agent read", "coding_agent send", "tell the user how it went", "changed 1 file"] {
+        assert!(!cue.contains(asks), "the relay turn asks for {asks:?}: {cue}");
+    }
+    assert!(wake_cue(app, &job).is_none(), "heard once");
 
     // A follow-up while it waits; the bot reads what is new since it last read.
     let id = agent.id();
@@ -463,6 +474,7 @@ async fn claude_code_works_in_the_folder_asks_in_the_chat_and_reports_to_the_use
     let stopped = card_when(app, &row, |card| card.state == "stopped").await;
     assert_eq!(stopped.outcome.as_deref(), Some("Stopped"));
     assert!(agent.record().unheard.is_none());
+    drop(held);
 }
 
 /// An agent's question is a card at the end of the chat, where the user reads, however far up
