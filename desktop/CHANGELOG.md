@@ -6,6 +6,10 @@ and the update window shows it.
 
 ## [Unreleased]
 
+- When a coding agent reports back, the bot replies again to relay the report: the agent's
+  conclusion, its pull request, and the commands it ran with their results. That reply only relays:
+  the bot doesn't read the code, build, test, or judge the work, or send the agent instructions.
+
 ## [0.1.16]
 
 - A bot hands a coding agent your request in your words, with only where the repository is and what

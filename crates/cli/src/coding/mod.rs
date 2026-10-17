@@ -4,8 +4,9 @@
 //! The agent is a process of its own that outlives the turn that started it. The bot keeps its id
 //! across turns, and when the user asks, reads its transcript, passes it what they say (queued, or
 //! cutting in), and stops it. When the agent is done with what it was asked, what it said arrives
-//! in the chat as its report to the user, and the bot gets no turn for it; when it ends on its
-//! own, the bot gets a turn to tell the user. Every command it runs
+//! in the chat as its report to the user, and the bot gets a turn that only relays it: no checking,
+//! building, testing, or new instructions; when it ends on its own, the bot gets a turn to tell
+//! the user. Every command it runs
 //! goes through the bot's Access and Auto-review, as the bot's own commands do, and what the
 //! review asks the user shows on the row that started it.
 //!
@@ -797,8 +798,9 @@ fn ended(app: &Arc<App>, agent: &Arc<Agent>, end: driver::Ended, generation: u64
     }
 }
 
-/// Puts what the agent said, or why it ended, in the chat as a message from it. What it said when
-/// done is its report to the user, which alerts as a reply does; why it ended wakes its bot.
+/// Puts what the agent said, or why it ended, in the chat as a message from it, and wakes its bot
+/// to hear it. What it said when done is its report to the user, which alerts as a reply does,
+/// and the bot's turn for it only relays it.
 fn tell(app: &Arc<App>, agent: &Arc<Agent>, text: &str, failed: bool) {
     let record = agent.record();
     let mut text = without_secrets(app, text.trim().to_string());
@@ -813,19 +815,15 @@ fn tell(app: &Arc<App>, agent: &Arc<Agent>, text: &str, failed: bool) {
     );
     let message_id = message.id.clone();
     app.upsert_message(message, true);
-    // Done: the user reviews the work from its report, and the bot gets no turn for it.
-    if !failed {
-        app.coding_agents.sync(app, agent);
-        save(app);
-        if let (Some(chat), Some(bot)) = (app.chat(&record.chat_id), app.bot(&record.bot_id)) {
-            crate::push::reply(app, &chat, &bot, &notice);
-        }
-        return;
-    }
-    // Ended on its own: the bot hears why, to tell the user or start it again.
     agent.record.lock().unwrap().unheard = Some(message_id.clone());
     app.coding_agents.sync(app, agent);
     save(app);
+    // Done: the user reviews the work from its report, which alerts on its own.
+    if !failed {
+        if let (Some(chat), Some(bot)) = (app.chat(&record.chat_id), app.bot(&record.bot_id)) {
+            crate::push::reply(app, &chat, &bot, &notice);
+        }
+    }
     let job = crate::runtime::agent_job(app, &record.chat_id, &record.bot_id, &message_id);
     let (app, agent) = (app.clone(), agent.clone());
     tokio::spawn(async move {
@@ -840,9 +838,9 @@ fn tell(app: &Arc<App>, agent: &Arc<Agent>, text: &str, failed: bool) {
     });
 }
 
-/// What an `agent` turn opens with, beside the message the bot reads in the chat: why the agent
-/// ended and what to do. None when a turn heard it already. Only an agent that ended on its own
-/// wakes its bot; one that is done reports to the user.
+/// What an `agent` turn opens with, beside the message the bot reads in the chat. For an agent
+/// that is done, to relay its report to the user and nothing more: the user reviews the work. For
+/// one that ended on its own, why, and what to do. None when a turn heard it already.
 pub fn wake_cue(app: &App, job: &crate::model::Job) -> Option<String> {
     let agent = app.coding_agents.all().into_iter().find(|agent| agent.record.lock().unwrap().unheard.as_deref() == Some(job.trigger_message_id.as_str()))?;
     let record = {
@@ -852,14 +850,25 @@ pub fn wake_cue(app: &App, job: &crate::model::Job) -> Option<String> {
     };
     save(app);
     let who = format!("{} ({}), the coding agent you started on “{}”", name(&record.kind), record.id, record.title);
-    let tail = agent.transcript.lock().unwrap().last_lines(12);
-    let tail = if tail.trim().is_empty() { String::new() } else { format!(" Its last lines:\n{tail}\n") };
-    let cue = format!(
-        "[{who}, has ended on its own: {}. Its last message in the chat says why.{tail} Tell the user why in a line or two. When it ended \
-         for a passing reason, such as a lost connection, you may start it again on its session with coding_agent send and a message \
-         that asks it to go on, adding nothing of your own; do not take the job over or change it.]",
-        record.outcome.as_deref().unwrap_or("it exited")
-    );
+    let cue = if record.state == "failed" {
+        let tail = agent.transcript.lock().unwrap().last_lines(12);
+        let tail = if tail.trim().is_empty() { String::new() } else { format!(" Its last lines:\n{tail}\n") };
+        format!(
+            "[{who}, has ended on its own: {}. Its last message in the chat says why.{tail} Tell the user why in a line or two. When it ended \
+             for a passing reason, such as a lost connection, you may start it again on its session with coding_agent send and a message \
+             that asks it to go on, adding nothing of your own; do not take the job over or change it.]",
+            record.outcome.as_deref().unwrap_or("it exited")
+        )
+    } else {
+        let pull_request = record.pull_request.as_ref().map(|link| format!(" Its pull request: {link}.")).unwrap_or_default();
+        format!(
+            "[{who}, is done; its message in the chat is its report to the user.{pull_request} Relay it to the user in your reply: its \
+             conclusion, its pull request's link, and the evidence it brought back, the commands it ran and what they printed, as it \
+             reported them. Say where its report leaves something out, such as no pull request or no command output, without filling it \
+             in. This turn only relays: use no tools, and do not open its code, its diff, or its transcript, run a build or a test, judge \
+             its work against the request, or send it a message. The user reviews the work and decides what comes next.]"
+        )
+    };
     Some(without_secrets(app, cue))
 }
 

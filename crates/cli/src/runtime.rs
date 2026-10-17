@@ -177,7 +177,8 @@ pub fn command_job(app: &App, chat_id: &str, bot_id: &str, card_id: &str) -> Job
     }
 }
 
-/// The turn in which a bot hears why a coding agent it runs ended on its own (`coding::tell`):
+/// The turn in which a bot hears a coding agent it runs, to relay its report or say why it ended
+/// on its own (`coding::tell`):
 /// `trigger_message_id` is the agent's message in the chat.
 pub fn agent_job(app: &App, chat_id: &str, bot_id: &str, message_id: &str) -> Job {
     Job { kind: "agent".into(), ..command_job(app, chat_id, bot_id, message_id) }

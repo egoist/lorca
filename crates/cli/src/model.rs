@@ -327,8 +327,8 @@ pub enum Body {
     },
     /// What a coding agent said when it was done with what it was asked, its report to the user,
     /// or why it ended on its own (`failed`). The apps show it as "Message from ⬢ Title"; the
-    /// bot that runs the agent reads it in its history, and wakes for it only when it is `failed`
-    /// (`crate::coding`).
+    /// bot that runs the agent wakes for it: to relay the report to the user, or to say why it
+    /// ended (`crate::coding`).
     AgentMessage {
         agent_id: String,
         /// `claude`, `codex`, `opencode`, `pi`, or `fx`.
@@ -1178,7 +1178,7 @@ pub struct Job {
     /// `turn` for a user message in a DM, `room_turn` for one member's turn in a group,
     /// `message` for a teammate's message_bot, `routine` for a run of a routine, `command` for
     /// a command the bot left running that ended, `agent` for a coding agent the bot runs that
-    /// ended on its own, `event` for a service event an event subscription's inbox admitted.
+    /// is done, whose report it relays, or ended on its own, `event` for a service event an event subscription's inbox admitted.
     pub kind: String,
     pub trigger_message_id: String,
     /// A durable delegated request or the continuation that reads its report.
