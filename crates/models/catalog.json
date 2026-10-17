@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated": "2026-10-15T14:07:31Z",
+  "updated": "2026-10-17T03:36:43Z",
   "review": {
     "deepseek": "deepseek-flash",
     "anthropic": "claude-haiku-4-5",
@@ -439,7 +439,7 @@
       "provider": "opencode",
       "id": "cat-jam-free",
       "name": "Cat Jam Free",
-      "context_window": 262144,
+      "context_window": 1048576,
       "max_output": 131072,
       "reasoning": true,
       "images": false,
@@ -747,7 +747,7 @@
       "provider": "opencode-go",
       "id": "cat-jam-free",
       "name": "Cat Jam Free",
-      "context_window": 262144,
+      "context_window": 1048576,
       "max_output": 131072,
       "reasoning": true,
       "images": false,
