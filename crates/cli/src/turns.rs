@@ -5547,8 +5547,10 @@ mod tests {
         let no_updates: ToolUpdateFn = Arc::new(|_| {});
         let create = CreateBot::new(app, &chat_id, &caller);
         let this = app.this_device_id().unwrap();
+        // This Device is the machine the test runs on.
+        let here = app.device(&this).unwrap().platform().to_string();
         // The description lists the Runners by name, id, and platform; the phone is none.
-        assert!(create.description().contains(&format!("Studio (id {this}, macOS) (yours); build-box (id linux-key, Linux); DESKTOP-34HK9JT (id win-key, Windows)")), "{}", create.description());
+        assert!(create.description().contains(&format!("Studio (id {this}, {here}) (yours); build-box (id linux-key, Linux); DESKTOP-34HK9JT (id win-key, Windows)")), "{}", create.description());
         assert!(!create.description().contains("Pixel"));
         let run = |args: Value| create.execute("call", args, CancellationToken::new(), no_updates.clone());
 
@@ -5573,7 +5575,7 @@ mod tests {
         assert_eq!(runners, [("Studio".into(), true), ("build-box".into(), false), ("DESKTOP-34HK9JT".into(), true)]);
 
         // A phone is no Runner and an offline Runner takes no bot; each refusal names the ones that work.
-        let works = format!("Runners online now: Studio (id {this}, macOS); DESKTOP-34HK9JT (id win-key, Windows).");
+        let works = format!("Runners online now: Studio (id {this}, {here}); DESKTOP-34HK9JT (id win-key, Windows).");
         let error = run(json!({ "name": "Mobile", "description": "Tests on the phone", "runner": "Pixel" })).await.unwrap_err();
         assert_eq!(error.0, format!("Pixel runs Android, so it is a Device and not a Runner: only macOS, Linux, and Windows Devices run bots. {works}"));
         let error = run(json!({ "name": "Builder", "description": "Packages Linux builds", "runner": "linux-key" })).await.unwrap_err();
