@@ -73,6 +73,22 @@ func (m *mainWindow) inspectorSkills(c *ui.Context, scope model.PlaybookScope) {
 	})
 }
 
+// inspectorSkillsTab is the Skills tab of a bot's settings: its skills, or, while it has none, a
+// note that says what one is and the + that adds one, which the section hides otherwise.
+func (m *mainWindow) inspectorSkillsTab(c *ui.Context, scope model.PlaybookScope) {
+	if len(store.Skills(scope)) > 0 {
+		m.inspectorSkills(c, scope)
+		return
+	}
+	section(c.Key("skills"), L("Skills"), sectionCaption, func() {
+		if hoverButton(c, hoverButtonOptions{Symbol: "plus", Size: 13, Tooltip: L("New Skill")}).Clicked() {
+			m.presentPlaybook(scope, nil)
+		}
+	}, func(k *card) {
+		noteRow(c, k, L("No skills yet. Add one and the bot can follow it whenever it fits."), nil)
+	})
+}
+
 // newSkill is Chat › New Skill…: one for the bot in the DM on screen, or for the group.
 func (m *mainWindow) newSkill() {
 	chat := store.Chat(m.selection.ChatID)

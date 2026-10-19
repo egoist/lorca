@@ -6,13 +6,14 @@ import (
 )
 
 // A bot's settings in a sheet of their own, opened by a click on the bot in the inspector (or its
-// menu in a group): its profile, what it runs with, its memory, skills, the plugins on its
-// Runner, and where its turns run. The inspector keeps what goes on in the chat.
+// menu in a group), a tab per page: its profile and memory, what it runs with and where its turns
+// run, its skills, and the plugins on its Runner. The inspector keeps what goes on in the chat.
 
-// presentBotSettings opens the bot's settings. Its memory is asked for again as it opens; the sheet
-// closes itself if the bot goes away.
+// presentBotSettings opens the bot's settings on Profile. Its memory is asked for again as it
+// opens; the sheet closes itself if the bot goes away.
 func (m *mainWindow) presentBotSettings(botID string) {
 	m.inspector.refreshMemory(botID)
+	tab := 0
 	m.present(func(c *ui.Context, s *sheet) {
 		bot := store.Bot(botID)
 		if bot == nil {
@@ -26,13 +27,22 @@ func (m *mainWindow) presentBotSettings(botID string) {
 			Confirm:  L("Done"),
 			NoCancel: true,
 		}, func() {
-			ui.Column(c).Gap(20).Padding(4, 0, 2, 0).Children(func() {
-				m.inspectorProfile(c, bot)
-				m.inspectorRuntime(c, bot)
-				m.inspectorMemory(c, bot)
-				m.inspectorSkills(c, model.BotScope(bot.ID))
-				m.inspectorPlugins(c, bot)
-				m.inspectorRouting(c, []*model.Bot{bot})
+			ui.Row(c).Justify(ui.Center).Children(func() {
+				segmented(c.Key("tabs"), &tab, L("Bot Settings"), L("Profile"), L("Runs with"), L("Skills"), L("Plugins"))
+			})
+			ui.Column(c.Key(tab)).Gap(20).Padding(4, 0, 2, 0).Children(func() {
+				switch tab {
+				case 1:
+					m.inspectorRuntime(c, bot)
+					m.inspectorRouting(c, []*model.Bot{bot})
+				case 2:
+					m.inspectorSkillsTab(c, model.BotScope(bot.ID))
+				case 3:
+					m.inspectorPlugins(c, bot)
+				default:
+					m.inspectorProfile(c, bot)
+					m.inspectorMemory(c, bot)
+				}
 			})
 		})
 		if result.Confirmed || result.Cancelled {

@@ -77,8 +77,8 @@ func TestInspectorLeavesDecisionModelsOut(t *testing.T) {
 	}
 }
 
-// The DM inspector shows what goes on in the chat; a click on its bot opens the bot's settings,
-// where what it runs with, its memory, and its plugins are.
+// The DM inspector shows what goes on in the chat; a click on its bot opens the bot's settings, a
+// tab per page: its profile and memory, what it runs with and where its turns run, and its plugins.
 func TestInspectorBotOpensSettings(t *testing.T) {
 	m := demoWindow(t)
 	m.selectChat("chat-nova")
@@ -104,12 +104,32 @@ func TestInspectorBotOpensSettings(t *testing.T) {
 	sheet := ui.NewTester(m.frame(m.view), 1100, 900)
 	sheet.SetScale(2)
 	settleTransitions(sheet)
-	for _, shown := range []string{L("Bot Settings"), strings.ToUpper(L("Runs with")), strings.ToUpper(L("Memory")), strings.ToUpper(L("Plugins"))} {
-		if !sheet.HasText(shown) {
-			t.Errorf("the settings sheet lacks %s", shown)
-		}
+	tabs := []struct {
+		tab, render      string
+		shown, elsewhere []string
+	}{
+		{L("Profile"), "bot-settings", []string{L("Bot Settings"), strings.ToUpper(L("Profile")), strings.ToUpper(L("Memory"))},
+			[]string{strings.ToUpper(L("Runs with")), strings.ToUpper(L("Plugins"))}},
+		{L("Runs with"), "bot-settings-runs-with", []string{strings.ToUpper(L("Runs with")), strings.ToUpper(L("Where turns run"))},
+			[]string{strings.ToUpper(L("Profile")), strings.ToUpper(L("Memory"))}},
+		{L("Plugins"), "bot-settings-plugins", []string{strings.ToUpper(L("Plugins"))},
+			[]string{strings.ToUpper(L("Runs with")), strings.ToUpper(L("Profile"))}},
 	}
-	renderBoth(t, sheet, "bot-settings")
+	for _, each := range tabs {
+		click(t, sheet, each.tab)
+		settle(sheet)
+		for _, shown := range each.shown {
+			if !sheet.HasText(shown) {
+				t.Errorf("the %s tab lacks %s in %q", each.tab, shown, sheet.Texts())
+			}
+		}
+		for _, other := range each.elsewhere {
+			if sheet.HasText(other) {
+				t.Errorf("the %s tab shows %s", each.tab, other)
+			}
+		}
+		renderBoth(t, sheet, each.render)
+	}
 	click(t, sheet, L("Done"))
 	settleTransitions(sheet)
 	if m.hasSheet() {
