@@ -5,8 +5,15 @@
 import { agentIsRunning, type AgentItem, type AgentRun, type AgentToolStep, type Message } from "../core/model";
 import { t, tc } from "../i18n";
 
-/// How a coding agent stands, in a word or two.
+/// Its pull request was merged or closed.
+function pullEnded(agent: AgentRun): boolean {
+  return !!agent.pull_request && (agent.pull_state === "merged" || agent.pull_state === "closed");
+}
+
+/// How a coding agent stands, in a word or two: while it does not work, a pull request merged or
+/// closed says so.
 export function agentStatusWord(agent: AgentRun): string {
+  if (!agentIsRunning(agent) && pullEnded(agent)) return agent.pull_state === "merged" ? tc("Merged", "coding agent") : tc("Closed", "coding agent");
   switch (agent.state) {
     case "starting":
     case "working":
@@ -14,6 +21,7 @@ export function agentStatusWord(agent: AgentRun): string {
     case "asking":
       return tc("Needs attention", "coding agent");
     case "idle":
+      if (agent.pull_state === "draft") return tc("Draft", "coding agent");
       return agent.pull_request ? tc("Ready for review", "coding agent") : tc("Finished", "coding agent");
     case "failed":
       return tc("Run failed", "coding agent");
@@ -23,9 +31,10 @@ export function agentStatusWord(agent: AgentRun): string {
 }
 
 /// The mark beside an agent in Details: a spinner while it works, else a symbol in a tone.
-export type AgentMark = { spinner: true } | { spinner?: false; symbol: string; tone: "orange" | "red" | "tint" | "green" | "secondary" };
+export type AgentMark = { spinner: true } | { spinner?: false; symbol: string; tone: "orange" | "red" | "tint" | "green" | "purple" | "secondary" };
 
 export function agentMark(agent: AgentRun): AgentMark {
+  if (!agentIsRunning(agent) && pullEnded(agent)) return agent.pull_state === "merged" ? { symbol: "arrow.triangle.merge", tone: "purple" } : { symbol: "xmark.circle", tone: "secondary" };
   switch (agent.state) {
     case "starting":
     case "working":
@@ -49,7 +58,7 @@ const KEEP_SECS = 3 * 24 * 3600;
 
 /// The chat's agents for its Coding section: the ones that started, open ones (starting, working,
 /// asking) first, then the latest change first; one ended or idle for more than three days is left
-/// out.
+/// out. Agents on the same pull request are one row: the first of them in that order.
 export function chatAgents(messages: Message[], now = Date.now() / 1000): ChatAgent[] {
   const listed: ChatAgent[] = [];
   for (const message of messages) {
@@ -60,7 +69,15 @@ export function chatAgents(messages: Message[], now = Date.now() / 1000): ChatAg
     listed.push({ message, agent });
   }
   const changed = (each: ChatAgent) => each.agent.updated_at ?? each.agent.started_at ?? each.message.created_at;
-  return listed.sort((a, b) => Number(agentIsRunning(b.agent)) - Number(agentIsRunning(a.agent)) || changed(b) - changed(a));
+  listed.sort((a, b) => Number(agentIsRunning(b.agent)) - Number(agentIsRunning(a.agent)) || changed(b) - changed(a));
+  const seen = new Set<string>();
+  return listed.filter(({ agent }) => {
+    const link = agent.pull_request?.replace(/\/+$/, "");
+    if (!link) return true;
+    if (seen.has(link)) return false;
+    seen.add(link);
+    return true;
+  });
 }
 
 /// "Explored 3 files 2 searches", a part left out when it is none; "Exploring …" while one runs.

@@ -1629,6 +1629,16 @@ type AgentChanges struct {
 	Removed int `json:"removed"`
 }
 
+// PullState is how a coding agent's pull request stands on its host.
+type PullState string
+
+const (
+	PullOpen   PullState = "open"
+	PullDraft  PullState = "draft"
+	PullMerged PullState = "merged"
+	PullClosed PullState = "closed"
+)
+
 // AgentRun is a coding agent a bot runs on its Runner, as the row of the `coding_agent` call that
 // started it carries it: the bot's title for the job, where it works, how it stands, and what came
 // of it. While it asks, its question is a permission card of its own at the end of the chat.
@@ -1644,7 +1654,10 @@ type AgentRun struct {
 	State       AgentState
 	Outcome     string
 	PullRequest string
-	Changes     *AgentChanges
+	// PullState is how its pull request stands on GitHub, as its Runner last read it; empty
+	// before a read.
+	PullState PullState
+	Changes   *AgentChanges
 	Device      string
 	// DeviceID is the Runner it runs on, by Device id.
 	DeviceID string
@@ -1700,14 +1713,31 @@ func (a *AgentRun) PullNumber() string {
 	return a.PullRequest
 }
 
-// Status is how it stands, in a word or two.
+// PullEnded is an agent whose pull request was merged or closed.
+func (a *AgentRun) PullEnded() bool {
+	return a.PullRequest != "" && (a.PullState == PullMerged || a.PullState == PullClosed)
+}
+
+// Status is how it stands, in a word or two: while it does not work, a pull request merged or
+// closed says so.
 func (a *AgentRun) Status() string {
 	switch a.State {
 	case AgentStarting, AgentWorking:
 		return Lc("Working", "coding agent")
 	case AgentAsking:
 		return Lc("Needs attention", "coding agent")
+	}
+	if a.PullEnded() {
+		if a.PullState == PullMerged {
+			return Lc("Merged", "coding agent")
+		}
+		return Lc("Closed", "coding agent")
+	}
+	switch a.State {
 	case AgentIdle:
+		if a.PullState == PullDraft {
+			return Lc("Draft", "coding agent")
+		}
 		if a.PullRequest != "" {
 			return Lc("Ready for review", "coding agent")
 		}
@@ -1741,7 +1771,8 @@ func AgentRowOf(chat *Chat, agentID string) *Message {
 
 // CodingAgentsIn are the start rows of the coding agents `chat`'s bots started, as Details lists
 // them: the open ones (starting, working, asking) first, then the latest change first, leaving
-// out those that ended or sat idle for more than three days, and starts that failed.
+// out those that ended or sat idle for more than three days, and starts that failed. Agents on
+// the same pull request are one row: the first of them in that order.
 func CodingAgentsIn(chat *Chat, now time.Time) []*Message {
 	var rows []*Message
 	for _, message := range chat.Messages {
@@ -1763,7 +1794,18 @@ func CodingAgentsIn(chat *Chat, now time.Time) []*Message {
 		}
 		return agentUpdatedAt(b).Compare(agentUpdatedAt(a))
 	})
-	return rows
+	seen := map[string]bool{}
+	return slices.DeleteFunc(rows, func(row *Message) bool {
+		link := strings.TrimRight(AgentOf(row).PullRequest, "/")
+		if link == "" {
+			return false
+		}
+		if seen[link] {
+			return true
+		}
+		seen[link] = true
+		return false
+	})
 }
 
 // agentUpdatedAt is when a start row's agent last changed, or when it started for a row that

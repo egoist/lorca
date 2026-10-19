@@ -542,6 +542,10 @@ pub struct AgentRun {
     /// The pull request it opened, when its transcript names one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull_request: Option<String>,
+    /// How that pull request stands on its host, as the Runner last read it: `open`, `draft`,
+    /// `merged`, or `closed`; none before a read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_state: Option<String>,
     /// What its work changed against the commit it started from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changes: Option<AgentChanges>,

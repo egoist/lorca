@@ -20,6 +20,7 @@ pub(crate) mod codex;
 pub(crate) mod driver;
 pub(crate) mod pi;
 pub(crate) mod process;
+pub mod pull;
 pub(crate) mod sandbox;
 pub mod settings;
 pub(crate) mod tool;
@@ -98,6 +99,9 @@ pub(crate) struct Record {
     pub outcome: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull_request: Option<String>,
+    /// How its pull request stands, as `gh` last said (`pull::state`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_state: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changes: Option<AgentChanges>,
     pub started_at: f64,
@@ -276,7 +280,11 @@ impl Agent {
         transcript::append(&app.config.home, &self.id(), &item);
         *self.active_at.lock().unwrap() = Instant::now();
         if let Some(link) = pull_request {
-            self.record.lock().unwrap().pull_request = Some(link);
+            let mut record = self.record.lock().unwrap();
+            if record.pull_request.as_ref() != Some(&link) {
+                record.pull_request = Some(link);
+                record.pull_state = None;
+            }
         }
         true
     }
@@ -405,6 +413,7 @@ impl Agents {
             state: if asks { "asking".into() } else { record.state },
             outcome: record.outcome.map(clean),
             pull_request: record.pull_request,
+            pull_state: record.pull_state,
             changes: record.changes,
             device,
             device_id,
@@ -594,6 +603,7 @@ pub(crate) async fn start(app: &Arc<App>, start: Start) -> Result<Arc<Agent>, St
         state: "starting".into(),
         outcome: None,
         pull_request: None,
+        pull_state: None,
         changes: None,
         started_at: now,
         updated_at: now,

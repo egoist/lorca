@@ -426,6 +426,8 @@ export interface AgentRun {
   /** Why it ended, in words. */
   outcome?: string;
   pull_request?: string;
+  /** How that pull request stands on GitHub, as its Runner last read it. */
+  pull_state?: "open" | "draft" | "merged" | "closed";
   /** What its work changed against the commit it started from. */
   changes?: { files: number; added: number; removed: number };
   /** Its Runner's name. */

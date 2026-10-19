@@ -4,18 +4,18 @@ import { haptic } from "./haptics";
 import { Link, Stack, useRouter } from "expo-router";
 import Swipeable, { type SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Platform, StyleSheet, Text, useWindowDimensions, type StyleProp, type TextStyle, View } from "react-native";
+import { ActivityIndicator, Platform, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { Pressable } from "./Pressable";
 import { chatTitle, engine } from "../core/engine";
-import { isMuted, type Bot, type Chat, type ChatSearchResults, type Section } from "../core/model";
+import { isMuted, type Bot, type Chat, type Section } from "../core/model";
 import { markRead, mutate, useBotMap, useStore, useWorkingBotIds } from "../core/store";
 import { t, tc, useLanguage } from "../i18n";
-import { AvatarCluster } from "./Avatar";
 import { ChatPeek } from "./ChatPeek";
 import { ChatRow } from "./ChatRow";
 import { PaneWidth, useSidebarWidth } from "./layout";
 import { problemTitle, showRelayProblem } from "./relay";
-import { lastActivity, muteSpans, preview, stamp } from "./format";
+import { lastActivity, muteSpans } from "./format";
+import { SearchResultRow, useChatSearch, type SearchRow } from "./ChatSearch";
 import { SidebarSearch, useSidebarSearchInset } from "./SidebarSearch";
 import { Symbol } from "./Symbol";
 import { Font, usePalette } from "./theme";
@@ -31,15 +31,14 @@ const KEEP_OFFSET = { disabled: true };
 /// The chat list: the first screen of a narrow window, the sidebar of a wide one. In the sidebar
 /// a chat opens in the pane beside the list, in place of the one open there, and its row stays lit.
 export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
-  const { language } = useLanguage();
+  useLanguage();
   const p = usePalette();
   const router = useRouter();
   // Only the sidebar lights the open chat; a phone's list would re-render under the chat it pushes.
   const openChatId = useStore((s) => (sidebar ? s.openChatId : null));
   const sidebarWidth = useSidebarWidth();
-  // The search field sits at the foot of the list. An iPhone's native bar puts it there; the
-  // sidebar and Android have their own (see SidebarSearch).
-  const floatingSearch = sidebar || Platform.OS === "android";
+  // The sidebar's search field sits at the foot of the list (see SidebarSearch); a phone searches
+  // in its Search tab.
   const searchInset = useSidebarSearchInset();
   const chats = useStore((s) => s.chats);
   const sections = useStore((s) => s.sections);
@@ -55,70 +54,12 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
   const bots = useBotMap();
   const workingBots = useWorkingBotIds();
   const [query, setQuery] = useState("");
-  const [matches, setMatches] = useState<ChatSearchResults>({ chats: [], messages: [] });
-  const [searching, setSearching] = useState(false);
-
-  function updateQuery(value: string) {
-    setQuery(value);
-    setMatches({ chats: [], messages: [] });
-    setSearching(!!value.trim());
-  }
-
-  useEffect(() => {
-    const value = query.trim();
-    if (!value) {
-      setSearching(false);
-      return;
-    }
-    let active = true;
-    setSearching(true);
-    const timer = setTimeout(() => {
-      void engine
-        .searchChats(value)
-        .then((results) => {
-          if (active) setMatches(results);
-        })
-        .catch((error) => console.warn("searching chats", error instanceof Error ? error.message : error))
-        .finally(() => {
-          if (active) setSearching(false);
-        });
-    }, 140);
-    return () => {
-      active = false;
-      clearTimeout(timer);
-    };
-  }, [query]);
+  const { rows: searchRows, searching } = useChatSearch(query);
 
   const items = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const visible = chats
-      .filter((c) => !q || chatTitle(c).toLowerCase().includes(q) || c.bot_ids.some((id) => bots.get(id)?.name.toLowerCase().includes(q)))
-      .sort((a, b) => lastActivity(b) - lastActivity(a));
-    return [...visible.filter((c) => c.is_pinned), ...visible.filter((c) => !c.is_pinned)];
-  }, [chats, bots, query, language]);
-
-  const searchRows = useMemo(() => {
-    if (!query.trim()) return [];
-    const byId = new Map(chats.map((chat) => [chat.id, chat]));
-    const seen = new Set<string>();
-    const rows: SearchRow[] = [];
-    for (const chat of items) {
-      seen.add(chat.id);
-      rows.push({ key: `chat:${chat.id}`, kind: "chat", chat, snippet: preview(chat, bots) });
-    }
-    for (const hit of matches.chats) {
-      const chat = byId.get(hit.chat_id);
-      if (!chat || seen.has(chat.id)) continue;
-      seen.add(chat.id);
-      rows.push({ key: `chat:${chat.id}`, kind: "chat", chat, snippet: hit.snippet });
-    }
-    for (const hit of matches.messages) {
-      const chat = byId.get(hit.chat_id);
-      if (!chat) continue;
-      rows.push({ key: `message:${hit.message_id}`, kind: "message", chat, snippet: hit.snippet, createdAt: hit.created_at });
-    }
-    return rows;
-  }, [chats, bots, items, matches, query, language]);
+    const sorted = [...chats].sort((a, b) => lastActivity(b) - lastActivity(a));
+    return [...sorted.filter((c) => c.is_pinned), ...sorted.filter((c) => !c.is_pinned)];
+  }, [chats]);
 
   const searchingText = query.trim();
   const rows = useMemo(() => chatListRows(items, sections, showsHidden, collapsesOthers), [items, sections, showsHidden, collapsesOthers]);
@@ -195,15 +136,6 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
 
   return (
     <>
-            {floatingSearch ? null : (
-        <Stack.SearchBar
-          placeholder={t("Search")}
-          onChangeText={(e) => updateQuery(e.nativeEvent.text)}
-          onCancelButtonPress={() => updateQuery("")}
-          hideWhenScrolling
-          autoCapitalize="none"
-        />
-      )}
       {Platform.OS === "ios" ? (
         <>
           <Stack.Toolbar placement="left">
@@ -301,7 +233,7 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
           maintainVisibleContentPosition={KEEP_OFFSET}
           keyboardDismissMode="on-drag"
           onScrollBeginDrag={closeOpenRow}
-          contentContainerStyle={{ paddingBottom: floatingSearch ? searchInset + 8 : 24 }}
+          contentContainerStyle={{ paddingBottom: sidebar ? searchInset + 8 : 24 }}
           ListEmptyComponent={
             <View style={styles.empty}>
               <Symbol name="sparkles" size={36} color={p.tertiaryLabel} />
@@ -317,7 +249,7 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
           }}
           refreshing={false}
         />
-        {floatingSearch ? <SidebarSearch value={query} placeholder={t("Search")} onChangeText={updateQuery} /> : null}
+        {sidebar ? <SidebarSearch value={query} placeholder={t("Search")} onChangeText={setQuery} /> : null}
       </View>
     </>
   );
@@ -644,57 +576,6 @@ function SwipeAction({ icon, label, color, onPress }: { icon: string; label: str
   );
 }
 
-type SearchRow = {
-  key: string;
-  kind: "chat" | "message";
-  chat: Chat;
-  snippet: string;
-  createdAt?: number;
-};
-
-function SearchResultRow({ item, bots, query, onOpen }: { item: SearchRow; bots: Map<string, Bot>; query: string; onOpen: (chat: Chat) => void }) {
-  useLanguage();
-  const onPress = () => onOpen(item.chat);
-  const p = usePalette();
-  const members = item.chat.bot_ids.map((id) => bots.get(id)).filter((bot): bot is Bot => !!bot);
-  const at = item.createdAt ?? lastActivity(item.chat);
-  return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.searchRow, { backgroundColor: pressed ? p.fill : "transparent" }]}>
-      <AvatarCluster bots={members} size={44} />
-      <View style={styles.searchText}>
-        <View style={styles.searchTitleLine}>
-          <HighlightedText text={chatTitle(item.chat)} query={query} style={[styles.searchTitle, { color: p.label }]} numberOfLines={1} />
-          <Text style={[styles.searchStamp, { color: p.secondaryLabel }]}>{stamp(new Date(at * 1000))}</Text>
-        </View>
-        <HighlightedText text={item.snippet} query={query} style={[styles.searchSnippet, { color: p.secondaryLabel }]} numberOfLines={2} />
-      </View>
-      {item.kind === "message" ? <Symbol name="text.bubble" size={13} color={p.tertiaryLabel} /> : null}
-    </Pressable>
-  );
-}
-
-function HighlightedText({ text, query, style, numberOfLines }: { text: string; query: string; style: StyleProp<TextStyle>; numberOfLines?: number }) {
-  const p = usePalette();
-  const matchStyle: TextStyle = { color: p.label, backgroundColor: p.secondaryFill, fontWeight: "700" };
-  const terms = query.match(/[\p{L}\p{N}]+/gu) ?? [];
-  if (!terms.length) return <Text style={style} numberOfLines={numberOfLines}>{text}</Text>;
-  const expression = new RegExp(`(${terms.map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})`, "giu");
-  const folded = new Set(terms.map((term) => term.toLocaleLowerCase()));
-  return (
-    <Text style={style} numberOfLines={numberOfLines}>
-      {text.split(expression).map((part, index) =>
-        folded.has(part.toLocaleLowerCase()) ? (
-          <Text key={`${index}:${part}`} style={matchStyle}>
-            {part}
-          </Text>
-        ) : (
-          part
-        ),
-      )}
-    </Text>
-  );
-}
-
 const styles = StyleSheet.create({
   swipeActions: { flexDirection: "row" },
   swipeAction: { width: 76, alignItems: "center", justifyContent: "center", gap: 4 },
@@ -712,10 +593,4 @@ const styles = StyleSheet.create({
   empty: { alignItems: "center", paddingTop: 120, paddingHorizontal: 40, gap: 8 },
   emptyTitle: { fontSize: 20, fontWeight: "600", marginTop: 8 },
   emptyText: { fontSize: 15, textAlign: "center", lineHeight: 21 },
-  searchRow: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 9, gap: 12 },
-  searchText: { flex: 1, gap: 3 },
-  searchTitleLine: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 },
-  searchTitle: { flex: 1, fontSize: Font.body, fontWeight: "600" },
-  searchStamp: { fontSize: 14 },
-  searchSnippet: { fontSize: 15, lineHeight: 20 },
 });

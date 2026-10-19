@@ -141,6 +141,7 @@ type WireAgent struct {
 	State       string        `json:"state"`
 	Outcome     *string       `json:"outcome"`
 	PullRequest *string       `json:"pull_request"`
+	PullState   *string       `json:"pull_state"`
 	Changes     *AgentChanges `json:"changes"`
 	Device      *string       `json:"device"`
 	DeviceID    *string       `json:"device_id"`
@@ -160,6 +161,7 @@ func ToAgentRun(wire *WireAgent) *AgentRun {
 	agent := &AgentRun{
 		ID: wire.ID, Kind: wire.Kind, Title: str(wire.Title), Task: str(wire.Task), Folder: str(wire.Folder), Branch: str(wire.Branch),
 		State: state, Outcome: str(wire.Outcome), PullRequest: str(wire.PullRequest), Device: str(wire.Device),
+		PullState: PullState(str(wire.PullState)),
 		DeviceID: str(wire.DeviceID), Repository: str(wire.Repository),
 	}
 	if wire.Changes != nil {

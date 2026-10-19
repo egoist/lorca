@@ -39,6 +39,27 @@ describe("coding agents", () => {
     expect(agentStatusWord({ ...agent, state: "failed" })).toBe("Run failed");
   });
 
+  test("a pull request merged, closed, or a draft says so", () => {
+    const agent: AgentRun = { id: "a", kind: "claude", title: "", task: "", state: "idle", pull_request: "https://github.com/a/b/pull/1" };
+    expect(agentStatusWord({ ...agent, pull_state: "open" })).toBe("Ready for review");
+    expect(agentStatusWord({ ...agent, pull_state: "draft" })).toBe("Draft");
+    expect(agentStatusWord({ ...agent, pull_state: "merged" })).toBe("Merged");
+    expect(agentStatusWord({ ...agent, state: "stopped", pull_state: "closed" })).toBe("Closed");
+    expect(agentStatusWord({ ...agent, state: "working", pull_state: "merged" })).toBe("Working");
+  });
+
+  test("agents on one pull request are one row", () => {
+    const pr = "https://github.com/egoist/lorca/pull/254";
+    const messages = [
+      start("tabs", { state: "idle", pull_request: pr, updated_at: NOW - 7200 }),
+      start("inspector", { state: "idle", pull_request: `${pr}/`, updated_at: NOW - 3600 }),
+      start("phone", { state: "idle", pull_request: "https://github.com/egoist/lorca/pull/256", updated_at: NOW - 9000 }),
+      start("plain", { state: "idle", updated_at: NOW - 9500 }),
+      start("plain-too", { state: "idle", updated_at: NOW - 9600 }),
+    ];
+    expect(chatAgents(messages, NOW).map((each) => each.message.id)).toEqual(["inspector", "phone", "plain", "plain-too"]);
+  });
+
   test("reads and searches in a row fold into one Explored line", () => {
     const tool = (id: string, kind: NonNullable<AgentItem["tool"]>["kind"], title: string, status: NonNullable<AgentItem["tool"]>["status"] = "done"): AgentItem => ({ id, kind: "tool", at: 0, tool: { kind, title, status } });
     const items: AgentItem[] = [

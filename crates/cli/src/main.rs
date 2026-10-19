@@ -358,6 +358,8 @@ async fn main() -> anyhow::Result<()> {
             // The coding agents the last run left: their cards and handles stay, and one that
             // was done takes a follow-up.
             lorca::coding::load(&app);
+            // Their pull requests' states follow GitHub's, until merged or closed.
+            lorca::coding::pull::watch(app.clone());
             #[cfg(unix)]
             tokio::spawn(stop_on_signal(app.clone()));
             // Installed marketplace plugins follow the index in use: this build's, or a later
