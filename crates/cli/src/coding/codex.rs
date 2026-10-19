@@ -222,7 +222,7 @@ async fn read(
                             Some("failed") => {
                                 let error = params["turn"]["error"]["message"].as_str().unwrap_or("Codex stopped with an error").to_string();
                                 item(Item::text(uuid::Uuid::new_v4().to_string(), "error", &error));
-                                let _ = events.send(Event::Idle(Some(error)));
+                                let _ = events.send(Event::Failed(error));
                             }
                             _ => {
                                 let _ = events.send(Event::Idle(last_said.take()));

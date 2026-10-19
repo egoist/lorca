@@ -14,7 +14,7 @@ use crate::model::{AutoReviewRule, Bot, CommandRun};
 use crate::plugins::mcp::{self, Decision};
 use crate::plugins::review::{self, Action, Outcome, Trigger};
 
-const LOCAL_TARGET_ID: &str = "computer";
+pub(crate) const LOCAL_TARGET_ID: &str = "computer";
 
 /// Reviews every shell call before `bash` receives it. A returned result blocks the call;
 /// `None` lets it execute unchanged with the Runner user's normal authority. With Auto-review
@@ -80,7 +80,7 @@ pub async fn before_tool_call(
     });
     // A command from a codemode script comes with the script, which says what the batch is for.
     let script = ctx.parent.filter(|parent| parent.name == CODEMODE_TOOL_NAME).and_then(|parent| parent.arguments["code"].as_str());
-    let facts = facts(app, command, &workdir).await;
+    let facts = facts(command, &workdir).await;
     let action = Action { target_name: &runner_name, tool: "bash", description: &description, args: &args, script, facts: &facts, propose_rule: true };
     let (reason, rule) = match review::review(app, bot, chat_id, trigger, action, ctx.cancel).await {
         Outcome::Allow => {
@@ -224,7 +224,7 @@ async fn review_input(app: &Arc<App>, chat_id: &str, trigger: &Trigger, bot: &Bo
 /// Whether a command runs without a review while Auto-review is on: the parser proves it only
 /// reads, it stays in Lorca's own folders, or it only makes, copies, moves, and edits files in
 /// `workdir`, where the bot's file tools write without a review too. A coding agent's commands
-/// (`crate::coding`) take the same fast path as the bot's own, in its worktree.
+/// (`crate::coding`) take the same fast path as the bot's own, in the folder it works in.
 pub(crate) fn needs_no_review(app: &App, command: &str, workdir: &Path) -> bool {
     let home = dirs::home_dir();
     read_only(command) || stays_in_lorca(command, workdir, &lorca_folders(app), home.as_deref()) || stays_in_workdir(command, workdir, home.as_deref())
@@ -232,17 +232,17 @@ pub(crate) fn needs_no_review(app: &App, command: &str, workdir: &Path) -> bool 
 
 /// What Lorca checks before a command that could discard work, for the review to take as ground
 /// truth: whether each folder it would delete, reset, or clean is a git working tree with
-/// changes, untracked files, or commits found on no remote, whether Lorca made it for a coding
-/// agent, and what work only a branch it would delete holds. Nothing for other commands.
-pub(crate) async fn facts(app: &App, command: &str, workdir: &Path) -> Vec<String> {
+/// changes, untracked files, or commits found on no remote, and what work only a branch it would
+/// delete holds. Nothing for other commands.
+pub(crate) async fn facts(command: &str, workdir: &Path) -> Vec<String> {
     if !command.contains("rm ") && !command.contains("git ") {
         return Vec::new();
     }
-    let (command, workdir, worktrees) = (command.to_string(), workdir.to_path_buf(), app.config.home.join("worktrees"));
-    tokio::task::spawn_blocking(move || git_facts(&command, &workdir, &worktrees, dirs::home_dir().as_deref())).await.unwrap_or_default()
+    let (command, workdir) = (command.to_string(), workdir.to_path_buf());
+    tokio::task::spawn_blocking(move || git_facts(&command, &workdir, dirs::home_dir().as_deref())).await.unwrap_or_default()
 }
 
-fn git_facts(command: &str, workdir: &Path, worktrees: &Path, home: Option<&Path>) -> Vec<String> {
+fn git_facts(command: &str, workdir: &Path, home: Option<&Path>) -> Vec<String> {
     let (stages, _) = parsed_shell(command);
     let mut dir = workdir.to_path_buf();
     let mut folders: Vec<PathBuf> = Vec::new();
@@ -306,7 +306,7 @@ fn git_facts(command: &str, workdir: &Path, worktrees: &Path, home: Option<&Path
     }
     let mut facts = Vec::new();
     for folder in folders.iter().take(4) {
-        facts.extend(folder_fact(folder, worktrees));
+        facts.extend(folder_fact(folder));
     }
     for (at, branch) in branches.iter().take(4) {
         facts.extend(branch_fact(at, branch));
@@ -315,9 +315,8 @@ fn git_facts(command: &str, workdir: &Path, worktrees: &Path, home: Option<&Path
 }
 
 /// One folder's git state, as a sentence: whether it holds changes or commits nothing else has.
-fn folder_fact(folder: &Path, worktrees: &Path) -> Option<String> {
+fn folder_fact(folder: &Path) -> Option<String> {
     let shown = home_relative(folder);
-    let made = if folder.starts_with(worktrees) { " Lorca made it for a coding agent." } else { "" };
     if !folder.exists() {
         return Some(format!("{shown} does not exist."));
     }
@@ -340,7 +339,7 @@ fn folder_fact(folder: &Path, worktrees: &Path) -> Option<String> {
         1 => "1 commit found on no remote".to_string(),
         count => format!("{count} commits found on no remote"),
     };
-    Some(format!("{shown} is a git working tree on {branch}: {tree}, {commits}.{made}"))
+    Some(format!("{shown} is a git working tree on {branch}: {tree}, {commits}."))
 }
 
 /// What only one branch holds: its commits that no other branch, tag, or remote has.
@@ -409,7 +408,7 @@ fn home_relative(path: &Path) -> String {
     }
 }
 
-fn command_summary(command: &str) -> String {
+pub(crate) fn command_summary(command: &str) -> String {
     let one_line = command.split_whitespace().collect::<Vec<_>>().join(" ");
     let shown: String = one_line.chars().take(180).collect();
     format!("$ {shown}{}", if one_line.chars().count() > 180 { "…" } else { "" })
@@ -1342,8 +1341,7 @@ mod tests {
     fn a_command_that_could_discard_work_comes_with_the_git_state() {
         let scratch = std::env::temp_dir().join(format!("lorca-facts-{}", uuid::Uuid::new_v4()));
         let repo = scratch.join("repo");
-        let worktrees = scratch.join("lorca/worktrees");
-        let tree = worktrees.join("repo-1a2b/fix");
+        let tree = scratch.join("trees/fix");
         std::fs::create_dir_all(&repo).unwrap();
         let run = |dir: &Path, args: &[&str]| {
             let status = std::process::Command::new("git").arg("-C").arg(dir).args(args).env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t")
@@ -1363,16 +1361,16 @@ mod tests {
         // Commands name paths as bash does, with `/`, which is also what Git Bash takes on Windows.
         let shell = |path: &Path| path.display().to_string().replace('\\', "/");
         let command = format!("cd {} && git worktree remove --force {} && git branch -D fix main-copy", shell(&repo), shell(&tree));
-        let facts = git_facts(&command, &scratch, &worktrees, None);
+        let facts = git_facts(&command, &scratch, None);
         assert_eq!(facts.len(), 2, "{facts:?}");
-        assert!(facts[0].ends_with("is a git working tree on fix: 0 changed and 1 untracked files not committed, 2 commits found on no remote. Lorca made it for a coding agent."), "{}", facts[0]);
+        assert!(facts[0].ends_with("is a git working tree on fix: 0 changed and 1 untracked files not committed, 2 commits found on no remote."), "{}", facts[0]);
         assert_eq!(facts[1], "Branch fix has 1 commit found nowhere else.");
         // A branch that is not there says nothing.
         assert!(!facts.iter().any(|fact| fact.contains("main-copy")));
-        let clean = git_facts(&format!("git -C {} reset --hard", shell(&repo)), &scratch, &worktrees, None);
+        let clean = git_facts(&format!("git -C {} reset --hard", shell(&repo)), &scratch, None);
         assert!(clean[0].ends_with("is a git working tree on main: no uncommitted changes, 1 commit found on no remote."), "{clean:?}");
-        assert!(git_facts("cargo build && git status", &repo, &worktrees, None).is_empty());
-        assert_eq!(git_facts("rm -rf gone", &repo, &worktrees, None)[0], format!("{} does not exist.", repo.join("gone").display()));
+        assert!(git_facts("cargo build && git status", &repo, None).is_empty());
+        assert_eq!(git_facts("rm -rf gone", &repo, None)[0], format!("{} does not exist.", repo.join("gone").display()));
         let _ = std::fs::remove_dir_all(scratch);
     }
 

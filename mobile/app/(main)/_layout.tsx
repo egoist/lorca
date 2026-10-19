@@ -8,11 +8,11 @@ import { Sidebar } from "../../src/ui/Sidebar";
 import { usePalette } from "../../src/ui/theme";
 
 // A chat opened from a link or a notification still has the list under it.
-export const unstable_settings = { initialRouteName: "index" };
+export const unstable_settings = { initialRouteName: "(tabs)" };
 
-/// The chat list and the open chat. A narrow window stacks the chat over the list. A wide one
-/// keeps the list in a sidebar, and this stack is the pane beside it: its first screen is the
-/// empty pane and a chat takes the place of the one before it.
+/// The tabs and the open chat. A narrow window stacks the chat over the tabs. A wide one keeps
+/// the list in a sidebar, and this stack is the pane beside it: its first screen is the empty
+/// pane (the tabs with their bar hidden) and a chat takes the place of the one before it.
 export default function MainLayout() {
   useLanguage();
   const p = usePalette();
@@ -32,7 +32,7 @@ export default function MainLayout() {
       <View style={styles.pane}>
         <PaneWidth value={wide ? width - sidebarWidth : width}>
           <Stack screenOptions={screenOptions}>
-            <Stack.Screen name="index" options={{ title: t("Chats"), headerTitle: "", headerLargeTitle: false, headerShadowVisible: false, headerTransparent: Platform.OS === "ios" }} />
+            <Stack.Screen name="(tabs)" options={{ title: t("Chats"), headerShown: false }} />
             <Stack.Screen
               name="chat/[id]"
               options={{

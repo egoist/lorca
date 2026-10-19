@@ -4,6 +4,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,13 +13,29 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// pendingPosts are what the store posted to the main thread in a test, run between frames.
-var pendingPosts []func()
+// pendingPosts are what the store posted to the main thread in a test, run between frames. The
+// store's timers post from their own goroutines, two at once when they come due together.
+var pendingPosts struct {
+	sync.Mutex
+	queue []func()
+}
+
+// testPost is the store's post in a test: it queues `fn` for runPosts.
+func testPost(fn func()) {
+	pendingPosts.Lock()
+	pendingPosts.queue = append(pendingPosts.queue, fn)
+	pendingPosts.Unlock()
+}
 
 func runPosts() {
-	for len(pendingPosts) > 0 {
-		batch := pendingPosts
-		pendingPosts = nil
+	for {
+		pendingPosts.Lock()
+		batch := pendingPosts.queue
+		pendingPosts.queue = nil
+		pendingPosts.Unlock()
+		if len(batch) == 0 {
+			return
+		}
 		for _, fn := range batch {
 			fn()
 		}
@@ -32,7 +49,7 @@ func demoWindow(t *testing.T) *mainWindow {
 	l10n.Set("en", "en-US")
 	// Each test starts from the defaults, saving where no other run reads.
 	prefs.loadFrom(filepath.Join(t.TempDir(), "preferences.json"))
-	store = model.NewStore(nil, func(fn func()) { pendingPosts = append(pendingPosts, fn) }, true)
+	store = model.NewStore(nil, testPost, true)
 	app = &appDelegate{notifier: newNotifier()}
 	store.Start()
 	m := newMainWindow()
@@ -116,13 +133,19 @@ func TestRenderRunningCommand(t *testing.T) {
 		tt.Frame()
 	}
 	renderTo(t, tt, "command-card")
+	flyouts := stubFlyouts(t)
 	if err := tt.Click(L("Running tasks (%d)", 1)); err != nil {
 		t.Fatal(err)
 	}
-	tt.Frame()
-	renderTo(t, tt, "running-tasks")
-	if !tt.HasText(L("Run in Background")) {
-		t.Errorf("no Run in Background in %q", tt.Texts())
+	settle(tt)
+	if len(*flyouts) != 1 {
+		t.Fatalf("%d flyouts open", len(*flyouts))
+	}
+	f := (*flyouts)[0]
+	settleFlyout(f)
+	renderTo(t, f.tt, "running-tasks")
+	if !f.tt.HasText(L("Run in Background")) {
+		t.Errorf("no Run in Background in %q", f.tt.Texts())
 	}
 }
 

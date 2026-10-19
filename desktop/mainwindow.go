@@ -63,6 +63,7 @@ type mainWindow struct {
 	inspector   inspectorState
 	tasks       runningTasksState
 	attention   attentionState
+	coding      codingAgentsState
 	// focusComposer asks the chat on screen to put the keyboard in its composer.
 	focusComposer bool
 	// cmdHeldAt is when Cmd (Ctrl on Windows and Linux) went down alone, for the chats' shortcut
@@ -875,6 +876,7 @@ func (m *mainWindow) contentHeader(c *ui.Context, chatID, title, subtitle string
 			return
 		}
 		m.runningTasksButton(c, chatID)
+		m.codingAgentsButton(c)
 		m.attentionButton(c)
 		if rightmost {
 			m.inspectorToggle(c)

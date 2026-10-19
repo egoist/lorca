@@ -18,6 +18,10 @@ type Preferences struct {
 	// at once when it did, and otherwise waits for the answer, so a fresh install goes straight
 	// to onboarding.
 	HadIdentity bool `json:"hadIdentity"`
+	// UnfinishedOnboarding is where onboarding for an identity created here stopped short of its
+	// last step: "phrase" before the backup phrase was saved, "setup" before the first bot and
+	// the provider. A launch with an identity opens onboarding there instead of the main window.
+	UnfinishedOnboarding string `json:"unfinishedOnboarding,omitempty"`
 	// Selection is the chat the main window showed last ("chat:<id>"), so a relaunch lands back
 	// on it rather than on a settings pane.
 	Selection      string `json:"selection"`
@@ -46,20 +50,21 @@ type Preferences struct {
 
 // PreferencesPatch changes the preferences it names.
 type PreferencesPatch struct {
-	HadIdentity         *bool   `json:"hadIdentity,omitempty"`
-	Selection           *string `json:"selection,omitempty"`
-	ShowsInspector      *bool   `json:"showsInspector,omitempty"`
-	SendOnReturn        *bool   `json:"sendOnReturn,omitempty"`
-	ShowTimestamps      *bool   `json:"showTimestamps,omitempty"`
-	RelayURL            *string `json:"relayURL,omitempty"`
-	CLIPort             *int    `json:"cliPort,omitempty"`
-	AppLanguage         *string `json:"appLanguage,omitempty"`
-	Appearance          *string `json:"appearance,omitempty"`
-	SidebarWidth        *int    `json:"sidebarWidth,omitempty"`
-	InspectorWidth      *int    `json:"inspectorWidth,omitempty"`
-	SidebarCollapsed    *bool   `json:"sidebarCollapsed,omitempty"`
-	ShowsHiddenChats    *bool   `json:"showsHiddenChats,omitempty"`
-	CollapsesOtherChats *bool   `json:"collapsesOtherChats,omitempty"`
+	HadIdentity          *bool   `json:"hadIdentity,omitempty"`
+	UnfinishedOnboarding *string `json:"unfinishedOnboarding,omitempty"`
+	Selection            *string `json:"selection,omitempty"`
+	ShowsInspector       *bool   `json:"showsInspector,omitempty"`
+	SendOnReturn         *bool   `json:"sendOnReturn,omitempty"`
+	ShowTimestamps       *bool   `json:"showTimestamps,omitempty"`
+	RelayURL             *string `json:"relayURL,omitempty"`
+	CLIPort              *int    `json:"cliPort,omitempty"`
+	AppLanguage          *string `json:"appLanguage,omitempty"`
+	Appearance           *string `json:"appearance,omitempty"`
+	SidebarWidth         *int    `json:"sidebarWidth,omitempty"`
+	InspectorWidth       *int    `json:"inspectorWidth,omitempty"`
+	SidebarCollapsed     *bool   `json:"sidebarCollapsed,omitempty"`
+	ShowsHiddenChats     *bool   `json:"showsHiddenChats,omitempty"`
+	CollapsesOtherChats  *bool   `json:"collapsesOtherChats,omitempty"`
 }
 
 type prefsStore struct {
@@ -120,6 +125,9 @@ func (s *prefsStore) update(patch PreferencesPatch) Preferences {
 	v := &s.value
 	if patch.HadIdentity != nil {
 		v.HadIdentity = *patch.HadIdentity
+	}
+	if patch.UnfinishedOnboarding != nil {
+		v.UnfinishedOnboarding = *patch.UnfinishedOnboarding
 	}
 	if patch.Selection != nil {
 		v.Selection = *patch.Selection

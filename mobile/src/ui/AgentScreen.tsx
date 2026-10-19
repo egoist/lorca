@@ -1,20 +1,28 @@
 // A coding agent's page, after Cursor's agent transcript and view-only like Grok Bot's exchange
 // view: its mark and title, its name, how it stands, where it works and on which Runner, its pull
-// request and Stop; what it asks, as in the chat; then its steps in order (the prompt, Lorca's own
-// lines, thoughts, what it said, the tools it used with reads and searches in a row folded into one
-// line, its plan, and errors), and what its work changed. It follows the agent while it is open,
-// asking the Runner again every five seconds, and keeps to the end unless the user scrolled up to
-// read; one that asks opens at its question instead. Follow-ups go through the bot, so there is no composer.
+// request and Stop; then its steps in order (the prompt, Lorca's own lines, thoughts, what it said,
+// the tools it used with reads and searches in a row folded into one line, its plan, and errors),
+// and what its work changed. It follows the agent while it is open, asking the Runner again every
+// five seconds, and keeps to the end unless the user scrolled up to read. While it asks, its
+// question is a card at the end of the chat. Each prompt says who wrote it, the bot or the user.
+// A composer at the foot writes the agent directly (`coding.send`): it takes the message up when
+// it is done with what it does now, so the message waits at the end of the transcript as
+// "Queued" until then. The field takes no text while the agent starts or cannot be reached; a
+// message that did not go stays in the field with why above it.
 
 import { Stack, useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useRef, useState, type ReactNode } from "react";
 import { ActivityIndicator, Platform, ScrollView, StyleSheet, Text, useWindowDimensions, View, type ColorValue } from "react-native";
+import { KeyboardAvoidingView, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
+import Animated, { useAnimatedStyle } from "react-native-reanimated";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { engine } from "../core/engine";
-import { agentIsOpen, agentIsRunning, agentName, agentTitle, pullRequestLabel, type AgentItem, type AgentRun, type AgentToolStep } from "../core/model";
+import { agentIsOpen, agentIsRunning, agentName, agentTitle, pullRequestLabel, type AgentItem, type AgentQueued, type AgentRun, type AgentToolStep } from "../core/model";
 import { useBotMap, useChat } from "../core/store";
 import { t, useLanguage } from "../i18n";
 import { AgentLogo } from "./AgentLogo";
 import { alert } from "./alert";
+import { Composer } from "./Composer";
 import { agentStatusWord, changedFiles, exploredLine, thoughtLine, toolLine, transcriptBlocks, type TranscriptBlock } from "./codingAgents";
 import { Markdown } from "./Markdown";
 import { CloseToolbar } from "./navigation";
@@ -22,7 +30,6 @@ import { openLink } from "./outputs";
 import { Pressable } from "./Pressable";
 import { Symbol } from "./Symbol";
 import { Font, usePalette } from "./theme";
-import { AgentAskCard } from "./transcript";
 
 /// How often the transcript is asked for again while the agent is open and on screen.
 const REFRESH_MS = 5000;
@@ -36,49 +43,85 @@ export function AgentScreen({ chatId, messageId, presented }: { chatId: string; 
   const router = useRouter();
   const p = usePalette();
   const chat = useChat(chatId);
-  const bots = useBotMap();
   const { width } = useWindowDimensions();
   const [paneWidth, setPaneWidth] = useState(width);
   const [items, setItems] = useState<AgentItem[] | null>(null);
   const [fetched, setFetched] = useState<AgentRun | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
+  const [queued, setQueued] = useState<AgentQueued[]>([]);
+  /// Whether a message can reach the agent now, as the last transcript said; unknown before it.
+  const [reachable, setReachable] = useState<boolean | null>(null);
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
   const scroll = useRef<ScrollView>(null);
+  /// Asks for the transcript again now, while the page follows the agent.
+  const reload = useRef<(() => void) | undefined>(undefined);
+  const bots = useBotMap();
+  const insets = useSafeAreaInsets();
   const row = chat?.messages.find((m) => m.id === messageId);
   // The row follows the Runner's events, so its card is the freshest; the transcript's card stands
   // in when the row is not loaded.
   const card = (row?.body.kind === "tool" ? row.body.agent : undefined) ?? fetched;
-  const open = card ? agentIsOpen(card) : true;
-  const bot = row?.author.kind === "bot" ? bots.get(row.author.bot_id) : undefined;
-  // It opens at its latest step, unless it asks: then at its question, on top.
-  const atEnd = useRef(card?.state !== "asking");
+  const state = card?.state;
+  // The bot that runs the agent wrote its first prompt and passes the user's words on.
+  const botName = row?.author.kind === "bot" ? bots.get(row.author.bot_id)?.name : undefined;
+  // It opens at its latest step.
+  const atEnd = useRef(true);
+  // On the keys the composer drops the home-indicator padding it no longer needs.
+  const rest = Math.max(insets.bottom, 8);
+  const keyboard = useReanimatedKeyboardAnimation();
+  const footStyle = useAnimatedStyle(() => ({ paddingBottom: rest - keyboard.progress.value * (rest - 8) }), [rest]);
 
   useFocusEffect(
     useCallback(() => {
       let live = true;
       let timer: ReturnType<typeof setTimeout> | undefined;
+      // One ask at a time; a reload during one asks again once it is back.
+      let busy = false;
+      let asked = false;
       const load = async () => {
+        if (busy) {
+          asked = true;
+          return;
+        }
+        busy = true;
+        if (timer) clearTimeout(timer);
+        timer = undefined;
         let again = true;
         try {
           const answer = await engine.agentTranscript(chatId, messageId);
-          if (!live) return;
-          setItems(answer.items);
-          setFetched(answer.card);
-          setError(null);
-          again = agentIsOpen(answer.card);
+          if (live) {
+            setItems(answer.items);
+            setFetched(answer.card);
+            setQueued(answer.queued ?? []);
+            setReachable(answer.open);
+            setError(null);
+            again = agentIsOpen(answer.card);
+          }
         } catch (e) {
           // What was shown stays; the next try may reach the Runner.
           if (live) setError(e instanceof Error ? e.message : String(e));
         }
-        if (live && again) timer = setTimeout(load, REFRESH_MS);
+        busy = false;
+        if (!live) return;
+        if (asked) {
+          asked = false;
+          void load();
+        } else if (again) {
+          timer = setTimeout(load, REFRESH_MS);
+        }
       };
+      reload.current = () => void load();
       void load();
       return () => {
         live = false;
+        reload.current = undefined;
         if (timer) clearTimeout(timer);
       };
-      // An agent that ended and was opened again (a follow-up) is asked for again.
-    }, [chatId, messageId, open]),
+      // A change of state is asked for at once: one that started now takes messages, one that
+      // ended and was opened again (a follow-up) is followed again.
+    }, [chatId, messageId, state]),
   );
 
   const stop = async () => {
@@ -92,21 +135,54 @@ export function AgentScreen({ chatId, messageId, presented }: { chatId: string; 
     }
   };
 
-  const decide = useCallback((message: NonNullable<typeof row>, decision: "allow" | "always" | "deny") => {
-    engine.answerPermission(message.chat_id, message.id, decision).catch((e) => alert(t("Could not answer"), e instanceof Error ? e.message : String(e)));
-  }, []);
+  /// Writes the agent. It rejects with why the message did not go, which the composer keeps.
+  const send = useCallback(
+    async (text: string) => {
+      setSending(true);
+      setSendError(null);
+      try {
+        setFetched(await engine.sendToAgent(chatId, messageId, text.trim()));
+        atEnd.current = true;
+        reload.current?.();
+      } catch (e) {
+        setSendError(e instanceof Error ? e.message : String(e));
+        throw e;
+      } finally {
+        setSending(false);
+      }
+    },
+    [chatId, messageId],
+  );
+
+  const name = agentName(card?.kind ?? "");
+  const starting = state === "starting";
+  const writable = !!card && !starting && reachable === true;
+  const placeholder = starting
+    ? t("{name} is starting…", { name })
+    : reachable === false
+      ? t("{name} can't take a message now", { name })
+      : t("Message {name}", { name });
 
   const where = card ? [agentName(card.kind), agentStatusWord(card), card.branch, card.device].filter(Boolean).join(" · ") : "";
   const blocks = items ? transcriptBlocks(items) : [];
   const textWidth = paneWidth - 32;
 
   return (
-    <View style={styles.screen} onLayout={(e) => setPaneWidth(e.nativeEvent.layout.width)}>
+    // The sheet need not reach the foot of the screen, so the keys' overlap is measured from
+    // where the page sits in the window.
+    <KeyboardAvoidingView behavior="padding" automaticOffset style={styles.screen} onLayout={(e) => setPaneWidth(e.nativeEvent.layout.width)}>
       <Stack.Screen options={{ title: "" }} />
       {presented ? <CloseToolbar label={Platform.OS === "android" ? t("Close") : t("Done")} onClose={() => router.dismiss()} /> : null}
       <ScrollView
         ref={scroll}
+        style={styles.scroll}
         contentContainerStyle={styles.content}
+        keyboardDismissMode="interactive"
+        keyboardShouldPersistTaps="handled"
+        onLayout={() => {
+          // The keys or a taller composer shrink the transcript; its end stays in view.
+          if (atEnd.current && items?.length) scroll.current?.scrollToEnd({ animated: false });
+        }}
         contentInsetAdjustmentBehavior="automatic"
         scrollEventThrottle={64}
         onScroll={(e) => {
@@ -158,14 +234,12 @@ export function AgentScreen({ chatId, messageId, presented }: { chatId: string; 
           </View>
         ) : null}
 
-        {row && card?.state === "asking" ? (
-          <View style={styles.ask}>
-            <AgentAskCard message={row} agent={card} bot={bot} isGroup={false} onDecide={decide} />
-          </View>
-        ) : null}
-
         {blocks.map((block) => (
-          <Block key={block.kind === "item" ? block.item.id : `explored-${block.id}`} block={block} textWidth={textWidth} />
+          <Block key={block.kind === "item" ? block.item.id : `explored-${block.id}`} block={block} textWidth={textWidth} botName={botName} />
+        ))}
+
+        {queued.map((message, index) => (
+          <Queued key={`queued-${message.at}-${index}`} message={message} botName={botName} />
         ))}
 
         {items === null || items.length === 0 ? (
@@ -182,16 +256,26 @@ export function AgentScreen({ chatId, messageId, presented }: { chatId: string; 
           </View>
         ) : null}
       </ScrollView>
-    </View>
+      <Animated.View style={footStyle}>
+        {sendError ? (
+          <Text style={[styles.sendError, { color: p.red }]} selectable>
+            {sendError}
+          </Text>
+        ) : null}
+        <Composer members={NO_MEMBERS} isGroup={false} placeholder={placeholder} onSend={send} attach={false} disabled={!writable} sending={sending} />
+      </Animated.View>
+    </KeyboardAvoidingView>
   );
 }
 
-function Block({ block, textWidth }: { block: TranscriptBlock; textWidth: number }) {
+const NO_MEMBERS: never[] = [];
+
+function Block({ block, textWidth, botName }: { block: TranscriptBlock; textWidth: number; botName: string | undefined }) {
   if (block.kind === "explored") return <Explored steps={block.steps} />;
   const item = block.item;
   switch (item.kind) {
     case "prompt":
-      return <Prompt text={item.text ?? ""} />;
+      return <Prompt text={item.text ?? ""} author={item.from === "user" ? t("You") : (botName ?? t("Prompt"))} />;
     case "status":
       return <Status text={item.text ?? ""} />;
     case "thought":
@@ -207,15 +291,15 @@ function Block({ block, textWidth }: { block: TranscriptBlock; textWidth: number
   }
 }
 
-/// What the agent was sent, in a card under a small "Prompt" label: the first brief folds past six
-/// lines behind Show more.
-function Prompt({ text }: { text: string }) {
+/// What the agent was sent, in a card under who wrote it, "You" or the bot: the first brief folds
+/// past six lines behind Show more.
+function Prompt({ text, author }: { text: string; author: string }) {
   const p = usePalette();
   const [whole, setWhole] = useState(false);
   const long = text.split("\n").length > PROMPT_LINES || text.length > 420;
   return (
     <View style={[styles.prompt, { backgroundColor: p.cell, borderColor: p.separator }]}>
-      <Text style={[styles.promptLabel, { color: p.secondaryLabel }]}>{t("Prompt")}</Text>
+      <Text style={[styles.promptLabel, { color: p.secondaryLabel }]}>{author}</Text>
       <Text style={[styles.body, { color: p.label }]} numberOfLines={whole || !long ? undefined : PROMPT_LINES} selectable>
         {text}
       </Text>
@@ -224,6 +308,24 @@ function Prompt({ text }: { text: string }) {
           <Text style={[styles.more, { color: p.tint }]}>{whole ? t("Show less") : t("Show more")}</Text>
         </Pressable>
       ) : null}
+    </View>
+  );
+}
+
+/// A message the agent has not taken up yet, as a chat bubble marked Queued: the user's on the
+/// right in their color, the bot's on the left under its name.
+function Queued({ message, botName }: { message: AgentQueued; botName: string | undefined }) {
+  const p = usePalette();
+  const mine = message.from === "user";
+  const label = mine ? t("Queued") : `${botName ?? t("A bot")} · ${t("Queued")}`;
+  return (
+    <View style={[styles.queued, mine ? styles.queuedMine : null]}>
+      <View style={[styles.bubble, { backgroundColor: mine ? p.userBubble : p.botBubble }]}>
+        <Text style={[styles.body, { color: mine ? p.userBubbleText : p.botBubbleText }]} selectable>
+          {message.text}
+        </Text>
+      </View>
+      <Text style={[styles.queuedLabel, { color: p.secondaryLabel }]}>{label}</Text>
     </View>
   );
 }
@@ -358,7 +460,8 @@ const MONO = Platform.OS === "ios" ? "Menlo" : "monospace";
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  content: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 40, gap: 6 },
+  scroll: { flex: 1 },
+  content: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 16, gap: 6 },
   header: { gap: 6, paddingBottom: 10 },
   titleLine: { flexDirection: "row", alignItems: "flex-start", gap: 10 },
   logo: { paddingTop: 2 },
@@ -367,7 +470,6 @@ const styles = StyleSheet.create({
   actions: { flexDirection: "row", gap: 8, marginTop: 4 },
   action: { flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
   actionText: { fontSize: 13, fontWeight: "600" },
-  ask: { marginHorizontal: -12, paddingBottom: 6 },
   prompt: { borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, padding: 12, gap: 6, marginVertical: 4 },
   promptLabel: { fontSize: 12, fontWeight: "600" },
   body: { fontSize: 15, lineHeight: 21 },
@@ -389,4 +491,9 @@ const styles = StyleSheet.create({
   failure: { paddingVertical: 4 },
   footer: { borderTopWidth: StyleSheet.hairlineWidth, marginTop: 10, paddingTop: 10 },
   caption: { fontSize: 13 },
+  queued: { alignItems: "flex-start", gap: 3, marginVertical: 2 },
+  queuedMine: { alignItems: "flex-end" },
+  bubble: { maxWidth: "85%", borderRadius: 18, paddingHorizontal: 13, paddingVertical: 9 },
+  queuedLabel: { fontSize: 12, paddingHorizontal: 6 },
+  sendError: { fontSize: 13, lineHeight: 18, marginHorizontal: 24, marginBottom: 6 },
 });

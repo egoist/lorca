@@ -124,8 +124,25 @@ pub struct PluginStatus {
 }
 
 impl Device {
+    /// Whether the Device runs bots: its `os` is a desktop one. The apps judge it the same way
+    /// (`Device.IsRunner` in `desktop/model`), against the same cases in
+    /// `crates/cli/testdata/runners.json`.
     pub fn is_runner(&self) -> bool {
         matches!(self.os.as_str(), "macos" | "linux" | "windows")
+    }
+
+    /// The system by the name people know it by, else what the Device reported.
+    pub fn platform(&self) -> &str {
+        match self.os.as_str() {
+            "macos" => "macOS",
+            "linux" => "Linux",
+            "windows" => "Windows",
+            "ios" => "iOS",
+            "ipados" => "iPadOS",
+            "android" => "Android",
+            "" => "an unknown system",
+            other => other,
+        }
     }
 }
 
@@ -340,9 +357,10 @@ pub enum Body {
         to: String,
         reason: String,
     },
-    /// What a coding agent said when it was done with what it was asked, or why it ended on its
-    /// own (`failed`). The apps show it as "Message from ⬢ Title"; the bot that runs the agent
-    /// reads it in the turn it wakes for it (`crate::coding`).
+    /// What a coding agent said when it was done with what it was asked, its report to the user,
+    /// or why it ended on its own (`failed`). The apps show it as "Message from ⬢ Title"; the
+    /// bot that runs the agent wakes for it: to relay the report to the user, or to say why it
+    /// ended (`crate::coding`).
     AgentMessage {
         agent_id: String,
         /// `claude`, `codex`, `opencode`, `pi`, or `fx`.
@@ -510,8 +528,8 @@ impl ReplyTo {
 }
 
 /// A coding agent a bot runs on its Runner (`crate::coding`), as the row of the `coding_agent`
-/// call that started it carries it: what it was asked and where it works, how it stands, what it
-/// asks the user, and what came of it.
+/// call that started it carries it: what it was asked and where it works, how it stands, and
+/// what came of it.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct AgentRun {
     /// The bot's handle for it, across turns: `agent-3f9a2c1d`.
@@ -524,29 +542,37 @@ pub struct AgentRun {
     pub title: String,
     /// What it was asked: the prompt's first line.
     pub task: String,
-    /// Where it works, from the home folder: the worktree Lorca made for it, or a folder that
-    /// is not a repository.
+    /// Where it works, from the home folder: the folder the bot gave it.
     #[serde(default)]
     pub folder: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
-    /// `starting`, `working`, `asking` (a `question` waits for the user), `idle` (done with
-    /// what it was asked; it takes a follow-up). Once it ended: `failed` or `stopped`.
+    /// `starting`, `working`, `asking` (its question waits for the user on a permission card
+    /// in the chat), `idle` (done with what it was asked; it takes a follow-up). Once it ended:
+    /// `failed` or `stopped`.
     pub state: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub question: Option<AgentQuestion>,
     /// Why it ended, in words: "Stopped", "Claude Code exited with code 1".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
     /// The pull request it opened, when its transcript names one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull_request: Option<String>,
+    /// How that pull request stands on its host, as the Runner last read it: `open`, `draft`,
+    /// `merged`, or `closed`; none before a read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_state: Option<String>,
     /// What its work changed against the commit it started from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changes: Option<AgentChanges>,
     /// The Runner it runs on, by name: "Workbench".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device: Option<String>,
+    /// The same Runner, by Device id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+    /// The repository its folder is a clone of, from its `origin` remote: "github.com/egoist/lorca".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
     /// When it started, in Unix seconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<f64>,
@@ -617,28 +643,6 @@ pub struct AgentChanges {
     pub files: u32,
     pub added: u32,
     pub removed: u32,
-}
-
-/// What a coding agent asks the user, when Auto-review asks: whether it may run `command` (or
-/// do what `command` says, for a change or a tool), answered with `chats.permission`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-pub struct AgentQuestion {
-    /// `command`.
-    pub kind: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub command: Option<String>,
-    /// Why Auto-review asked.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    /// The plain-language rule Always allow adds, which Auto-review proposed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rule: Option<String>,
-}
-
-/// One line about what a coding agent asks, for a notification: "Claude Code: $ git push".
-pub fn agent_question_summary(agent: &AgentRun, question: &AgentQuestion) -> String {
-    let what = format!("$ {}", question.command.as_deref().unwrap_or("").lines().next().unwrap_or("").trim());
-    format!("{}: {}", coding_agent_name(&agent.kind), what.chars().take(180).collect::<String>())
 }
 
 /// A `bash` call as its card shows it: Auto-review checking it, the question it asks, the
@@ -828,8 +832,9 @@ impl Message {
     }
 
 
-    /// A reply, failure, or pending confirmation the user has not seen. Tool activity and
-    /// updates to an answered question do not add to the count.
+    /// A reply, failure, or pending confirmation the user has not seen, or a coding agent's
+    /// report to the user. Tool activity and updates to an answered question do not add to the
+    /// count, nor does why an agent ended, which its bot's reply tells.
     pub fn counts_unread(&self) -> bool {
         if !matches!(self.author, Author::Bot { .. }) || self.notification == Some(crate::attention::Notification::Quiet) {
             return false;
@@ -838,6 +843,7 @@ impl Message {
             Body::Text { .. } => matches!(self.state, MessageState::Complete | MessageState::Failed { .. }),
             Body::Permission { .. } => self.is_complete() && self.confirmation().is_some(),
             Body::Tool { .. } => self.confirmation().is_some(),
+            Body::AgentMessage { failed, .. } => !failed,
             _ => false,
         }
     }
@@ -851,7 +857,6 @@ impl Message {
                 let line = run.command.lines().next().unwrap_or("").trim();
                 Some(format!("$ {}", line.chars().take(180).collect::<String>()))
             }
-            Body::Tool { agent: Some(agent), .. } if agent.state == "asking" => agent.question.as_ref().map(|question| crate::model::agent_question_summary(agent, question)),
             _ => None,
         }
     }
@@ -1214,8 +1219,8 @@ pub struct Job {
     pub task_context: Option<crate::tasks::Task>,
     /// `turn` for a user message in a DM, `room_turn` for one member's turn in a group,
     /// `message` for a teammate's message_bot, `routine` for a run of a routine, `command` for
-    /// a command the bot left running that ended, `agent` for what a coding agent the bot runs
-    /// did, `event` for a service event an event subscription's inbox admitted.
+    /// a command the bot left running that ended, `agent` for a coding agent the bot runs that
+    /// is done, whose report it relays, or ended on its own, `event` for a service event an event subscription's inbox admitted.
     pub kind: String,
     pub trigger_message_id: String,
     /// A durable delegated request or the continuation that reads its report.
@@ -1580,5 +1585,24 @@ mod host_tests {
     fn the_host_name_is_what_hostname_prints() {
         let printed = std::process::Command::new("hostname").output().unwrap().stdout;
         assert_eq!(host_name().as_deref(), Some(String::from_utf8_lossy(&printed).trim()));
+    }
+}
+
+#[cfg(test)]
+mod runner_tests {
+    use super::*;
+
+    /// The cases the desktop app's `Device.IsRunner` is tested against too
+    /// (`desktop/model/runners_test.go`). A machine the relay lists that never sent its
+    /// `machine` blob is no Device here; the apps get it with an empty `os`.
+    #[test]
+    fn runners_are_the_devices_the_apps_offer_as_runners() {
+        let cases: Vec<serde_json::Value> = serde_json::from_str(include_str!("../testdata/runners.json")).unwrap();
+        assert!(cases.len() >= 9);
+        for case in cases {
+            let os = if case["unknown"] == true { "" } else { case["os"].as_str().unwrap() };
+            let device = Device { id: "d".into(), name: "D".into(), os: os.into(), ..Default::default() };
+            assert_eq!(device.is_runner(), case["runner"].as_bool().unwrap(), "{case}");
+        }
     }
 }

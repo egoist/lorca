@@ -170,6 +170,8 @@ async fn read(process: Arc<Process>, mut messages: tokio::sync::mpsc::UnboundedR
     let mut steps: HashMap<String, ToolStep> = HashMap::new();
     let denied: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
     let mut last_said: Option<String> = None;
+    // Why its run gave up, once its retries ran out.
+    let mut failed: Option<String> = None;
     // Which assistant message it is on, for its steps' ids, and when its thinking began.
     let mut message = 0u64;
     let mut thinking: HashMap<u64, Instant> = HashMap::new();
@@ -231,7 +233,9 @@ async fn read(process: Arc<Process>, mut messages: tokio::sync::mpsc::UnboundedR
                 item(Item::tool(call, step));
             }
             "auto_retry_end" if record["success"] == false => {
-                item(Item::text(uuid::Uuid::new_v4().to_string(), "error", record["finalError"].as_str().unwrap_or("pi stopped with an error")));
+                let error = record["finalError"].as_str().unwrap_or("pi stopped with an error").to_string();
+                item(Item::text(uuid::Uuid::new_v4().to_string(), "error", &error));
+                failed = Some(error);
             }
             "agent_settled" => {
                 for (call, mut step) in steps.drain() {
@@ -242,7 +246,10 @@ async fn read(process: Arc<Process>, mut messages: tokio::sync::mpsc::UnboundedR
                     item(Item::text(uuid::Uuid::new_v4().to_string(), "status", "Interrupted"));
                 }
                 busy.store(false, Ordering::SeqCst);
-                let _ = events.send(Event::Idle(last_said.take()));
+                let _ = events.send(match failed.take() {
+                    Some(error) if !record["aborted"].as_bool().unwrap_or(false) => Event::Failed(error),
+                    _ => Event::Idle(last_said.take()),
+                });
             }
             "extension_ui_request" => {
                 let Some(id) = record["id"].as_str().map(str::to_string) else { continue };

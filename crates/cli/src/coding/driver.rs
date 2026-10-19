@@ -19,6 +19,9 @@ pub(crate) enum Event {
     Working,
     /// It is done with what it was asked, with its last message.
     Idle(Option<String>),
+    /// Its turn ended in an error, with nothing else to take up: signed out, out of credits, the
+    /// model's API refusing. Why, in words.
+    Failed(String),
     /// It wants to do something that needs a decision first; the answer goes back on the
     /// channel: `Ok` lets it, `Err` says why not.
     Approve(Approval, oneshot::Sender<Result<(), String>>),

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,19 +24,16 @@ func TestTheAgentRowsDecodeFromTheCLI(t *testing.T) {
 	start := decodeMessage(t, `{"id":"m1","chat_id":"c1","author":{"kind":"bot","bot_id":"b1"},"state":{"kind":"complete"},"created_at":1,
 	 "body":{"kind":"tool","name":"coding_agent","summary":"Started","detail":"Add dark mode\n\nTo Settings.","is_running":false,
 	  "agent":{"id":"agent-1","kind":"codex","title":"Settings: dark mode","task":"Add dark mode","folder":"~/x/dark","branch":"dark",
-	   "state":"asking","question":{"kind":"command","command":"git push","reason":"It publishes.","rule":"push branches"},
-	   "pull_request":"https://github.com/acme/shop/pull/7","changes":{"files":4,"added":12,"removed":3},
+	   "state":"asking",
+	   "pull_request":"https://github.com/acme/shop/pull/7","pull_state":"merged","changes":{"files":4,"added":12,"removed":3},
 	   "device":"Workbench","started_at":1792069627.1,"updated_at":1792069700.4}}}`)
 	agent := model.AgentOf(start)
 	if agent == nil || !start.Body.Tool.IsShown() || !start.Body.Tool.IsAgentMessage() {
 		t.Fatalf("no agent shown: %+v", start.Body.Tool)
 	}
-	if agent.Name() != "Codex" || agent.Label() != "Settings: dark mode" || agent.Question == nil || len(agent.Question.Decisions()) != 3 ||
-		agent.PullNumber() != "#7" || agent.Changes == nil || agent.Changes.Added != 12 || agent.UpdatedAt.Unix() != 1792069700 {
-		t.Errorf("decoded %+v %+v", agent, agent.Question)
-	}
-	if got := agentQuestionTitle(agent); got != "Codex wants to run a command" {
-		t.Errorf("title %q", got)
+	if agent.Name() != "Codex" || agent.Label() != "Settings: dark mode" || agent.State != model.AgentAsking ||
+		agent.PullNumber() != "#7" || agent.PullState != model.PullMerged || agent.Changes == nil || agent.Changes.Added != 12 || agent.UpdatedAt.Unix() != 1792069700 {
+		t.Errorf("decoded %+v", agent)
 	}
 	// A message to it names it; the chat's start row has its title and kind.
 	send := decodeMessage(t, `{"id":"m2","chat_id":"c1","author":{"kind":"bot","bot_id":"b1"},"state":{"kind":"complete"},"created_at":2,
@@ -59,25 +57,34 @@ func TestTheAgentRowsDecodeFromTheCLI(t *testing.T) {
 func TestTheAgentSaysHowItStands(t *testing.T) {
 	demoWindow(t)
 	agent := &model.AgentRun{ID: "agent-1", Kind: "claude", Title: "Fix it", Branch: "fix-it", State: model.AgentWorking}
+	const pr = "https://github.com/acme/shop/pull/7"
 	cases := []struct {
 		state  model.AgentState
 		pr     string
+		pull   model.PullState
 		detail string
 	}{
-		{model.AgentStarting, "", "Working · fix-it"},
-		{model.AgentWorking, "", "Working · fix-it"},
-		{model.AgentAsking, "", "Needs attention · fix-it"},
-		{model.AgentIdle, "", "Finished · fix-it"},
-		{model.AgentIdle, "https://github.com/acme/shop/pull/7", "Ready for review · #7"},
-		{model.AgentFailed, "", "Run failed · fix-it"},
-		{model.AgentStopped, "", "Stopped · fix-it"},
+		{model.AgentStarting, "", "", "Working · fix-it"},
+		{model.AgentWorking, "", "", "Working · fix-it"},
+		{model.AgentAsking, "", "", "Needs attention · fix-it"},
+		{model.AgentIdle, "", "", "Finished · fix-it"},
+		{model.AgentIdle, pr, "", "Ready for review · #7"},
+		{model.AgentIdle, pr, model.PullOpen, "Ready for review · #7"},
+		{model.AgentIdle, pr, model.PullDraft, "Draft · #7"},
+		{model.AgentIdle, pr, model.PullMerged, "Merged · #7"},
+		{model.AgentIdle, pr, model.PullClosed, "Closed · #7"},
+		{model.AgentStopped, pr, model.PullMerged, "Merged · #7"},
+		{model.AgentWorking, pr, model.PullMerged, "Working · #7"},
+		{model.AgentFailed, "", "", "Run failed · fix-it"},
+		{model.AgentStopped, "", "", "Stopped · fix-it"},
 	}
 	for _, each := range cases {
-		agent.State, agent.PullRequest = each.state, each.pr
+		agent.State, agent.PullRequest, agent.PullState = each.state, each.pr, each.pull
 		if got := agentRowDetail(agent); got != each.detail {
-			t.Errorf("%s: %q", each.state, got)
+			t.Errorf("%s %s: %q", each.state, each.pull, got)
 		}
 	}
+	agent.PullRequest, agent.PullState = "", ""
 	agent.State = model.AgentIdle
 	if agent.IsRunning() || !agent.IsOpen() {
 		t.Error("a finished agent offers no Stop and takes a follow-up")
@@ -121,6 +128,29 @@ func TestTheChatsCodingAgents(t *testing.T) {
 	}
 }
 
+// Agents on the same pull request are one row in Details: the latest of them.
+func TestAgentsOnOnePullRequestAreOneRow(t *testing.T) {
+	now := time.Now()
+	row := func(id, pr string, updated time.Duration) *model.Message {
+		return &model.Message{ID: id, Body: model.Body{Kind: model.BodyTool, Tool: &model.ToolInvocation{Name: "coding_agent",
+			Agent: &model.AgentRun{ID: "agent-" + id, State: model.AgentIdle, PullRequest: pr, PullState: model.PullMerged, UpdatedAt: now.Add(-updated)}}}}
+	}
+	chat := &model.Chat{Messages: []*model.Message{
+		row("tabs", "https://github.com/egoist/lorca/pull/254", 2*time.Hour),
+		row("inspector", "https://github.com/egoist/lorca/pull/254/", time.Hour),
+		row("phone", "https://github.com/egoist/lorca/pull/256", 3*time.Hour),
+		row("plain", "", 4*time.Hour),
+		row("plain-too", "", 5*time.Hour),
+	}}
+	var got []string
+	for _, message := range model.CodingAgentsIn(chat, now) {
+		got = append(got, message.ID)
+	}
+	if want := []string{"inspector", "phone", "plain", "plain-too"}; strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("listed %q, want %q", got, want)
+	}
+}
+
 func TestTheTranscriptFoldsReadsAndSearches(t *testing.T) {
 	demoWindow(t)
 	steps := agentSteps(model.MockAgentTranscript())
@@ -157,8 +187,9 @@ func TestTheTranscriptFoldsReadsAndSearches(t *testing.T) {
 	}
 }
 
-// TestRenderCodingAgents draws the developer's chat with its agents' markers, the asking card, and
-// the Coding section; answers the card; opens an agent's page and a fold in it.
+// TestRenderCodingAgents draws the developer's chat with its agents' markers, the card the asking
+// agent's question ends the chat with, and the Coding section; answers the card; opens an agent's
+// page and a fold in it.
 func TestRenderCodingAgents(t *testing.T) {
 	m := demoWindow(t)
 	m.selectChat("chat-patch")
@@ -173,7 +204,8 @@ func TestRenderCodingAgents(t *testing.T) {
 	}
 	working := model.AgentOf(model.AgentRowOf(chat, "agent-3f9a2c1d"))
 	for _, text := range []string{
-		"Codex wants to run a command", "$ git push -u origin dark-mode-toggle", "Always allow",
+		"Developer wants to run a command on Studio", "git push -u origin dark-mode-toggle", "Always allow",
+		"Codex, the coding agent on “Settings: add a dark mode toggle”, asks to run this. Pushing sends the branch to GitHub, where others can see it.",
 		agentMarkerText(L("Messaged"), "Settings: add a dark mode toggle", model.AgentOf(asking).Task),
 		agentMarkerText(L("Messaged"), working.Title, "Fix the same link on the Chinese download page too, and cover it in the test."),
 		"CODING", "Needs attention · dark-mode-toggle", "Working · fix-docs-link", "Ready for review · #7",
@@ -201,7 +233,7 @@ func TestRenderCodingAgents(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	settle(tt)
 
-	// The asking agent's page leads with its question.
+	// The asking agent's page says it needs attention.
 	m.presentAgentPage(chat.ID, asking.ID)
 	settleTransitions(tt)
 	if !tt.HasText("Codex · Needs attention · dark-mode-toggle · Studio") {
@@ -217,8 +249,8 @@ func TestRenderCodingAgents(t *testing.T) {
 		t.Fatal(err)
 	}
 	settle(tt)
-	if agent := model.AgentOf(chat.Message(asking.ID)); agent.State != model.AgentWorking || agent.Question != nil || tt.HasText("Codex wants to run a command") {
-		t.Errorf("the answer left %+v", agent)
+	if card := chat.Messages[len(chat.Messages)-1]; card.Body.Kind != model.BodyPermission || card.Body.Request.Decision != model.DecisionAllowed || tt.HasText(L("Allow once")) {
+		t.Errorf("the answer left %+v", card.Body.Request)
 	}
 
 	// The working agent's row in Details opens its page.
@@ -229,7 +261,7 @@ func TestRenderCodingAgents(t *testing.T) {
 	if !m.hasSheet() {
 		t.Fatal("no agent page")
 	}
-	for _, text := range []string{"Claude Code · Working · fix-docs-link · Studio", "Prompt", "Show more", "Worktree ready on fix-docs-link",
+	for _, text := range []string{"Claude Code · Working · fix-docs-link · Studio", "Developer", "Show more", "Working in ~/Projects/site on main",
 		"Thought for 3s", "Explored 3 files 2 searches", "Point the link at /docs/cli/install", "Not allowed: git push origin fix-docs-link",
 		"The link test failed: the Chinese page still links to /docs/install.", "Running bun test links", "Stop", "fix-docs-link"} {
 		if !tt.HasText(text) {
@@ -257,6 +289,23 @@ func TestRenderCodingAgents(t *testing.T) {
 	}
 	settle(tt)
 	renderBoth(t, tt, "coding-page-open")
+	// The user writes to the agent itself: Return sends, and the page shows the message as theirs.
+	if !tt.HasText(L("%@ takes it up once it is done with what it is doing.", "Claude Code")) {
+		t.Errorf("no line under the composer: %q", tt.Texts())
+	}
+	if err := tt.Click(L("Message %@", "Claude Code")); err != nil {
+		t.Fatal(err)
+	}
+	tt.Type("Also check the Chinese page")
+	tt.Key(0, ui.KeyEnter)
+	settle(tt)
+	if !m.hasSheet() {
+		t.Fatal("Return closed the page instead of sending")
+	}
+	if !tt.HasText("Also check the Chinese page") || !tt.HasText(L("You")) {
+		t.Errorf("the message is not on the page: %q", tt.Texts())
+	}
+	renderBoth(t, tt, "coding-page-sent")
 	if err := tt.Click(L("Stop")); err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +325,7 @@ func TestRenderCodingAgents(t *testing.T) {
 	finished := model.AgentRowOf(chat, "agent-7d21e0b4")
 	m.presentAgentPage(chat.ID, finished.ID)
 	settleTransitions(tt)
-	for _, text := range []string{"#7", "+12 −3 in 4 files", "docs-use-mygo-json-1f2e", "Claude Code · Ready for review · docs-use-mygo-json-1f2e · Studio"} {
+	for _, text := range []string{"#7", "+12 −3 in 4 files", "docs-use-mygo-json", "Claude Code · Ready for review · docs-use-mygo-json · Studio"} {
 		if !tt.HasText(text) {
 			t.Errorf("no %q on the finished page: %q", text, tt.Texts())
 		}
@@ -284,22 +333,36 @@ func TestRenderCodingAgents(t *testing.T) {
 	renderBoth(t, tt, "coding-page-finished")
 }
 
-func TestTheAskingAgentNotifies(t *testing.T) {
+func TestAnAgentNotifiesWhenItAsksAndWhenItReports(t *testing.T) {
 	demoWindow(t)
 	chat := store.Chat("chat-patch")
-	row := model.AgentRowOf(chat, "agent-b85e4f10")
-	notification := notificationFor(row)
-	if notification == nil || notification.kind != notifyPermission || notification.body != L("Confirmation needed: %@", "Codex: $ git push -u origin dark-mode-toggle") {
+	// Its card asks and notifies; its row, which may be far up the chat, does not.
+	card := chat.Messages[len(chat.Messages)-1]
+	notification := notificationFor(card)
+	if notification == nil || notification.kind != notifyPermission || notification.body != L("Confirmation needed: %@", "$ git push -u origin dark-mode-toggle") {
 		t.Fatalf("notification %+v", notification)
 	}
-	if !asks(row) {
-		t.Error("the asking agent is not a question")
+	if !asks(card) {
+		t.Error("the asking agent's card is not a question")
 	}
-	// What an agent said pushes nothing; the bot's reply after it does.
-	for _, message := range chat.Messages {
-		if message.Body.Kind == model.BodyAgentMessage && notificationFor(message) != nil {
-			t.Error("an agent's message notifies")
-		}
+	if row := model.AgentRowOf(chat, "agent-b85e4f10"); asks(row) || notificationFor(row) != nil {
+		t.Error("the asking agent's row asks too")
+	}
+	// An agent's report to the user notifies as a reply does; why one ended is its bot's to tell.
+	report := &model.Message{Author: card.Author, Body: model.Body{Kind: model.BodyAgentMessage,
+		AgentMessage: &model.AgentMessage{AgentKind: "claude", Title: "Login", Text: "Fixed it.\nhttps://github.com/acme/shop/pull/7"}}}
+	if notification := notificationFor(report); notification == nil || notification.kind != notifyReply || notification.body != L("Message from %@: %@", "Login", "Fixed it.\nhttps://github.com/acme/shop/pull/7") {
+		t.Errorf("report notification %+v", notification)
+	}
+	report.Body.AgentMessage.Failed = true
+	if notificationFor(report) != nil {
+		t.Error("an agent that ended on its own notifies")
+	}
+	// What the user wrote to an agent on its page is their own.
+	mine := &model.Message{Author: model.You, Body: model.Body{Kind: model.BodyAgentMessage,
+		AgentMessage: &model.AgentMessage{AgentKind: "claude", Title: "Login", Text: "Use the staging key"}}}
+	if notificationFor(mine) != nil {
+		t.Error("the user's own message to an agent notifies")
 	}
 }
 
@@ -322,6 +385,42 @@ func TestTheChatPreviewNamesTheAgent(t *testing.T) {
 		AgentMessage: &model.AgentMessage{AgentKind: "pi", Title: "Fix it", Text: "Fixed it."}}})
 	if got := store.Preview(chat); got != L("Message from %@: %@", "Fix it", "Fixed it.") {
 		t.Errorf("preview %q", got)
+	}
+	chat.Messages = append(chat.Messages, &model.Message{Author: model.You, Body: model.Body{Kind: model.BodyAgentMessage,
+		AgentMessage: &model.AgentMessage{AgentKind: "pi", Title: "Fix it", Text: "Now the docs."}}})
+	if got := store.Preview(chat); got != L("You messaged %@: %@", "Fix it", "Now the docs.") {
+		t.Errorf("preview %q", got)
+	}
+}
+
+// The page's composer takes a message as the agent stands: at work or done, and once its process
+// is gone, to start it again on its session; never while it starts, nor once it ended before its
+// session began.
+func TestTheAgentPagesComposer(t *testing.T) {
+	demoWindow(t)
+	page := &agentPage{loaded: true, reachable: true}
+	working := L("%@ takes it up once it is done with what it is doing.", "Codex")
+	again := L("Sending starts %@ again on its session.", "Codex")
+	cases := []struct {
+		state   model.AgentState
+		hint    string
+		enabled bool
+	}{
+		{model.AgentStarting, "", false},
+		{model.AgentWorking, working, true},
+		{model.AgentAsking, working, true},
+		{model.AgentIdle, "", true},
+		{model.AgentStopped, again, true},
+		{model.AgentFailed, again, true},
+	}
+	for _, each := range cases {
+		if _, hint, enabled := page.composerState(&model.AgentRun{Kind: "codex", State: each.state}); hint != each.hint || enabled != each.enabled {
+			t.Errorf("%s: %q %v", each.state, hint, enabled)
+		}
+	}
+	page.reachable = false
+	if _, hint, enabled := page.composerState(&model.AgentRun{Kind: "codex", State: model.AgentFailed}); enabled || hint == "" {
+		t.Errorf("an agent with no session takes a message: %q", hint)
 	}
 }
 
@@ -402,7 +501,7 @@ func TestAFailedStartShowsWhy(t *testing.T) {
 	store.Update(row.ID, chat.ID, func(message *model.Message) {
 		tool := *message.Body.Tool
 		agent := *tool.Agent
-		agent.ID, agent.State, agent.Question, agent.Outcome = "", model.AgentFailed, nil, "None of the coding agents the user turned on (Codex) is installed on this Runner."
+		agent.ID, agent.State, agent.Outcome = "", model.AgentFailed, "None of the coding agents the user turned on (Codex) is installed on this Runner."
 		tool.Agent = &agent
 		message.Body.Tool = &tool
 	})

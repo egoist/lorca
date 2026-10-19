@@ -52,7 +52,7 @@ Another Device's call goes to the bot's Runner through the existing sealed reque
 
 The macOS app and the Windows and Linux app show the same things, and the phone the same in its own idiom ([Phone app](phone-app.md)):
 
-- **The DM inspector**: a Limits row in Runs with, after Spent. Its value is the chat's limits ("$2.00 · 200k tokens", or None), or Limit reached / Interrupted in orange when the chat's newest turn stopped. The whole row opens the Limits sheet.
+- **The DM inspector**: a Limits row after Spent, in Runs with on the Mac and in Usage in the desktop app. Its value is the chat's limits ("$2.00 · 200k tokens", or None), or Limit reached / Interrupted in orange when the chat's newest turn stopped. The whole row opens the Limits sheet.
 - **The Limits sheet**: Spending (USD), Tokens, Run time (minutes), Retries, and Plugin calls, each empty for no limit, with what the work used beside each and the reached one in orange. When work stopped, a card above the form names the limit and what it used of it, with Resume. Resume saves the form as the turn's and the chat's limits and goes on, provided the limit it reached went up; otherwise it asks before granting the limits again in full. Save is the sheet's default button.
 - **Tasks**: the task sheet's card ends with a Limits row, Limit reached in orange when the task's limits stopped it; then the card's Resume opens Limits.
 - **Routines**: the routine sheet shows Limit reached as its state, ahead of any [health](routines.md#missed-occurrences-and-recovery) state, with what it used under it, has a Limits row in Schedule that opens the routine's Limits sheet, and keeps Run Now off until it is resumed. Its inspector row says Limit reached too.

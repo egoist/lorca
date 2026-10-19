@@ -79,7 +79,7 @@ func autoReviewRulesEntry() settingsEntry {
 }
 
 func codingAgentsEntry() settingsEntry {
-	return entry(model.PaneCodingAgents, L("Coding Agents"), "", L("coding agent code worktree pull request order preference"))
+	return entry(model.PaneCodingAgents, L("Coding Agents"), "", L("coding agent code pull request order preference"))
 }
 
 // codingAgentEntry is an agent's row, by its product's name.
@@ -106,6 +106,10 @@ func deleteAccountEntry() settingsEntry {
 
 func machineKeyEntry() settingsEntry {
 	return entry(model.PaneDevice, L("Machine key"), "", L("device os role runner last seen relay"))
+}
+
+func backupPhraseEntry() settingsEntry {
+	return entry(model.PaneDevice, L("Backup phrase"), "", L("recovery restore master secret words"))
 }
 
 func pairingEntry() settingsEntry {
@@ -228,6 +232,9 @@ func entriesIn(pane model.SettingsPane, device *model.Device) []settingsEntry {
 		return append(out, servers...)
 	case model.PaneDevice:
 		if device != nil {
+			if device.IsThisDevice && store.IsIdentityDevice {
+				return []settingsEntry{machineKeyEntry(), backupPhraseEntry(), pairingEntry()}
+			}
 			return []settingsEntry{machineKeyEntry(), pairingEntry()}
 		}
 		return []settingsEntry{machineKeyEntry()}

@@ -139,23 +139,20 @@ type WireRun struct {
 }
 
 type WireAgent struct {
-	ID       string  `json:"id"`
-	Kind     string  `json:"kind"`
-	Title    *string `json:"title"`
-	Task     *string `json:"task"`
-	Folder   *string `json:"folder"`
-	Branch   *string `json:"branch"`
-	State    string  `json:"state"`
-	Question *struct {
-		Kind    string  `json:"kind"`
-		Command *string `json:"command"`
-		Reason  *string `json:"reason"`
-		Rule    *string `json:"rule"`
-	} `json:"question"`
+	ID          string        `json:"id"`
+	Kind        string        `json:"kind"`
+	Title       *string       `json:"title"`
+	Task        *string       `json:"task"`
+	Folder      *string       `json:"folder"`
+	Branch      *string       `json:"branch"`
+	State       string        `json:"state"`
 	Outcome     *string       `json:"outcome"`
 	PullRequest *string       `json:"pull_request"`
+	PullState   *string       `json:"pull_state"`
 	Changes     *AgentChanges `json:"changes"`
 	Device      *string       `json:"device"`
+	DeviceID    *string       `json:"device_id"`
+	Repository  *string       `json:"repository"`
 	StartedAt   *float64      `json:"started_at"`
 	UpdatedAt   *float64      `json:"updated_at"`
 }
@@ -171,6 +168,8 @@ func ToAgentRun(wire *WireAgent) *AgentRun {
 	agent := &AgentRun{
 		ID: wire.ID, Kind: wire.Kind, Title: str(wire.Title), Task: str(wire.Task), Folder: str(wire.Folder), Branch: str(wire.Branch),
 		State: state, Outcome: str(wire.Outcome), PullRequest: str(wire.PullRequest), Device: str(wire.Device),
+		PullState: PullState(str(wire.PullState)),
+		DeviceID: str(wire.DeviceID), Repository: str(wire.Repository),
 	}
 	if wire.Changes != nil {
 		changes := *wire.Changes
@@ -181,9 +180,6 @@ func ToAgentRun(wire *WireAgent) *AgentRun {
 	}
 	if wire.UpdatedAt != nil {
 		agent.UpdatedAt = seconds(*wire.UpdatedAt)
-	}
-	if q := wire.Question; q != nil && q.Kind == "command" {
-		agent.Question = &AgentQuestion{Command: str(q.Command), Reason: str(q.Reason), Rule: str(q.Rule), HasRule: q.Rule != nil}
 	}
 	return agent
 }
@@ -791,11 +787,8 @@ func ToDevice(wire WireDevice) *Device {
 		Version:      str(wire.Version),
 		MachineName:  str(wire.MachineName),
 	}
-	switch device.OS {
-	case OSMacOS, OSLinux, OSWindows, OSIOS, OSIPadOS, OSAndroid:
-	default:
-		device.OS = OSLinux
-	}
+	// An `os` the app has no name for stays as the CLI reported it: no Runner, as the CLI judges
+	// it (`Device::is_runner`).
 	if wire.Unknown {
 		device.Name, device.OS = L("Unknown Device"), OSUnknown
 	}

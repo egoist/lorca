@@ -11,7 +11,7 @@ A Device asks a Runner for work on that Runner through the relay: a question goe
 - The `mcp.*` methods but `mcp.parse`, so a Runner's own MCP servers are managed from any Device.
 - `permissions.catalog`, so a bot's Access sheet lists its Runner's plugins and their tools; `permission.answer`, so a permission card is answered from any Device and a secret request's values reach its Runner as ciphertext.
 - `bash.stdin`, `bash.stop`, and `bash.background`, so a command a bot runs is answered, stopped, or sent to the background from any Device.
-- `coding.transcript` and `coding.stop`, so a coding agent's transcript is read, and the agent stopped, from any Device; `coding.agents` and `.set`, so a Runner's coding agents are ordered from any Device.
+- `coding.transcript`, `coding.send`, and `coding.stop`, so a coding agent is read, written to, and stopped from any Device; `coding.agents` and `.set`, so a Runner's coding agents are ordered from any Device.
 - `secrets.list`, `secrets.set`, and `secrets.delete`, so a Runner's secrets are listed without their values, replaced, or deleted from any Device.
 - `chats.send_now`, so a message the bot's turn holds is read at once from any Device.
 - The `events.*` methods but `events.forward`, so a Runner's event subscriptions are managed from any Device.

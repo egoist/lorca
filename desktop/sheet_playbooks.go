@@ -17,14 +17,10 @@ import (
 // PlaybookViewController, and PlaybookCaptureViewController: the list in the inspector, a sheet per
 // skill, and Save as Skill on a message.
 
-// inspectorSkills are the skills of the bot in a DM, or of the group, hidden while there are none:
+// inspectorSkills are the skills of a bot, in its settings, or of a group, hidden while there are none:
 // past five rows the rest wait behind Show More. A row opens its skill, and its menu exports or
 // deletes it; + adds one.
-func (m *mainWindow) inspectorSkills(c *ui.Context, chat *model.Chat, members []*model.Bot) {
-	scope, ok := model.SkillScope(chat, members)
-	if !ok {
-		return
-	}
+func (m *mainWindow) inspectorSkills(c *ui.Context, scope model.PlaybookScope) {
 	skills := store.Skills(scope)
 	if len(skills) == 0 {
 		return
@@ -74,6 +70,22 @@ func (m *mainWindow) inspectorSkills(c *ui.Context, chat *model.Chat, members []
 				s.skillsShowingAll = scope
 			}
 		}
+	})
+}
+
+// inspectorSkillsTab is the Skills tab of a bot's settings: its skills, or, while it has none, a
+// note that says what one is and the + that adds one, which the section hides otherwise.
+func (m *mainWindow) inspectorSkillsTab(c *ui.Context, scope model.PlaybookScope) {
+	if len(store.Skills(scope)) > 0 {
+		m.inspectorSkills(c, scope)
+		return
+	}
+	section(c.Key("skills"), L("Skills"), sectionCaption, func() {
+		if hoverButton(c, hoverButtonOptions{Symbol: "plus", Size: 13, Tooltip: L("New Skill")}).Clicked() {
+			m.presentPlaybook(scope, nil)
+		}
+	}, func(k *card) {
+		noteRow(c, k, L("No skills yet. Add one and the bot can follow it whenever it fits."), nil)
 	})
 }
 

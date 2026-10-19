@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test";
 import {
   addModelRow,
   agentIsOpen,
+  agentMessageFromUser,
   agentIsRunning,
   agentName,
   agentStartRow,
@@ -131,7 +132,7 @@ describe("model", () => {
   });
 
   test("a coding agent stops while it runs and has a page once it started", () => {
-    const agent = (state: AgentRun["state"], more: Partial<AgentRun> = {}): AgentRun => ({ id: "agent-1", kind: "claude", title: "Fix the login", task: "Fix it", folder: "~/.lorca/worktrees/site-1a2b3c/fix-it", branch: "fix-it", state, ...more });
+    const agent = (state: AgentRun["state"], more: Partial<AgentRun> = {}): AgentRun => ({ id: "agent-1", kind: "claude", title: "Fix the login", task: "Fix it", folder: "~/Projects/site", branch: "fix-it", state, ...more });
     expect(agentName("claude")).toBe("Claude Code");
     expect(agentName("codex")).toBe("Codex");
     expect(agentName("opencode")).toBe("OpenCode");
@@ -635,6 +636,11 @@ describe("format", () => {
     expect(preview(chat("dm", [started, followUp]), bots)).toBe("Messaged Login fix: Run them too");
     const said = msg({ kind: "bot", bot_id: "b1" }, { kind: "agent_message", agent_id: "agent-1", agent_kind: "claude", title: "Login fix", text: "Done, PR #7" });
     expect(preview(chat("dm", [started, said]), bots)).toBe("Message from Login fix: Done, PR #7");
+    // What the user wrote the agent from its page.
+    const wrote = msg({ kind: "you" }, { kind: "agent_message", agent_id: "agent-1", agent_kind: "claude", title: "Login fix", text: "Also check\nthe signup form" });
+    expect(preview(chat("dm", [started, said, wrote]), bots)).toBe("You messaged Login fix: Also check the signup form");
+    expect(agentMessageFromUser(wrote)).toBe(true);
+    expect(agentMessageFromUser(said)).toBe(false);
   });
 
   test("the working row reads what the one bot at work is doing", () => {

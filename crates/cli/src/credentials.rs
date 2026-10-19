@@ -286,6 +286,23 @@ impl Credentials {
         }
     }
 
+    /// The API root `kind` calls when it names the machine that calls it (`localhost`, a
+    /// loopback address, or a `.local` name): every Runner has the credential, but only a Runner
+    /// where the same server runs, or that name reaches it, gets an answer.
+    pub fn machine_local_url(&self, kind: &str) -> Option<String> {
+        let base_url = match self.custom.get(kind) {
+            Some(provider) => provider.base_url.clone(),
+            None => self.api_key(kind)?.base_url.clone()?,
+        };
+        let url = reqwest::Url::parse(&base_url).ok()?;
+        let host = url.host_str()?.trim_start_matches('[').trim_end_matches(']').trim_end_matches('.').to_ascii_lowercase();
+        let local = match host.parse::<std::net::IpAddr>() {
+            Ok(ip) => ip.is_loopback() || ip.is_unspecified(),
+            Err(_) => host == "localhost" || host.ends_with(".localhost") || host.ends_with(".local"),
+        };
+        local.then_some(base_url)
+    }
+
     /// The name people know a provider by: a custom provider's own, else the built-in's.
     pub fn label(&self, kind: &str) -> String {
         match self.custom.get(kind) {
@@ -422,6 +439,20 @@ mod tests {
     fn custom(name: &str, created_at: i64) -> CustomProvider {
         let models = vec![CustomModel { id: "m".into(), name: None, context_window: None, max_output: None, images: None, levels: None }];
         CustomProvider { name: name.into(), api: CustomApi::ChatCompletions, base_url: "http://lab/v1".into(), api_key: String::new(), models, created_at }
+    }
+
+    #[test]
+    fn a_server_on_the_calling_machine_is_told_apart() {
+        let mut credentials = Credentials { anthropic: key("k"), deepseek: Some(ApiKeyCredential { api_key: "k".into(), base_url: Some("http://127.0.0.1:8080/v1".into()), connected_at: 0 }), ..Default::default() };
+        for (kind, base_url) in [("custom:ollama", "http://localhost:11434/v1"), ("custom:lab", "http://lab/v1"), ("custom:mini", "http://mac-mini.local:1234"), ("custom:v6", "http://[::1]:8000/v1")] {
+            credentials.custom.insert(kind.into(), CustomProvider { base_url: base_url.into(), ..custom(kind, 0) });
+        }
+        let local = |kind: &str| credentials.machine_local_url(kind);
+        assert_eq!(local("deepseek").as_deref(), Some("http://127.0.0.1:8080/v1"));
+        assert_eq!(local("custom:ollama").as_deref(), Some("http://localhost:11434/v1"));
+        assert_eq!(local("custom:mini").as_deref(), Some("http://mac-mini.local:1234"));
+        assert_eq!(local("custom:v6").as_deref(), Some("http://[::1]:8000/v1"));
+        assert_eq!((local("custom:lab"), local("anthropic"), local("chatgpt")), (None, None, None));
     }
 
     #[test]

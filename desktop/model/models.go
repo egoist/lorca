@@ -743,6 +743,8 @@ type DeviceApp struct {
 }
 
 // IsRunner is derived from the OS alone: a desktop Device is a Runner and can be assigned bots.
+// The CLI's bot tools judge it the same way (`Device::is_runner`), against the same cases in
+// `crates/cli/testdata/runners.json`.
 func (d *Device) IsRunner() bool { return d.OS.IsDesktop() }
 
 // IsStandaloneRunner identifies released standalone CLIs by their advertised updates.
@@ -1632,23 +1634,6 @@ func CodingAgentName(kind string) string {
 	return "Claude Code"
 }
 
-// AgentQuestion is what a coding agent asks the user when Auto-review asks: whether it may run a
-// command, answered as a command card's question is (`chats.permission`).
-type AgentQuestion struct {
-	Command string
-	Reason  string
-	Rule    string
-	HasRule bool
-}
-
-// Decisions are the buttons it offers. Always allow only with a rule to add.
-func (q *AgentQuestion) Decisions() []Answer {
-	if !q.HasRule {
-		return []Answer{{L("Allow once"), "allow"}, {L("Deny"), "deny"}}
-	}
-	return []Answer{{L("Allow once"), "allow"}, {L("Always allow"), "always"}, {L("Deny"), "deny"}}
-}
-
 // AgentChanges is what a coding agent's work changed against the commit it started from.
 type AgentChanges struct {
 	Files   int `json:"files"`
@@ -1656,9 +1641,19 @@ type AgentChanges struct {
 	Removed int `json:"removed"`
 }
 
+// PullState is how a coding agent's pull request stands on its host.
+type PullState string
+
+const (
+	PullOpen   PullState = "open"
+	PullDraft  PullState = "draft"
+	PullMerged PullState = "merged"
+	PullClosed PullState = "closed"
+)
+
 // AgentRun is a coding agent a bot runs on its Runner, as the row of the `coding_agent` call that
-// started it carries it: the bot's title for the job, where it works, how it stands, what it asks,
-// and what came of it.
+// started it carries it: the bot's title for the job, where it works, how it stands, and what came
+// of it. While it asks, its question is a permission card of its own at the end of the chat.
 type AgentRun struct {
 	// ID is the bot's handle for it, empty until it started (and for good when the start failed).
 	ID string
@@ -1669,13 +1664,19 @@ type AgentRun struct {
 	Folder      string
 	Branch      string
 	State       AgentState
-	Question    *AgentQuestion
 	Outcome     string
 	PullRequest string
-	Changes     *AgentChanges
+	// PullState is how its pull request stands on GitHub, as its Runner last read it; empty
+	// before a read.
+	PullState PullState
+	Changes   *AgentChanges
 	Device      string
-	StartedAt   time.Time
-	UpdatedAt   time.Time
+	// DeviceID is the Runner it runs on, by Device id.
+	DeviceID string
+	// Repository is its folder's git origin, as "github.com/owner/repo".
+	Repository string
+	StartedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 // Name is its product's name.
@@ -1724,14 +1725,31 @@ func (a *AgentRun) PullNumber() string {
 	return a.PullRequest
 }
 
-// Status is how it stands, in a word or two.
+// PullEnded is an agent whose pull request was merged or closed.
+func (a *AgentRun) PullEnded() bool {
+	return a.PullRequest != "" && (a.PullState == PullMerged || a.PullState == PullClosed)
+}
+
+// Status is how it stands, in a word or two: while it does not work, a pull request merged or
+// closed says so.
 func (a *AgentRun) Status() string {
 	switch a.State {
 	case AgentStarting, AgentWorking:
 		return Lc("Working", "coding agent")
 	case AgentAsking:
 		return Lc("Needs attention", "coding agent")
+	}
+	if a.PullEnded() {
+		if a.PullState == PullMerged {
+			return Lc("Merged", "coding agent")
+		}
+		return Lc("Closed", "coding agent")
+	}
+	switch a.State {
 	case AgentIdle:
+		if a.PullState == PullDraft {
+			return Lc("Draft", "coding agent")
+		}
 		if a.PullRequest != "" {
 			return Lc("Ready for review", "coding agent")
 		}
@@ -1765,7 +1783,8 @@ func AgentRowOf(chat *Chat, agentID string) *Message {
 
 // CodingAgentsIn are the start rows of the coding agents `chat`'s bots started, as Details lists
 // them: the open ones (starting, working, asking) first, then the latest change first, leaving
-// out those that ended or sat idle for more than three days, and starts that failed.
+// out those that ended or sat idle for more than three days, and starts that failed. Agents on
+// the same pull request are one row: the first of them in that order.
 func CodingAgentsIn(chat *Chat, now time.Time) []*Message {
 	var rows []*Message
 	for _, message := range chat.Messages {
@@ -1787,7 +1806,18 @@ func CodingAgentsIn(chat *Chat, now time.Time) []*Message {
 		}
 		return agentUpdatedAt(b).Compare(agentUpdatedAt(a))
 	})
-	return rows
+	seen := map[string]bool{}
+	return slices.DeleteFunc(rows, func(row *Message) bool {
+		link := strings.TrimRight(AgentOf(row).PullRequest, "/")
+		if link == "" {
+			return false
+		}
+		if seen[link] {
+			return true
+		}
+		seen[link] = true
+		return false
+	})
 }
 
 // agentUpdatedAt is when a start row's agent last changed, or when it started for a row that
@@ -1834,6 +1864,18 @@ type AgentMessage struct {
 type AgentTranscript struct {
 	Items []AgentItem
 	Card  *AgentRun
+	// Queued are the messages it was sent and has yet to take up, oldest first.
+	Queued []AgentQueued
+	// Open is whether a message can reach it: it runs, or its session waits to be resumed.
+	Open bool
+}
+
+// AgentQueued is a message a coding agent was sent and has yet to take up.
+type AgentQueued struct {
+	Text string `json:"text"`
+	// From is `user` when the user wrote it on the agent's page; empty when the bot passed it on.
+	From string  `json:"from"`
+	At   float64 `json:"at"`
 }
 
 // AgentItem is one step of a coding agent's transcript: what it was sent (`prompt`), Lorca's own
@@ -1849,6 +1891,9 @@ type AgentItem struct {
 	Seconds *float64         `json:"seconds"`
 	Tool    *AgentToolStep   `json:"tool"`
 	Plan    []AgentPlanEntry `json:"plan"`
+	// From, on a `prompt`, is `user` when the user wrote it on the agent's page; empty when the
+	// bot passed it on.
+	From string `json:"from"`
 }
 
 // AgentToolStep is a tool the agent used: what it did in a line, and how it went.

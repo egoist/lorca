@@ -39,7 +39,7 @@ The shared reference is `{ chat_id, message_id, output_id, version }` (`OutputRe
 
 `evidence` carries `kind`, `summary`, `status`, optional `command`, and optional `exit_code`. Kinds are `test_result`, `before_screenshot`, `after_screenshot`, and `verification`; statuses are `passed`, `failed`, and `unverified`. A nonzero exit code conflicts with `passed`; zero conflicts with `failed`. A local screenshot requires an image with PNG, JPEG, GIF, or WebP dimensions. Tests and visual work retain their logs, reports, and before/after files as output versions. The turn prompt directs bots to publish this evidence and describe remaining uncertainty.
 
-A [coding agent](coding-agents.md#when-it-is-done) a bot runs leaves its work in its worktree and branch, and its pull request; its bot publishes from there what the user should have, as for any other work.
+A [coding agent](coding-agents.md#when-it-is-done) a bot runs leaves its work in the folder it worked in, on the branch it chose, and its pull request, and its report in the chat names the commands it ran with their output and the pull request's link: that report is its evidence, and its bot publishes no output for it.
 
 Evidence reports the producing bot's verification claim; storing a result does not execute a check or mark a task complete. The record retains its canonical task reference and immutable output version; task completion is a separate operation. Later turns fetch published file attachments and materialize them into the reading bot's workspace, with provenance and version ids in model context, so a teammate can inspect the underlying result.
 

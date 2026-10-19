@@ -6,6 +6,8 @@
 // above the text. @-mention chips in a group. There is no hard Stop on the phone; sending a
 // message while a turn runs steers it. Where liquid glass is not available (older iOS, Android)
 // the pill is a plain filled field. An image pasted into the field attaches like a picked photo.
+// A coding agent's page uses it too, with no "+" disc: it waits on each send, keeps a draft that
+// did not go, and takes no text while the agent cannot be reached.
 
 import { Button as MenuButton, Host as SwiftHost, Image as MenuImage, Menu, type ButtonProps } from "@expo/ui/swift-ui";
 import { background, frame, shapes } from "@expo/ui/swift-ui/modifiers";
@@ -109,6 +111,9 @@ export const Composer = memo(function Composer({
   reply,
   onCancelReply,
   onSend,
+  attach = true,
+  disabled = false,
+  sending = false,
 }: {
   members: Bot[];
   isGroup: boolean;
@@ -116,8 +121,15 @@ export const Composer = memo(function Composer({
   /** The message the draft answers, shown above the text until it is sent or dropped. */
   reply?: { name: string; text: string } | null;
   onCancelReply?: () => void;
-  /** The text, its files, and the bots its `@Name`s picked from the chips, by id. */
-  onSend: (text: string, attachments: PickedFile[], mentions: string[]) => void;
+  /** The text, its files, and the bots its `@Name`s picked from the chips, by id. A promise
+   * keeps the draft until it resolves, and keeps it for good when it rejects. */
+  onSend: (text: string, attachments: PickedFile[], mentions: string[]) => void | Promise<unknown>;
+  /** The "+" disc: off where a message takes no files. */
+  attach?: boolean;
+  /** The field takes no text and nothing sends; the placeholder says why. */
+  disabled?: boolean;
+  /** A send is on its way: Send waits for it. */
+  sending?: boolean;
 }) {
   const { language: appLanguage } = useLanguage();
   const p = usePalette();
@@ -139,7 +151,7 @@ export const Composer = memo(function Composer({
   const dictationMenuRef = useRef<MenuComponentRef>(null);
   const { language, setting: dictationSetting } = useDictationLanguage();
   const dictationLanguages = useSupportedLanguages();
-  const canSend = text.trim().length > 0 || attachments.length > 0;
+  const canSend = !disabled && !sending && (text.trim().length > 0 || attachments.length > 0);
   // A swipe on a bubble starts a reply; the keyboard comes up for it.
   useEffect(() => {
     if (reply) inputRef.current?.focus();
@@ -176,10 +188,19 @@ export const Composer = memo(function Composer({
       return;
     }
     if (!canSend) return;
+    deliver(text);
+  }
+
+  /// Sends the draft; it clears at once, or once a promise `onSend` answered resolves.
+  function deliver(value: string) {
     haptic.send();
-    onSend(text, attachments, takeMentions(text));
-    setText("");
-    setAttachments([]);
+    const sent = onSend(value, attachments, takeMentions(value));
+    const clear = () => {
+      setText("");
+      setAttachments([]);
+    };
+    if (sent instanceof Promise) sent.then(clear, () => {});
+    else clear();
   }
 
   // MARK: - Attachments
@@ -297,12 +318,7 @@ export const Composer = memo(function Composer({
     }
     if (pendingSend.current) {
       pendingSend.current = false;
-      if (next.trim() || attachments.length) {
-        haptic.send();
-        onSend(next, attachments, takeMentions(next));
-        setText("");
-        setAttachments([]);
-          }
+      if ((next.trim() || attachments.length) && !disabled && !sending) deliver(next);
     }
   }
 
@@ -332,15 +348,16 @@ export const Composer = memo(function Composer({
     });
   }
 
-  const primary = listening || canSend ? "send" : "dictate";
+  // A draft waiting on a send keeps Send, dimmed.
+  const primary = listening || canSend || (sending && text.trim().length > 0) ? "send" : "dictate";
+  const primaryOff = disabled || (primary === "send" && !listening && !canSend);
   const edge = p.dark ? "rgba(255,255,255,0.14)" : "rgba(0,0,0,0.1)";
   const expanded = focused || text.length > 0 || attachments.length > 0 || !!reply;
 
   // The pieces below carry keys and always share one parent view, so switching between the
   // compact row and the expanded stack reorders them instead of remounting them: a remounted
   // input drops focus and takes the keyboard down with it.
-  const plus =
-    Platform.OS === "ios" ? (
+  const plus = !attach ? null : Platform.OS === "ios" ? (
       <AttachMenu key="plus" sources={sources} tint={p.fill} label={p.label} />
     ) : (
       <Pressable
@@ -391,7 +408,7 @@ export const Composer = memo(function Composer({
   const input = (
     <ImagePasteView
       key="input"
-      onPasteImages={({ nativeEvent }) => pasteImages(nativeEvent.files)}
+      onPasteImages={attach ? ({ nativeEvent }) => pasteImages(nativeEvent.files) : undefined}
       style={[styles.inputBox, expanded && styles.inputBoxExpanded]}
     >
       <TextInput
@@ -399,6 +416,7 @@ export const Composer = memo(function Composer({
         value={text}
         onChangeText={setText}
         placeholder={reply ? t("Reply…") : placeholder}
+        editable={!disabled}
         placeholderTextColor={p.tertiaryLabel}
         multiline
         onFocus={() => setFocused(true)}
@@ -413,6 +431,7 @@ export const Composer = memo(function Composer({
   const primaryButton = (
     <Pressable
       key="primary"
+      disabled={primaryOff}
       onPress={primary === "send" ? send : () => void dictate()}
       onLongPress={
         primary !== "dictate"
@@ -422,8 +441,9 @@ export const Composer = memo(function Composer({
             : () => dictationMenuRef.current?.show()
       }
       hitSlop={8}
-      style={({ pressed }) => [styles.disc, Platform.OS === "android" && styles.androidDisc, { backgroundColor: primary === "send" ? p.tint : p.fill, opacity: pressed ? 0.7 : 1 }]}
+      style={({ pressed }) => [styles.disc, Platform.OS === "android" && styles.androidDisc, { backgroundColor: primary === "send" ? p.tint : p.fill, opacity: primaryOff ? 0.4 : pressed ? 0.7 : 1 }]}
       accessibilityLabel={primary === "send" ? t("Send") : t("Dictate")}
+      accessibilityState={{ disabled: primaryOff }}
       accessibilityHint={primary === "dictate" ? t("Long press to choose the language") : undefined}
     >
       <Symbol name={primary === "send" ? "arrow.up" : "mic.fill"} size={16} color={primary === "send" ? p.userBubbleText : p.label} weight="bold" />
@@ -522,7 +542,7 @@ export const Composer = memo(function Composer({
           {expanded
             ? [
                 !listening && input,
-                <View key="controls" style={styles.controls}>
+                <View key="controls" style={[styles.controls, !attach && styles.controlsEnd]}>
                   {plus}
                   {listening && recording}
                   {primaryDisc}
@@ -603,6 +623,7 @@ const styles = StyleSheet.create({
   reply: { flexDirection: "row", alignItems: "center", gap: 6, paddingTop: 10, paddingHorizontal: 10 },
   replyText: { flex: 1, fontSize: 13 },
   controls: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 6, paddingTop: 4 },
+  controlsEnd: { justifyContent: "flex-end" },
   inputBox: { flex: 1, marginVertical: 6, marginHorizontal: 6 },
   // In the stack the input is a row of its own: no growing into the column, wider margins.
   inputBoxExpanded: { flex: 0, marginHorizontal: 12, marginTop: 10, marginBottom: 6 },

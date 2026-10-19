@@ -268,10 +268,10 @@ pub struct App {
     /// The questions this Device asked, by request id: the Runner asked, which alone answers, and
     /// where its answer goes.
     pub pending_responses: Mutex<HashMap<String, (String, tokio::sync::oneshot::Sender<Response>)>>,
-    /// Questions waiting for the user's answer, by the id of the row that asks: its chat, and
-    /// where the answer goes.
+    /// Questions waiting for the user's answer, by the id of the row that asks: its chat, who
+    /// waits on it, and where the answer goes.
     #[cfg(feature = "runner")]
-    pub pending_permissions: Mutex<HashMap<String, (String, tokio::sync::oneshot::Sender<crate::plugins::mcp::Decision>)>>,
+    pub pending_permissions: Mutex<HashMap<String, (String, crate::plugins::mcp::Asker, tokio::sync::oneshot::Sender<crate::plugins::mcp::Decision>)>>,
     /// Commands `bash` left running in their terminals, waiting for input.
     #[cfg(feature = "runner")]
     pub shell_sessions: crate::shell::Sessions,
@@ -1074,6 +1074,28 @@ impl App {
             self.running_jobs.lock().unwrap().iter().filter(|(_, job)| job.runner_id.is_none()).map(|(id, job)| job.turn(id)).collect();
         turns.sort_by(|a, b| a.job_id.cmp(&b.job_id));
         turns
+    }
+
+    /// The turns another online Device lists as running there. A bot's turns run on its own
+    /// Runner, so one listed elsewhere is a turn its old Runner finishes after a move.
+    fn turns_elsewhere(&self, matches: impl Fn(&LiveTurn) -> bool) -> bool {
+        let this = self.this_device_id();
+        let state = self.state.lock().unwrap();
+        state
+            .device_turns
+            .iter()
+            .filter(|(id, _)| Some(id.as_str()) != this.as_deref() && state.turns_online.contains(*id))
+            .any(|(_, turns)| turns.iter().any(&matches))
+    }
+
+    /// Whether `bot_id` has a turn in `chat_id` on another Device, its old Runner after a move.
+    pub fn bot_turn_elsewhere(&self, chat_id: &str, bot_id: &str) -> bool {
+        self.turns_elsewhere(|turn| turn.chat_id == chat_id && turn.bot_id == bot_id)
+    }
+
+    /// Whether a run of the routine goes on on another Device, its bot's old Runner after a move.
+    pub fn routine_running_elsewhere(&self, routine_id: &str) -> bool {
+        self.turns_elsewhere(|turn| turn.routine_id.as_deref() == Some(routine_id))
     }
 
     /// Every turn in flight this Device knows of, by job id: what the other Devices list while

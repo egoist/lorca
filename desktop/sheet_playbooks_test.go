@@ -8,22 +8,33 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// A DM shows its bot's skills and a group its own, drafts first; a chat with none shows no section.
-// A row opens the skill's sheet, which says who can use it.
+// A bot's settings show its skills on their Skills tab, with a note while it has none, and a group's
+// inspector its own, drafts first, with no section while there are none. A row opens the skill's
+// sheet, which says who can use it.
 func TestInspectorSkills(t *testing.T) {
 	m := demoWindow(t)
 	m.selectChat("chat-patch")
-	// Tall enough for the Skills section under the developer's coding agents.
 	tt := ui.NewTester(m.frame(m.view), 1180, 1100)
+	settle(tt)
+	if tt.HasText("release-notes") {
+		t.Error("the DM's inspector shows the bot's skills, which are in its settings")
+	}
+	m.presentBotSettings("bot-patch")
+	settleTransitions(tt)
+	click(t, tt, L("Skills"))
 	settle(tt)
 	wantText(t, tt, L("Skills"), "flaky-tests", "release-notes", "ship-checklist", L("Draft"))
 	renderBoth(t, tt, "skills-inspector")
+	click(t, tt, L("Done"))
+	settleTransitions(tt)
 
-	m.selectChat("chat-scout")
+	m.presentBotSettings("bot-scout")
+	settleTransitions(tt)
+	click(t, tt, L("Skills"))
 	settle(tt)
-	if tt.HasText(L("Skills")) {
-		t.Errorf("a bot without skills shows the section: %q", tt.Texts())
-	}
+	wantText(t, tt, L("No skills yet. Add one and the bot can follow it whenever it fits."))
+	click(t, tt, L("Done"))
+	settleTransitions(tt)
 	m.selectChat("chat-relay")
 	settle(tt)
 	wantText(t, tt, "launch-post")
@@ -32,6 +43,10 @@ func TestInspectorSkills(t *testing.T) {
 	}
 
 	m.selectChat("chat-patch")
+	settle(tt)
+	m.presentBotSettings("bot-patch")
+	settleTransitions(tt)
+	click(t, tt, L("Skills"))
 	settle(tt)
 	if err := tt.Click("release-notes"); err != nil {
 		t.Fatal(err)
@@ -86,7 +101,13 @@ func TestSaveAsSkill(t *testing.T) {
 	tt := ui.NewTester(m.frame(m.view), 1180, 900)
 	settle(tt)
 	chat := store.Chat("chat-patch")
-	reply := chat.Messages[len(chat.Messages)-1]
+	// The bot's last reply; an agent's question card ends the chat after it.
+	var reply *model.Message
+	for _, message := range chat.Messages {
+		if message.Body.Kind == model.BodyText && message.Author.Kind == model.AuthorBot {
+			reply = message
+		}
+	}
 	s := m.presentPlaybookCapture(chat.ID, reply)
 	settleTransitions(tt)
 	wantText(t, tt, L("Save as Skill"), L("You"), "Developer")

@@ -91,6 +91,9 @@ type onboardingWindow struct {
 	busy           bool
 	// signingIn is a subscription sign-in waiting on the browser.
 	signingIn bool
+	// attempt counts the provider connections started and the sign-ins cancelled, so the answer
+	// to one that was cancelled or left behind changes nothing.
+	attempt int
 }
 
 // onboardingStore is the store onboarding listens to: once, for whichever onboarding is up.
@@ -177,9 +180,13 @@ func (o *onboardingWindow) createIdentity() {
 		return
 	}
 	o.busy = true
+	// The identity is on disk before the phrase shows, so a launch after a quit or a crash before
+	// it is saved comes back to it.
+	setUnfinishedOnboarding(unfinishedPhrase)
 	store.CreateIdentity(func(phrase []string, err error) {
 		o.busy = false
 		if err != nil {
+			setUnfinishedOnboarding("")
 			o.presentError(model.ErrorText(err))
 			return
 		}
@@ -187,6 +194,25 @@ func (o *onboardingWindow) createIdentity() {
 		o.origin = onboardingCreated
 		o.show(onboardingCreate)
 	})
+}
+
+// resume picks up onboarding over an identity created here: the phrase step again with the phrase
+// the CLI re-derived, to be saved this time, or with none, the first bot.
+func (o *onboardingWindow) resume(phrase []string) {
+	o.origin = onboardingCreated
+	if phrase != nil {
+		o.phrase, o.savedPhrase = phrase, false
+		o.show(onboardingCreate)
+		return
+	}
+	o.show(onboardingBot)
+}
+
+// phraseSaved is Continue under the saved phrase: a launch from here on resumes at the first bot.
+func (o *onboardingWindow) phraseSaved() {
+	if prefs.get().UnfinishedOnboarding == unfinishedPhrase {
+		setUnfinishedOnboarding(unfinishedSetup)
+	}
 }
 
 // join restores from the phrase or pairs with the code typed. A computer that joined an account
@@ -266,14 +292,16 @@ func (o *onboardingWindow) connectProvider() {
 		return
 	}
 	o.busy = true
+	o.attempt++
+	attempt := o.attempt
 	done := func(err error) {
-		o.busy = false
-		o.signingIn = false
-		// Skipped while the browser waited, onboarding has moved on; the bot step and the provider
-		// step both show the rows the error belongs under.
-		if o.step == onboardingDone {
+		// A sign-in cancelled, by a skip or another provider picked, answers nothing here.
+		if attempt != o.attempt {
 			return
 		}
+		o.busy = false
+		o.signingIn = false
+		// The bot step and the provider step both show the rows the error belongs under.
 		if err != nil {
 			o.status = &onboardingStatus{text: model.ErrorText(err), failed: true}
 			return
@@ -304,24 +332,58 @@ func (o *onboardingWindow) setUpCustomProvider() {
 	})
 }
 
-// skipProvider leaves the provider for later, a sign-in still waiting on the browser included, so
-// finishing it there afterwards connects nothing.
-func (o *onboardingWindow) skipProvider() {
-	if o.signingIn {
-		store.CancelSignIn()
+// cancelSignIn stops a sign-in waiting on the browser, so finishing it there afterwards connects
+// nothing, and the step waits for the user again.
+func (o *onboardingWindow) cancelSignIn() {
+	if !o.signingIn {
+		return
 	}
+	store.CancelSignIn()
+	o.attempt++
+	o.busy, o.signingIn = false, false
+	o.status = nil
+}
+
+// skipProvider leaves the provider for later, a sign-in still waiting on the browser included.
+func (o *onboardingWindow) skipProvider() {
+	o.cancelSignIn()
 	o.show(onboardingDone)
 }
 
+// skipBot is Skip for Now on the bot step: the name and description are saved as they are, a blank
+// name keeping the bot's, and the provider is left for later.
+func (o *onboardingWindow) skipBot() {
+	if bot := o.firstBot(); bot != nil {
+		name := strings.TrimSpace(o.botName)
+		if name == "" {
+			name = bot.Name
+		}
+		o.saveBotProfile(bot, name)
+	}
+	o.skipProvider()
+}
+
+// saveBotProfile saves the bot step's name and description, when they changed.
+func (o *onboardingWindow) saveBotProfile(bot *model.Bot, name string) {
+	description := strings.TrimSpace(o.botDescription)
+	if name != bot.Name || description != bot.Description {
+		store.UpdateBotProfile(bot.ID, name, &description)
+	}
+}
+
 // saveFirstBot names the first bot and has it run with the provider chosen here, not the CLI's
-// default (a custom one is set once its sheet saves it), then connects the provider.
+// default (a custom one is set once its sheet saves it), then connects the provider. While a
+// connection is under way it waits, keeping the step and what was typed.
 func (o *onboardingWindow) saveFirstBot() {
+	if o.busy {
+		return
+	}
 	bot := o.firstBot()
-	if o.busy || bot == nil {
+	if bot == nil {
 		o.show(onboardingProvider)
 		return
 	}
-	name, description := strings.TrimSpace(o.botName), strings.TrimSpace(o.botDescription)
+	name := strings.TrimSpace(o.botName)
 	if name == "" {
 		o.status = &onboardingStatus{text: L("Give the bot a name."), failed: true}
 		return
@@ -330,9 +392,7 @@ func (o *onboardingWindow) saveFirstBot() {
 	if o.custom {
 		provider = bot.Provider
 	}
-	if name != bot.Name || description != bot.Description {
-		store.UpdateBotProfile(bot.ID, name, &description)
-	}
+	o.saveBotProfile(bot, name)
 	if provider != bot.Provider {
 		store.SetBotRuntime(bot.ID, provider, bot.Model, bot.Thinking)
 	}
@@ -340,8 +400,10 @@ func (o *onboardingWindow) saveFirstBot() {
 }
 
 // pickProvider is a choice in the provider menu: a built-in provider, a preset, or Other Server.
-// The note under the key is the new provider's, not the last one's error.
+// The note under the key is the new provider's, not the last one's error, and a sign-in waiting on
+// the browser for the last one stops.
 func (o *onboardingWindow) pickProvider(value string) {
+	o.cancelSignIn()
 	o.apiKey = ""
 	o.status = nil
 	switch {
@@ -360,19 +422,29 @@ func (o *onboardingWindow) pickProvider(value string) {
 }
 
 // credentialButton is the Continue button of a step with a credential: signing in says so, a key
-// must be typed, and a custom provider is set up next.
+// must be typed, and a custom provider is set up next. It waits while a key is checked or the
+// browser signs in.
 func (o *onboardingWindow) credentialButton(run func()) onboardingButton {
 	if o.custom {
 		title := L("Set Up…")
 		if o.customPreset != nil {
 			title = L("Set Up %@…", o.customPreset.Name)
 		}
-		return onboardingButton{title: title, run: run}
+		return onboardingButton{title: title, disabled: o.busy, run: run}
 	}
 	if model.UsesAPIKey(o.providerKind) {
-		return onboardingButton{title: L("Continue"), disabled: strings.TrimSpace(o.apiKey) == "", run: run}
+		return onboardingButton{title: L("Continue"), disabled: o.busy || strings.TrimSpace(o.apiKey) == "", run: run}
 	}
-	return onboardingButton{title: L("Sign in with %@", model.ProviderName(o.providerKind, store.Providers)), run: run}
+	return onboardingButton{title: L("Sign in with %@", model.ProviderName(o.providerKind, store.Providers)), disabled: o.busy, run: run}
+}
+
+// laterButton is a credential step's other button: Skip for Now, which waits while a key is
+// checked, and Cancel Sign-In on the bot step while the browser signs in, which keeps the step.
+func (o *onboardingWindow) laterButton(skip func(), cancels bool) *onboardingButton {
+	if cancels && o.signingIn {
+		return &onboardingButton{title: L("Cancel Sign-In"), run: o.cancelSignIn}
+	}
+	return &onboardingButton{title: L("Skip for Now"), disabled: o.busy && !o.signingIn, run: skip}
 }
 
 // MARK: - View
@@ -406,7 +478,7 @@ func (o *onboardingWindow) view(c *ui.Context) {
 				}
 				defaultButton = o.joinStep(c, onboardingJoinStep{
 					title:       L("Restore your identity"),
-					subtitle:    L("Paste the twelve groups from your backup phrase. Everything else is re-derived and unwrapped from the relay."),
+					subtitle:    L("Paste the 13 groups from your backup phrase. Everything else is re-derived and unwrapped from the relay."),
 					placeholder: "k4mq 7rth 2bnz …",
 					note:        note,
 					action:      L("Restore"),
@@ -512,9 +584,27 @@ func (o *onboardingWindow) stepLayout(c *ui.Context, s onboardingStepOptions, bo
 	})
 }
 
-func (o *onboardingWindow) createStep(c *ui.Context) *onboardingButton {
+// phraseGrid is the backup phrase's 13 groups, numbered, seven to a row. The groups are one
+// selection, which a drag runs across instead of moving the window; their numbers stay out of it.
+func phraseGrid(c *ui.Context, phrase []string) {
 	p := colors(c)
+	tracks := make([]ui.Track, 7)
+	for i := range tracks {
+		tracks[i] = ui.Fixed(72)
+	}
+	ui.Grid(c).Selectable().ColumnTracks(tracks...).Gap(8).Children(func() {
+		for i, word := range phrase {
+			ui.Row(c).Height(34).Gap(2).Padding(0, 0, 0, 8).Radius(7).Background(p.Code).Children(func() {
+				ui.Text(c, strconv.Itoa(i+1)).Width(16).FontSize(10).TextColor(p.Label3).FontFeatures("tnum").SingleLine().Unselectable()
+				ui.Text(c, word).Font(monoFont).FontSize(13).FontWeight(500).SingleLine()
+			})
+		}
+	})
+}
+
+func (o *onboardingWindow) createStep(c *ui.Context) *onboardingButton {
 	next := onboardingButton{title: L("Continue"), disabled: !o.savedPhrase, run: func() {
+		o.phraseSaved()
 		if o.firstBot() != nil {
 			o.show(onboardingBot)
 		} else {
@@ -527,16 +617,7 @@ func (o *onboardingWindow) createStep(c *ui.Context) *onboardingButton {
 		next:     next,
 	}, func() {
 		ui.Column(c).AlignItems(ui.Start).Gap(16).Children(func() {
-			// The words are one selection, which a drag runs across instead of moving the window;
-			// their numbers stay out of it.
-			ui.Grid(c).Selectable().ColumnTracks(ui.Fixed(128), ui.Fixed(128), ui.Fixed(128), ui.Fixed(128)).Gap(8).Children(func() {
-				for i, word := range o.phrase {
-					ui.Row(c).Height(34).Gap(2).Padding(0, 0, 0, 9).Radius(7).Background(p.Code).Children(func() {
-						ui.Text(c, strconv.Itoa(i+1)).Width(16).FontSize(10).TextColor(p.Label3).FontFeatures("tnum").SingleLine().Unselectable()
-						ui.Text(c, word).Font(monoFont).FontSize(13).FontWeight(500).SingleLine()
-					})
-				}
-			})
+			phraseGrid(c, o.phrase)
 			copyButton(c, strings.Join(o.phrase, " "), copyOptions{Title: L("Copy Phrase"), Bordered: true})
 			ui.Checkbox(c, &o.savedPhrase, L("I wrote this phrase down somewhere safe")).Gap(7).FontSize(13)
 		})
@@ -619,7 +700,9 @@ func (o *onboardingWindow) botStep(c *ui.Context) *onboardingButton {
 	o.stepLayout(c, onboardingStepOptions{
 		title:    L("Your first bot"),
 		subtitle: L("It runs on this computer, plans your work, and builds the rest of the team when you ask. Give it a name and the credentials it runs with."),
+		back:     o.laterButton(o.skipBot, true),
 		next:     next,
+		busy:     o.busy,
 	}, func() {
 		o.card(c, func() {
 			o.form(c, func() {
@@ -666,8 +749,9 @@ func (o *onboardingWindow) providerStep(c *ui.Context) *onboardingButton {
 	o.stepLayout(c, onboardingStepOptions{
 		title:    L("Connect a provider"),
 		subtitle: L("Credentials belong to your account: your bots use them on every Runner you pair. They sync encrypted with your account key; the relay cannot read them."),
-		back:     &onboardingButton{title: L("Skip for Now"), run: o.skipProvider},
+		back:     o.laterButton(o.skipProvider, false),
 		next:     next,
+		busy:     o.busy,
 	}, func() {
 		o.card(c, func() {
 			o.form(c, func() { o.providerRows(c, next) })
@@ -700,8 +784,11 @@ func (o *onboardingWindow) providerRows(c *ui.Context, next onboardingButton) {
 	}
 	kind, apiKey := o.providerKind, model.UsesAPIKey(o.providerKind)
 	name := model.ProviderName(kind, store.Providers)
+	// A key being checked holds the picker, and the key, until the provider answers; a sign-in
+	// waiting on the browser stops for another pick.
+	checking := o.busy && !o.signingIn
 	o.formRow(c, L("Provider"), false, func() {
-		if picked, changed, _ := popUpButton(c, popUp{Options: options, Value: value, Width: 400, Label: L("Provider")}); changed {
+		if picked, changed, _ := popUpButton(c, popUp{Options: options, Value: value, Width: 400, Label: L("Provider"), Disabled: checking}); changed {
 			o.pickProvider(picked)
 		}
 	})
@@ -719,7 +806,7 @@ func (o *onboardingWindow) providerRows(c *ui.Context, next onboardingButton) {
 				FontSize(12).LineHeight(1.4).TextColor(p.Label2)
 		case apiKey:
 			ui.Box(c.Key("key:" + kind)).Grow(1).Children(func() {
-				if textField(c, &o.apiKey, fieldOptions{Placeholder: model.KeyPlaceholder(kind), Secure: true, Mono: true, Label: L("API key")}).Submitted() && !next.disabled {
+				if textField(c, &o.apiKey, fieldOptions{Placeholder: model.KeyPlaceholder(kind), Secure: true, Mono: true, Disabled: checking, Label: L("API key")}).Submitted() && !next.disabled {
 					next.run()
 				}
 			})

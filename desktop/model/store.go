@@ -6,6 +6,7 @@ import (
 	"log"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -85,6 +86,8 @@ const (
 	EventDurableTasksChanged
 	EventAttentionChanged
 	EventProjectContextChanged
+	// EventCodingAgentsChanged is the account's coding agents, as `coding.list` answered them.
+	EventCodingAgentsChanged
 )
 
 // Event says what in the store changed.
@@ -132,6 +135,8 @@ type Store struct {
 	// IsMock is the seeded demo (`LORCA_MOCK=1`), which runs without a CLI.
 	IsMock    bool
 	transport Transport
+	// mockAgentSent are the demo's messages to a coding agent, by its start's row.
+	mockAgentSent map[string][]AgentItem
 	// post runs a function on the main thread, after the current one returns.
 	post func(func())
 
@@ -149,6 +154,8 @@ type Store struct {
 	AutoReview AutoReview
 	// Attention is what waits on the user across chats, kept by the bots (attention.changed).
 	Attention AttentionView
+	// coding is the account's coding agents, every bot's in every chat (coding.list).
+	coding codingList
 	// SharedLinks are the bots the account shares as links, shared through the roster.
 	SharedLinks []SharedLink
 	// Sections are the sidebar's sections, in order, shared through the roster.
@@ -410,6 +417,7 @@ func (s *Store) bootstrap(generation int) {
 		s.emit(Event{Kind: EventSnapshotReplaced})
 		s.emit(Event{Kind: EventConnectionChanged})
 		s.emit(Event{Kind: EventIdentityChanged})
+		s.refreshAccountAgents()
 	})
 }
 
@@ -653,15 +661,25 @@ func (s *Store) handle(name string, data json.RawMessage) {
 		if name == "message.added" && botID != "" && s.thinkingBots[payload.ChatID] == botID {
 			delete(s.thinkingBots, payload.ChatID)
 		}
-		s.upsert(ToMessage(payload.Message), payload.ChatID)
+		message := ToMessage(payload.Message)
+		s.upsert(message, payload.ChatID)
+		// A start row's card changed: the account's list follows it.
+		if AgentOf(message) != nil {
+			s.refreshAccountAgents()
+		}
 
 	case "message.removed":
 		payload, ok := decode[struct {
 			ChatID    string `json:"chat_id"`
 			MessageID string `json:"message_id"`
 		}](data)
+		if !ok {
+			return
+		}
+		// The row may carry an agent, in a chat this app has not loaded.
+		s.refreshAccountAgents()
 		chat := s.Chat(payload.ChatID)
-		if !ok || chat == nil {
+		if chat == nil {
 			return
 		}
 		chat.Messages = slices.DeleteFunc(slices.Clone(chat.Messages), func(m *Message) bool { return m.ID == payload.MessageID })
@@ -681,6 +699,7 @@ func (s *Store) handle(name string, data json.RawMessage) {
 		delete(s.outputMessages, payload.ChatID)
 		delete(s.staleOutputs, payload.ChatID)
 		s.emit(Event{Kind: EventChatsChanged})
+		s.refreshAccountAgents()
 
 	case "job.started":
 		job, ok := decode[WireJobEvent](data)
@@ -1017,6 +1036,10 @@ func (s *Store) Preview(chat *Chat) string {
 		body = L("Messaged %@: %@", target, content.Tool.Detail)
 	case BodyAgentMessage:
 		said := content.AgentMessage
+		if last.Author.Kind == AuthorYou {
+			body = L("You messaged %@: %@", firstNonEmpty(said.Title, CodingAgentName(said.AgentKind)), said.Text)
+			break
+		}
 		body = L("Message from %@: %@", firstNonEmpty(said.Title, CodingAgentName(said.AgentKind)), said.Text)
 	case BodyHandoff:
 		if slices.Contains(chat.BotIDs, content.Handoff.To) && !slices.Contains(chat.BotIDs, content.Handoff.From) {
@@ -1803,13 +1826,6 @@ func (s *Store) AnswerPermission(chatID, messageID, decision string) {
 				request.Summary = L("Starting the sign-in…")
 			}
 			message.Body.Request = &request
-		case body.Kind == BodyTool && body.Tool.Agent != nil && body.Tool.Agent.Question != nil:
-			// The agent goes back to work either way: a denied command is its to work around.
-			tool := *body.Tool
-			agent := *tool.Agent
-			agent.Question, agent.State = nil, AgentWorking
-			tool.Agent = &agent
-			message.Body.Tool = &tool
 		case body.Kind == BodyTool && body.Tool.Run != nil && body.Tool.Run.State == CommandAsking:
 			tool := *body.Tool
 			run := *tool.Run
@@ -1836,11 +1852,28 @@ func (s *Store) StopAgent(chatID, messageID string, done func(error)) {
 	s.simple(done, "coding.stop", map[string]any{"chat_id": chatID, "message_id": messageID})
 }
 
+// SendToAgent gives a coding agent the user's message, here or on its bot's Runner, down the
+// path the bot's own messages take: it takes it up once it is done with what it does now, and an
+// agent whose process is gone starts again on its session. The chat shows it as the user's
+// message to the agent.
+func (s *Store) SendToAgent(chatID, messageID, text string, done func(error)) {
+	if s.IsMock {
+		if s.mockAgentSent == nil {
+			s.mockAgentSent = map[string][]AgentItem{}
+		}
+		sent := s.mockAgentSent[messageID]
+		s.mockAgentSent[messageID] = append(sent, AgentItem{ID: "sent-" + strconv.Itoa(len(sent)), Kind: "prompt", Text: text, From: "user"})
+		s.post(func() { done(nil) })
+		return
+	}
+	s.simple(done, "coding.send", map[string]any{"chat_id": chatID, "message_id": messageID, "text": text})
+}
+
 // AgentTranscript is a coding agent's transcript, from its Runner: what it was sent, thought,
 // said, and did, step by step, and its row's agent as it stands.
 func (s *Store) AgentTranscript(chatID, messageID string, done func(AgentTranscript, error)) {
 	if s.IsMock {
-		transcript := AgentTranscript{Items: MockAgentTranscript()}
+		transcript := AgentTranscript{Items: append(MockAgentTranscript(), s.mockAgentSent[messageID]...), Open: true}
 		if chat := s.Chat(chatID); chat != nil {
 			transcript.Card = AgentOf(chat.Message(messageID))
 		}
@@ -1857,11 +1890,13 @@ func (s *Store) AgentTranscript(chatID, messageID string, done func(AgentTranscr
 	}
 	Async(s, func() (AgentTranscript, error) {
 		var answer struct {
-			Items []AgentItem `json:"items"`
-			Card  *WireAgent  `json:"card"`
+			Items  []AgentItem   `json:"items"`
+			Card   *WireAgent    `json:"card"`
+			Queued []AgentQueued `json:"queued"`
+			Open   bool          `json:"open"`
 		}
 		err := s.request("coding.transcript", map[string]any{"chat_id": chatID, "message_id": messageID}, &answer)
-		transcript := AgentTranscript{Items: answer.Items}
+		transcript := AgentTranscript{Items: answer.Items, Queued: answer.Queued, Open: answer.Open}
 		if answer.Card != nil {
 			transcript.Card = ToAgentRun(answer.Card)
 		}
@@ -1949,7 +1984,7 @@ func (s *Store) finishMockAgent(chatID, messageID string, state AgentState) {
 		}
 		tool := *message.Body.Tool
 		agent := *tool.Agent
-		agent.State, agent.Question, agent.UpdatedAt = state, nil, time.Now()
+		agent.State, agent.UpdatedAt = state, time.Now()
 		if state == AgentStopped {
 			agent.Outcome = "Stopped"
 		}
@@ -3001,6 +3036,21 @@ func (s *Store) CreateIdentity(done func([]string, error)) {
 		}
 		done(phrase, err)
 	})
+}
+
+// BackupPhrase is the backup phrase again, which the CLI re-derives from the master secret this
+// Device keeps when it holds the identity.
+func (s *Store) BackupPhrase(done func([]string, error)) {
+	if s.IsMock {
+		s.post(func() { done(MockBackupPhrase, nil) })
+		return
+	}
+	Async(s, func() ([]string, error) {
+		shown, err := call[struct {
+			Phrase []string `json:"phrase"`
+		}](s, "identity.phrase", nil)
+		return shown.Phrase, err
+	}, done)
 }
 
 // UnpairDevice unpairs another Device. The CLI has the relay drop its key; the Device wipes its

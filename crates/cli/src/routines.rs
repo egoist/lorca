@@ -609,6 +609,8 @@ pub fn tick(app: &Arc<App>) {
         .into_iter()
         .filter(|r| r.next_run_at().is_some_and(|t| t <= now))
         .filter(|r| !app.is_routine_running(&r.id) && (r.calendar.is_some() || !app.routine_checks.is_running(&r.id)))
+        // A run the bot's old Runner still finishes after a move comes first.
+        .filter(|r| !app.routine_running_elsewhere(&r.id))
         .filter(|r| app.budgets.admit(app, "routine", &r.id).is_ok())
         .collect();
     if due.is_empty() {

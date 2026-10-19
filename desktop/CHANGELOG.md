@@ -9,6 +9,49 @@ and the update window shows it.
 - Update Lorca on another computer from this one: its Devices pane shows the Lorca app's version,
   and Update installs the newer one there. That Lorca restarts into it once its bots finish what
   they are doing.
+- When a coding agent reports back, the bot replies again to relay the report: the agent's
+  conclusion, its pull request, and the commands it ran with their results. That reply only relays:
+  the bot doesn't read the code, build, test, or judge the work, or send the agent instructions.
+
+## [0.1.16]
+
+- A bot hands a coding agent your request in your words, with only where the repository is and what
+  you already said, and no plan, checklist, branch, or way to check it of its own. The agent decides
+  how to work, pushes, opens a pull request, and reports to you with the commands it ran and what
+  they printed. Its report notifies you as a reply does; the bot no longer checks its work or
+  follows up on its own, and speaks up only when the agent ends on its own.
+- Onboarding shows the backup phrase as 13 groups, seven to a row, and the first bot step has Skip
+  for Now, which keeps the name and description and leaves the provider for later. While a provider
+  key is checked the step's controls wait beside a spinner, Continue again keeps the step and what
+  was typed, and a sign-in waiting on the browser offers Cancel Sign-In.
+- An identity created in onboarding is not lost when you stop in the middle: a launch opens the step
+  you left, the phrase step until the phrase is saved and the first bot step after it. On the
+  identity device, Settings › Devices has Backup phrase › Show…, which shows the phrase after a
+  confirmation.
+- Running tasks opens as a flyout from the header, a system popover on macOS, at its list's height
+  and following it as rows come and go. Attention and Running tasks share the flyout, so only one
+  shows at a time.
+
+## [0.1.15]
+
+- On a Mac the menu bar has a Lorca menu, with About (the standard about panel), Check for
+  Updates…, Settings, Services, Hide, and Quit; Windows and Linux keep these in File and Help.
+- Coding agents work in the folder they are given, as it is: no worktree or branch of Lorca's own,
+  and the agent decides how to work there, as it would started in a terminal. What it changed counts
+  from the commit it started at, and the branch it ends on may be one it made.
+- A bot briefs a coding agent with your request in your words, with what only it can tell the agent,
+  and leaves the job to it, instead of handing it a plan or checklist of its own.
+- A coding agent that asks permission asks on a card at the end of the chat, as a command does,
+  so you read it without scrolling back to the agent's row; writing to the bot leaves it up, and
+  Stop dismisses it.
+- When no review model can check an action, Auto-review asks you ("Auto-review could not
+  check this action") instead of handing it back to the bot to run again, and a second pass cut
+  off mid-thought decides from what it has weighed. In a routine's or an event's turn it waits
+  for your review.
+- A routine's run or an event can hand work to a coding agent now, where a start that Auto-review
+  would ask about used to be refused; nobody is there to answer the agent, so each action it would
+  ask about is denied at once with a reason, and it goes on without it or names it in its last
+  message.
 
 ## [0.1.14]
 

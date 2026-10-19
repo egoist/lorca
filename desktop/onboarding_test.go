@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -70,10 +71,11 @@ func TestOnboardingCreate(t *testing.T) {
 	// Return presses Create a New Identity, the welcome's default button.
 	tt.Key(0, ui.KeyEnter)
 	onboardingSettle(tt)
-	if o.step != onboardingCreate || len(o.phrase) != 12 {
+	// 32 bytes of base32 are 52 letters, 13 groups of four.
+	if o.step != onboardingCreate || len(o.phrase) != 13 {
 		t.Fatalf("step %d, phrase %q", o.step, o.phrase)
 	}
-	onboardingExpect(t, tt, L("Your backup phrase"), "k4mq", "m5yq", "12", L("Copy Phrase"), L("I wrote this phrase down somewhere safe"))
+	onboardingExpect(t, tt, L("Your backup phrase"), "dla2", "g5pq", "13", L("Copy Phrase"), L("I wrote this phrase down somewhere safe"))
 	onboardingRender(t, tt, "create")
 
 	// Continue waits for the check box.
@@ -144,6 +146,148 @@ func TestOnboardingBotName(t *testing.T) {
 	}
 }
 
+// Skip for Now on the bot step keeps the name and leaves the provider for later, without a key.
+func TestOnboardingBotSkip(t *testing.T) {
+	o, tt := onboardingDemo(t)
+	o.show(onboardingBot)
+	onboardingSettle(tt)
+	bot := o.firstBot()
+	provider := bot.Provider
+	o.botName = "Planner"
+	o.pickProvider("chatgpt")
+	onboardingSettle(tt)
+	onboardingExpect(t, tt, L("Skip for Now"), L("Sign in with %@", "ChatGPT"))
+	onboardingClick(t, tt, L("Skip for Now"))
+	if o.step != onboardingDone {
+		t.Fatalf("step %d after Skip", o.step)
+	}
+	if bot := o.firstBot(); bot.Name != "Planner" || bot.Provider != provider {
+		t.Fatalf("bot %q on %q, was on %q", bot.Name, bot.Provider, provider)
+	}
+
+	// Without a key Continue waits, and Skip for Now still goes on.
+	o.show(onboardingBot)
+	onboardingSettle(tt)
+	o.pickProvider("deepseek")
+	onboardingSettle(tt)
+	onboardingClick(t, tt, L("Continue"))
+	if o.step != onboardingBot {
+		t.Fatalf("Continue went on without a key")
+	}
+	onboardingClick(t, tt, L("Skip for Now"))
+	if o.step != onboardingDone {
+		t.Fatalf("step %d after Skip without a key", o.step)
+	}
+}
+
+// While a key is checked, Continue and Skip for Now wait beside the spinner: pressing Continue again
+// keeps the step, the key, and the status.
+func TestOnboardingBusyKeepsStep(t *testing.T) {
+	for _, step := range []onboardingStep{onboardingBot, onboardingProvider} {
+		o, tt := onboardingDemo(t)
+		o.show(step)
+		onboardingSettle(tt)
+		checking := &onboardingStatus{text: L("Checking the key with %@…", "DeepSeek")}
+		o.apiKey, o.busy, o.status = "sk-test", true, checking
+		onboardingSettle(tt)
+		onboardingRender(t, tt, "busy-"+strconv.Itoa(int(step)))
+		onboardingClick(t, tt, L("Continue"))
+		tt.Key(0, ui.KeyEnter)
+		onboardingSettle(tt)
+		onboardingClick(t, tt, L("Skip for Now"))
+		if step == onboardingBot {
+			o.saveFirstBot()
+			onboardingSettle(tt)
+		}
+		if o.step != step || o.apiKey != "sk-test" || o.status != checking {
+			t.Fatalf("step %d → %d, key %q, status %+v", step, o.step, o.apiKey, o.status)
+		}
+		onboardingExpect(t, tt, L("Checking the key with %@…", "DeepSeek"))
+	}
+}
+
+// A sign-in waiting on the browser: the bot step offers Cancel Sign-In, which keeps the step, and
+// picking another provider stops it too, so its key can be checked.
+func TestOnboardingSignInCancels(t *testing.T) {
+	o, tt := onboardingDemo(t)
+	o.show(onboardingBot)
+	onboardingSettle(tt)
+	signIn := func() {
+		o.pickProvider("chatgpt")
+		o.busy, o.signingIn = true, true
+		o.status = &onboardingStatus{text: L("Waiting for the browser…")}
+		onboardingSettle(tt)
+	}
+	signIn()
+	onboardingExpect(t, tt, L("Cancel Sign-In"), L("Waiting for the browser…"))
+	onboardingRender(t, tt, "bot-signing-in")
+	attempt := o.attempt
+	onboardingClick(t, tt, L("Cancel Sign-In"))
+	if o.step != onboardingBot || o.busy || o.signingIn || o.status != nil || o.attempt == attempt {
+		t.Fatalf("step %d, busy %v, signing in %v, status %+v", o.step, o.busy, o.signingIn, o.status)
+	}
+	onboardingExpect(t, tt, L("Skip for Now"), L("Sign in with %@", "ChatGPT"))
+
+	signIn()
+	onboardingClick(t, tt, "ChatGPT")
+	if err := tt.ChooseMenuItem("DeepSeek"); err != nil {
+		t.Fatalf("menu %q: %v", tt.Menu(), err)
+	}
+	onboardingSettle(tt)
+	if o.providerKind != "deepseek" || o.busy || o.signingIn {
+		t.Fatalf("provider %q, busy %v, signing in %v", o.providerKind, o.busy, o.signingIn)
+	}
+	o.apiKey = "sk-test"
+	onboardingSettle(tt)
+	onboardingClick(t, tt, L("Continue"))
+	if o.step != onboardingDone {
+		t.Fatalf("step %d after Continue", o.step)
+	}
+}
+
+// Onboarding over an identity created here, left before the phrase was saved (a quit, a crash, a
+// restart), opens again on the phrase instead of the main window, then on the first bot once the
+// phrase is saved, until it finishes.
+func TestOnboardingResumesUnfinished(t *testing.T) {
+	o, tt := onboardingDemo(t)
+	yes := true
+	prefs.update(PreferencesPatch{HadIdentity: &yes})
+	setUnfinishedOnboarding(unfinishedPhrase)
+	if app.mainWindowIsDue() {
+		t.Fatalf("the main window is due before the CLI answers")
+	}
+	app.hasIdentity = &yes
+	if app.mainWindowIsDue() {
+		t.Fatalf("the main window is due over unfinished onboarding")
+	}
+
+	o.resume(model.MockBackupPhrase)
+	onboardingSettle(tt)
+	if o.step != onboardingCreate || o.savedPhrase || o.origin != onboardingCreated {
+		t.Fatalf("step %d, saved %v, origin %d", o.step, o.savedPhrase, o.origin)
+	}
+	onboardingExpect(t, tt, L("Your backup phrase"), model.MockBackupPhrase[0], model.MockBackupPhrase[12])
+	onboardingClick(t, tt, L("I wrote this phrase down somewhere safe"))
+	onboardingClick(t, tt, L("Continue"))
+	if o.step != onboardingBot || prefs.get().UnfinishedOnboarding != unfinishedSetup {
+		t.Fatalf("step %d, unfinished %q", o.step, prefs.get().UnfinishedOnboarding)
+	}
+
+	// Left on the first bot, it opens there.
+	again := newOnboardingWindow()
+	again.resume(nil)
+	if again.step != onboardingBot || again.origin != onboardingCreated {
+		t.Fatalf("step %d, origin %d", again.step, again.origin)
+	}
+	if app.mainWindowIsDue() {
+		t.Fatalf("the main window is due before the first bot")
+	}
+	setUnfinishedOnboarding("")
+	if !app.mainWindowIsDue() {
+		t.Fatalf("the main window is not due once onboarding finished")
+	}
+}
+
 // A restore, then the provider step with each kind of provider, and Skip for Now.
 func TestOnboardingRestore(t *testing.T) {
 	o, tt := onboardingDemo(t)
@@ -162,7 +306,7 @@ func TestOnboardingRestore(t *testing.T) {
 	if o.step != onboardingRestore {
 		t.Fatalf("Restore ran without a phrase")
 	}
-	tt.Type("k4mq 7rth 2bnz wq5f j3xd pv82 ct6m 9hsa e7lw 4knr zb3u m5yq")
+	tt.Type(strings.Join(model.MockBackupPhrase, " "))
 	tt.Key(0, ui.KeyEnter)
 	onboardingSettle(tt)
 	if o.step != onboardingProvider || o.origin != onboardingRestored {

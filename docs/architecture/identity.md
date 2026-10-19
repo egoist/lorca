@@ -17,7 +17,7 @@ After Happy’s layering, the Device that creates or restores the identity is th
 
 AEAD envelopes are `nonce(24) || ciphertext` with the blob kind as associated data. Sealed boxes are libsodium `crypto_box_seal` (`crypto_box` crate); signatures are `ed25519-dalek`.
 
-Recovery: restore the master secret from the backup phrase → re-derive content keys → open the keyring the identity signed on the relay ([the account key](relay-trust.md#the-account-key)). The backup phrase is the identity.
+Recovery: restore the master secret from the backup phrase → re-derive content keys → open the keyring the identity signed on the relay ([the account key](relay-trust.md#the-account-key)). The backup phrase is the identity. The identity device re-derives it from `identity.json` whenever asked: `identity.phrase` answers it (a Device without the master secret has none), `lorca identity phrase` prints it, and the desktop app shows it from Settings › Devices (Backup phrase, Show…) after a confirmation.
 
 ## Pairing a Device
 
@@ -48,7 +48,7 @@ Every Device writes its `os` into its machine metadata blob. Values: `macos`, `l
 | `macos`, `linux`, `windows` | **Runner** | Everything a Device can, plus be assigned bots and run Jobs with the account’s credentials. |
 | `ios`, `ipados`, `android`  | Device     | Hold keys, configure account providers, read and write chats, create bots for Runners. |
 
-Runner status is derived from `os` alone. There is no flag to opt a phone in or a desktop out. Peers read `os` from the decrypted metadata blob, so the relay never learns which Devices are Runners.
+Runner status is derived from `os` alone. There is no flag to opt a phone in or a desktop out. Peers read `os` from the decrypted metadata blob, so the relay never learns which Devices are Runners. Any other `os`, and a machine that never sent its `machine` blob, is a Device and never a Runner. The CLI (`Device::is_runner`, which bot create and the team tools check) and the desktop app (`Device.IsRunner`, which its Runner menus offer) make the same test, each tested against the cases in `crates/cli/testdata/runners.json`; the desktop app keeps an `os` it has no name for as the CLI reported it.
 
 ## Relay surface
 

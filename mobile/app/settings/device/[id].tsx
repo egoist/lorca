@@ -10,7 +10,7 @@ import { deviceName, isBotDM, isRunner, isStandaloneRunner, providerLabel, ready
 import { deviceIsOnline, useStore } from "../../../src/core/store";
 import { t, useLanguage } from "../../../src/i18n";
 import { BotAvatar } from "../../../src/ui/Avatar";
-import { deviceSymbol } from "../../../src/ui/devices";
+import { deviceSymbol, useDevicesBase } from "../../../src/ui/devices";
 import { Row, Section } from "../../../src/ui/forms";
 import { RowMenu } from "../../../src/ui/RowMenu";
 import { SecretSheet } from "../../../src/ui/SecretSheet";
@@ -43,6 +43,7 @@ export default function DeviceScreen() {
   useLanguage();
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const base = useDevicesBase();
   const p = usePalette();
   const device = useStore((s) => s.devices.find((d) => d.id === id));
   const seen = useStore((s) => s.device_seen[id]);
@@ -177,9 +178,9 @@ export default function DeviceScreen() {
               (device.plugins ?? []).map((plugin) =>
                 // A named account (Gmail · Work) opens its own screen; its name already says which.
                 plugin.account_name ? (
-                  <Row key={plugin.id} title={plugin.name} detail={pluginStateWord(plugin)} icon={plugin.icon ?? "puzzlepiece.extension"} chevron onPress={() => router.push({ pathname: "/settings/account/[id]", params: { id: plugin.id, runner: device.id } })} />
+                  <Row key={plugin.id} title={plugin.name} detail={pluginStateWord(plugin)} icon={plugin.icon ?? "puzzlepiece.extension"} chevron onPress={() => router.push({ pathname: `${base}/account/[id]`, params: { id: plugin.id, runner: device.id } })} />
                 ) : (
-                  <Row key={plugin.id} title={plugin.name} subtitle={plugin.state === "error" ? plugin.detail || plugin.description : plugin.description} detail={pluginStateWord(plugin)} icon={plugin.icon ?? "puzzlepiece.extension"} chevron onPress={() => router.push({ pathname: "/settings/account/[id]", params: { id: plugin.id, runner: device.id } })} />
+                  <Row key={plugin.id} title={plugin.name} subtitle={plugin.state === "error" ? plugin.detail || plugin.description : plugin.description} detail={pluginStateWord(plugin)} icon={plugin.icon ?? "puzzlepiece.extension"} chevron onPress={() => router.push({ pathname: `${base}/account/[id]`, params: { id: plugin.id, runner: device.id } })} />
                 ),
               )
             )}
@@ -256,6 +257,7 @@ export default function DeviceScreen() {
 function CodingAgentsSection({ device }: { device: Device }) {
   useLanguage();
   const router = useRouter();
+  const base = useDevicesBase();
   const [agents, setAgents] = useState<CodingAgent[]>();
   const loads = useRef(0);
   useFocusEffect(
@@ -271,7 +273,7 @@ function CodingAgentsSection({ device }: { device: Device }) {
   const detail = !agents ? undefined : ready ? ready.name : agents.some((agent) => agent.installed) ? t("Off") : t("None installed");
   return (
     <Section>
-      <Row title={t("Coding Agents")} detail={detail} chevron onPress={() => router.push({ pathname: "/settings/coding-agents", params: { runner: device.id } })} />
+      <Row title={t("Coding Agents")} detail={detail} chevron onPress={() => router.push({ pathname: `${base}/coding-agents`, params: { runner: device.id } })} />
     </Section>
   );
 }

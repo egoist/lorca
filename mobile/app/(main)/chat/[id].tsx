@@ -60,6 +60,7 @@ import {
   NoticeRow,
   PermissionRow,
   AgentRow,
+  agentRowLabel,
   DraftRow,
   CommandRow,
   StatusRow,
@@ -859,7 +860,7 @@ export default function ChatScreen() {
       } else if (agent && (agent.state === "failed" || agent.state === "stopped")) {
         alert(agentTitle(agent), agent.outcome ?? agentStatusWord(agent));
       } else {
-        router.push({ pathname: "/message/[id]", params: { id: row.message.id, chat: id, title: `${row.incoming ? t("Message from") : t("Messaged")} ${row.title}` } });
+        router.push({ pathname: "/message/[id]", params: { id: row.message.id, chat: id, title: `${agentRowLabel(row)} ${row.title}` } });
       }
     },
     [router, id],
@@ -907,14 +908,7 @@ export default function ChatScreen() {
             />
           );
         case "agent":
-          return (
-            <AgentRow
-              row={item}
-              isGroup={speakers}
-              onOpen={openAgent}
-              onDecide={answerCard}
-            />
-          );
+          return <AgentRow row={item} onOpen={openAgent} />;
         case "working":
           return <WorkingRow chatId={id} bots={item.bots} isGroup={isGroup} />;
         case "status":

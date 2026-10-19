@@ -67,6 +67,16 @@ fn identity_keys(app: &App) -> Option<Identity> {
     app.identity.lock().unwrap().clone().and_then(|file| file.identity().ok())
 }
 
+/// The backup phrase again, from the master secret the identity device keeps, for a user who
+/// did not write it down when it was created.
+pub fn phrase(app: &App) -> anyhow::Result<Vec<String>> {
+    if !app.has_identity() {
+        anyhow::bail!("No identity on this Device.");
+    }
+    let identity = identity_keys(app).ok_or_else(|| anyhow::anyhow!("This Device does not hold the identity. Its backup phrase is on the Device that does."))?;
+    Ok(identity.phrase())
+}
+
 /// The account's keyring, signed by the identity, covering every generation of the account key
 /// and every unpaired Device this Device holds: an identity device signs it anew when its last
 /// one does not cover them. `None` on a Device without the identity.
@@ -282,6 +292,20 @@ mod tests {
             }
         }
         Account { apps, homes }
+    }
+
+    /// The identity device shows the phrase it was created with again, from the master secret on
+    /// disk; a paired Device holds no master secret and has none to show.
+    #[test]
+    fn phrase_shows_again_on_the_identity_device() {
+        let account = account(1);
+        let shown = phrase(&account.apps[0]).unwrap();
+        assert_eq!(shown.len(), 13);
+        let reloaded = App::load(crate::config::Config { home: account.homes[0].clone(), port: 0 }).unwrap();
+        assert_eq!(phrase(&reloaded).unwrap(), shown);
+        let master = keys::secret_from_phrase(&shown.join(" ")).unwrap();
+        assert_eq!(Identity::from_master(master).pubkey(), account.apps[0].machine_file().unwrap().identity_pubkey);
+        assert!(phrase(&account.apps[1]).is_err());
     }
 
     /// Hands `app` what another Device queued, as the relay would.

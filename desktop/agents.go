@@ -12,10 +12,11 @@ import (
 )
 
 // Coding agents, after Grok Bot's: a coding agent is a peer the bot messages. Its start and each
-// message the bot sends it are centered markers, "Messaged ⬢ Title · first line", and what it
-// says back is "Message from ⬢ Title · first line"; a click opens its page. While it asks to run
-// a command, the permission card sits under its start's marker. The page is its transcript, drawn
-// as Cursor draws an agent's run.
+// message the bot sends it are centered markers, "Messaged ⬢ Title · first line", what the user
+// writes it on its page is "You messaged ⬢ Title · first line", and what it says back is "Message
+// from ⬢ Title · first line"; a click opens its page. While it asks to run a command, the
+// permission card sits under its start's marker. The page is its transcript, drawn as Cursor
+// draws an agent's run, with a composer under it that writes to the agent itself.
 
 // MARK: - The markers
 
@@ -60,10 +61,10 @@ func agentMarker(c *ui.Context, lead, kind, title, text, full string, tint *ui.C
 	return clicked
 }
 
-// agentRow is a coding agent's start or a message the bot sent one: its marker, and while the
-// agent asks, the permission card under it. A start that failed has no page: its marker shows
-// why in a popover.
-func (m *mainWindow) agentRow(c *ui.Context, chat *model.Chat, message *model.Message, cardAvatar *avatarContent, groupStart bool) {
+// agentRow is a coding agent's start or a message the bot sent one: its marker. What the agent
+// asks is a permission card of its own at the end of the chat. A start that failed has no page:
+// its marker shows why in a popover.
+func (m *mainWindow) agentRow(c *ui.Context, chat *model.Chat, message *model.Message, groupStart bool) {
 	tool := message.Body.Tool
 	agent := model.MessagedAgent(chat, tool)
 	kind, rowID := "", message.ID
@@ -89,17 +90,12 @@ func (m *mainWindow) agentRow(c *ui.Context, chat *model.Chat, message *model.Me
 		if agentMarker(c, L("Messaged"), kind, model.AgentLabel(chat, tool), text, full, nil, groupStart) {
 			m.presentAgentPage(chatID, rowID)
 		}
-		if a := tool.Agent; a != nil && a.State == model.AgentAsking && a.Question != nil {
-			cardFrame(c, cardAvatar, false, agentQuestionTitle(a)+": "+a.Question.Command, func() {
-				m.agentQuestion(c, chatID, message.ID, a)
-			})
-		}
 	})
 }
 
 // agentMessageRow is what a coding agent said: "Message from ⬢ Title · first line", its first line
-// in red when it ended on its own. A click opens the agent's page, or once its start is gone,
-// shows the whole message.
+// in red when it ended on its own; or what the user wrote it on its page, "You messaged ⬢ Title ·
+// first line". A click opens the agent's page, or once its start is gone, shows the whole message.
 func (m *mainWindow) agentMessageRow(c *ui.Context, chat *model.Chat, message *model.Message, groupStart bool) {
 	said := message.Body.AgentMessage
 	row := model.AgentRowOf(chat, said.AgentID)
@@ -112,43 +108,13 @@ func (m *mainWindow) agentMessageRow(c *ui.Context, chat *model.Chat, message *m
 	if said.Failed {
 		tint = &colors(c).Red
 	}
+	lead := L("Message from")
+	if message.Author.Kind == model.AuthorYou {
+		lead = L("You messaged")
+	}
 	ui.Column(c.Key("agent-message:" + message.ID)).Children(func() {
-		if agentMarker(c, L("Message from"), said.AgentKind, title, said.Text, full, tint, groupStart) && row != nil {
+		if agentMarker(c, lead, said.AgentKind, title, said.Text, full, tint, groupStart) && row != nil {
 			m.presentAgentPage(chat.ID, row.ID)
-		}
-	})
-}
-
-// MARK: - The question
-
-func agentQuestionTitle(agent *model.AgentRun) string {
-	return L("%@ wants to run a command", agent.Name())
-}
-
-// agentQuestion is what a coding agent asks, as a command card asks it: the command in a block
-// that opens it whole, why Auto-review asked, Allow once, Always allow with a rule, and Deny.
-func (w *appWindow) agentQuestion(c *ui.Context, chatID, messageID string, agent *model.AgentRun) {
-	p := colors(c)
-	q := agent.Question
-	title := agentQuestionTitle(agent)
-	ui.Row(c).Size(18, 18).Center().TextColor(p.Accent).Children(func() { symbol(c, "hand.raised", 17, 1.9) })
-	ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Children(func() {
-		ui.Text(c, title).FontSize(12.5).FontWeight(600).FixedLineHeight(17).SingleLine().Tooltip(title)
-		if commandBlock(c, "$ "+q.Command, 2) {
-			w.presentCommandSheet(title, q.Command)
-		}
-		if q.Reason != "" {
-			ui.Text(c, q.Reason).Margin(7, 0, 0, 0).FontSize(11.5).LineHeight(1.35).TextColor(p.Label2)
-		}
-		ui.Row(c).Wrap().Gap(6).Margin(10, 0, 0, 0).Children(func() {
-			for _, choice := range q.Decisions() {
-				if pushButton(c.Key(choice.Decision), choice.Title, pushOptions{Small: true}).Clicked() {
-					store.AnswerPermission(chatID, messageID, choice.Decision)
-				}
-			}
-		})
-		if q.HasRule {
-			ui.Text(c, L("Always allow adds the rule “%@”.", q.Rule)).Margin(8, 0, 0, 0).FontSize(11).LineHeight(1.35).TextColor(p.Label2)
 		}
 	})
 }
@@ -157,7 +123,8 @@ func (w *appWindow) agentQuestion(c *ui.Context, chatID, messageID string, agent
 
 // agentStatusMark is a coding agent's state as a mark: a spinner while it works, an exclamation
 // mark when it needs the user (red when it failed), the pull request it is ready with, a check
-// when it finished, a stop mark once stopped.
+// when it finished, a stop mark once stopped; once its pull request is merged or closed, a merge
+// or a cross.
 func agentStatusMark(c *ui.Context, agent *model.AgentRun) {
 	p := colors(c)
 	name, tint := "stop.circle", p.Label3
@@ -174,6 +141,12 @@ func agentStatusMark(c *ui.Context, agent *model.AgentRun) {
 		}
 	case model.AgentFailed:
 		name, tint = "exclamationmark.circle.fill", p.Red
+	}
+	if agent.PullEnded() {
+		name, tint = "xmark.circle", p.Label3
+		if agent.PullState == model.PullMerged {
+			name, tint = "arrow.triangle.merge", p.Purple
+		}
 	}
 	ui.Row(c).TextColor(tint).Children(func() { symbol(c, name, 15, 1.8) })
 }
@@ -198,6 +171,15 @@ type agentPage struct {
 	chatID, messageID string
 	remote            bool
 	items             []model.AgentItem
+	// queued are the messages it was sent and has yet to take up.
+	queued []model.AgentQueued
+	// reachable is whether a message can reach it, as the transcript last answered.
+	reachable bool
+	// draft is the composer's text; sending, a message on its way; sendErr, why the last did not go.
+	draft   string
+	sending bool
+	sendErr string
+	focus   bool
 	// card is the agent as the transcript last answered it, for when its row is gone.
 	card     *model.AgentRun
 	err      string
@@ -237,10 +219,10 @@ func (t *agentPage) load() {
 		} else {
 			// New steps scroll into view while the reader is at the end.
 			atEnd := !t.loaded || t.scroll.Y >= t.scroll.MaxY-24
-			if atEnd && !reflect.DeepEqual(transcript.Items, t.items) {
+			if atEnd && (!reflect.DeepEqual(transcript.Items, t.items) || !reflect.DeepEqual(transcript.Queued, t.queued)) {
 				t.scroll.Y = math.MaxFloat32
 			}
-			t.items, t.loaded, t.err = transcript.Items, true, ""
+			t.items, t.queued, t.reachable, t.loaded, t.err = transcript.Items, transcript.Queued, transcript.Open, true, ""
 			if transcript.Card != nil {
 				t.card = transcript.Card
 			}
@@ -250,6 +232,10 @@ func (t *agentPage) load() {
 }
 
 func (t *agentPage) schedule() {
+	// One poll at a time: a send asks again at once.
+	if t.timer != nil {
+		t.timer.Stop()
+	}
 	if t.closed || store.IsMock {
 		return
 	}
@@ -270,8 +256,8 @@ func (t *agentPage) close() {
 	}
 }
 
-// presentAgentPage shows a coding agent's page: how it stands, what it asks, its transcript, and
-// what its work changed. Follow-ups go through the bot, so the page has no composer.
+// presentAgentPage shows a coding agent's page: how it stands, its transcript, what its work
+// changed, and a composer that writes to the agent itself.
 func (w *appWindow) presentAgentPage(chatID, messageID string) {
 	chat := store.Chat(chatID)
 	if chat == nil {
@@ -282,6 +268,23 @@ func (w *appWindow) presentAgentPage(chatID, messageID string) {
 		return
 	}
 	t := &agentPage{chatID: chatID, messageID: messageID, remote: !store.RunsHere(row), open: map[string]bool{}}
+	t.load()
+	w.present(func(c *ui.Context, s *sheet) { t.view(c, s, w) }, t.close)
+}
+
+// presentListedAgent shows the page of an agent from the account's list: from its row when its
+// chat is loaded here, else from the list's card, on its Runner as the card names it.
+func (w *appWindow) presentListedAgent(listed model.ListedAgent) {
+	if chat := store.Chat(listed.ChatID); chat != nil && model.AgentOf(chat.Message(listed.MessageID)) != nil {
+		w.presentAgentPage(listed.ChatID, listed.MessageID)
+		return
+	}
+	if listed.Agent == nil || !listed.Agent.Started() {
+		return
+	}
+	here := store.ThisDevice()
+	remote := here == nil || listed.Agent.DeviceID != here.ID
+	t := &agentPage{chatID: listed.ChatID, messageID: listed.MessageID, remote: remote, card: listed.Agent, open: map[string]bool{}}
 	t.load()
 	w.present(func(c *ui.Context, s *sheet) { t.view(c, s, w) }, t.close)
 }
@@ -309,6 +312,116 @@ func (t *agentPage) stop(w *appWindow, agent *model.AgentRun) {
 		t.stopping = false
 		if err != nil && !t.closed {
 			w.showAlert(alertOptions{Message: L("Could not stop %@", name), Informative: model.ErrorText(err)}, nil)
+		}
+	})
+}
+
+// send gives the agent what the composer holds, down the path the bot's messages take. The text
+// leaves the field at once and comes back with why when it could not go; once it went, the
+// transcript is asked again at once, for the message in the agent's queue and how it stands.
+func (t *agentPage) send() {
+	text := strings.TrimSpace(t.draft)
+	if text == "" || t.sending {
+		return
+	}
+	t.sending, t.sendErr, t.draft = true, "", ""
+	t.scroll.Y = math.MaxFloat32
+	store.SendToAgent(t.chatID, t.messageID, text, func(err error) {
+		t.sending = false
+		if t.closed {
+			return
+		}
+		if err != nil {
+			t.sendErr = model.ErrorText(err)
+			if strings.TrimSpace(t.draft) == "" {
+				t.draft = text
+			}
+			t.focus = true
+			return
+		}
+		t.load()
+	})
+}
+
+// composerState is what the composer says for the agent as it stands: its placeholder, the line
+// under it, and whether it takes a message. One at work takes it up once it is done with what it
+// does now; one whose process is gone starts again on its session; one still starting, or one
+// that ended before its session began, takes none.
+func (t *agentPage) composerState(agent *model.AgentRun) (placeholder, hint string, enabled bool) {
+	name := agent.Name()
+	placeholder = L("Message %@", name)
+	switch {
+	case agent.State == model.AgentStarting:
+		return L("%@ is starting…", name), "", false
+	case t.loaded && !t.reachable:
+		return placeholder, L("%@ ended before its session began, so it cannot take a message. Ask the bot to start a new one.", name), false
+	case agent.State == model.AgentWorking || agent.State == model.AgentAsking:
+		return placeholder, L("%@ takes it up once it is done with what it is doing.", name), true
+	case agent.State == model.AgentStopped || agent.State == model.AgentFailed:
+		return placeholder, L("Sending starts %@ again on its session.", name), true
+	}
+	return placeholder, "", true
+}
+
+// composer is the page's field, which writes to the agent itself: Return sends as it does in the
+// chat, and the line under it says when the agent takes the message, or why it did not go.
+func (t *agentPage) composer(c *ui.Context, agent *model.AgentRun) {
+	p := colors(c)
+	placeholder, hint, enabled := t.composerState(agent)
+	sendOnReturn := prefs.get().SendOnReturn
+	ready := enabled && !t.sending && strings.TrimSpace(t.draft) != ""
+	ui.Column(c.Key("composer")).Gap(6).Padding(12, 20, 0, 20).Children(func() {
+		field := ui.Row(c).Gap(8).AlignItems(ui.End).MinHeight(38).Padding(5, 5, 5, 12).Radius(19).Border(0.5, p.ComposerBorder).
+			Background(p.ComposerField).Cursor(ui.CursorText)
+		field.Children(func() {
+			ui.Box(c.Key("text")).Grow(1).Shrink(1).MinWidth(0).Padding(0, 0, 3, 0).Children(func() {
+				input := ui.TextAreaBase(c, &t.draft).Lines(1, 6).Padding(4, 0).FontSize(textMessage).FixedLineHeight(19).
+					TextColor(p.Label).Placeholder(placeholder).Label(placeholder).FocusRing(false).Disabled(!enabled)
+				composing := input.Composing()
+				input.HandleInput(func(ev ui.InputEvent) bool {
+					if ev.Kind != ui.InputKeyDown || composing || ev.Key != ui.KeyEnter {
+						return false
+					}
+					if (sendOnReturn && ev.Mods == 0) || (!sendOnReturn && ev.Mods == ui.Cmd) {
+						t.send()
+						return true
+					}
+					return false
+				})
+				if input.Changed() {
+					t.sendErr = ""
+				}
+				if t.focus && enabled {
+					input.Focus()
+				}
+				t.focus = false
+			})
+			button := ui.ButtonBase(c.Key("send")).Size(28, 28).Shrink(0).Radius(14).Center().Background(p.ComposerPrimary).
+				TextColor(p.ComposerPrimaryContent).Label(L("Send")).Tooltip(L("Send to %@", agent.Name()))
+			if !ready {
+				// Faded as one piece, as the chat's send button.
+				button.Background(p.ComposerPrimary.Alpha(0.25)).TextColor(p.ComposerField.Alpha(1))
+			}
+			button.Children(func() {
+				if t.sending {
+					spinner(c, 13)
+				} else {
+					symbol(c, "arrow.up", 15, 2.6)
+				}
+			})
+			if button.Clicked() && ready {
+				t.send()
+			}
+		})
+		// A click on the pill around the text puts the keyboard in it.
+		if field.Clicked() && enabled {
+			t.focus = true
+		}
+		switch {
+		case t.sendErr != "":
+			ui.Text(c, L("Not sent: %@", t.sendErr)).FontSize(11.5).LineHeight(1.35).TextColor(p.Red).Padding(0, 12).Selectable()
+		case hint != "":
+			ui.Text(c, hint).FontSize(11.5).LineHeight(1.35).TextColor(p.Label3).Padding(0, 12)
 		}
 	})
 }
@@ -342,18 +455,13 @@ func (t *agentPage) view(c *ui.Context, s *sheet, w *appWindow) {
 				}
 			})
 		})
-		if agent.State == model.AgentAsking && agent.Question != nil {
-			ui.Row(c).AlignItems(ui.Start).Gap(8).Margin(0, 20, 14, 20).Padding(11, 12, 12, 12).Radius(12).
-				Background(p.BotBubble).Border(1, p.BotBubbleBorder).Label(agentQuestionTitle(agent)).Children(func() {
-				w.agentQuestion(c, t.chatID, t.messageID, agent)
-			})
-		}
 		ui.Box(c).Height(1).Background(p.Separator)
 		body := ui.Scroll(c.Key("transcript")).Height(460).Shrink(1).MinHeight(120).Padding(14, 20, 18, 20).Label(L("Transcript"))
 		body.TrackScroll(&t.scroll)
 		body.Children(func() { t.transcript(c) })
 		ui.Box(c).Height(1).Background(p.Separator)
-		ui.Row(c).Gap(10).Padding(14, 20, 18, 20).Children(func() {
+		t.composer(c, agent)
+		ui.Row(c).Gap(10).Padding(12, 20, 18, 20).Children(func() {
 			ui.Row(c).Grow(1).Shrink(1).MinWidth(0).Gap(12).Children(func() { agentFooter(c, agent) })
 			if pushButton(c.Key("done"), L("Done"), pushOptions{Kind: buttonPrimary}).Clicked() {
 				done = true
@@ -552,10 +660,10 @@ func stepLine(c *ui.Context, spans []ui.Span, label string, running, expandable,
 func (t *agentPage) transcript(c *ui.Context) {
 	p := colors(c)
 	switch {
-	case len(t.items) == 0 && t.err != "":
+	case len(t.items) == 0 && len(t.queued) == 0 && t.err != "":
 		ui.Text(c, t.err).FontSize(12).TextColor(p.Label2).Selectable()
 		return
-	case len(t.items) == 0:
+	case len(t.items) == 0 && len(t.queued) == 0:
 		words := L("Loading…")
 		if t.loaded {
 			words = L("Nothing yet")
@@ -576,7 +684,33 @@ func (t *agentPage) transcript(c *ui.Context) {
 			}
 			ui.Column(c.Key(step.item.ID)).Margin(top, 0, 0, 0).MinWidth(0).Children(func() { t.step(c, step, i == 0) })
 		}
+		// What it was sent and has yet to take up, under what it does now.
+		for i, queued := range t.queued {
+			top := float32(12)
+			if i == 0 && len(steps) == 0 {
+				top = 0
+			}
+			ui.Column(c.Key("queued:"+strconv.Itoa(i))).Margin(top, 0, 0, 0).MinWidth(0).Children(func() {
+				agentPromptCard(c, t.promptAuthor(queued.From), queued.Text, queued.From == "user", true, false, nil)
+			})
+		}
 	})
+}
+
+// promptAuthor is who wrote a message to the agent: "You" for the user on its page, else the bot
+// that passed it on.
+func (t *agentPage) promptAuthor(from string) string {
+	if from == "user" {
+		return L("You")
+	}
+	if chat := store.Chat(t.chatID); chat != nil {
+		if row := chat.Message(t.messageID); row != nil {
+			if bot := store.Bot(row.Author.BotID); bot != nil {
+				return bot.Name
+			}
+		}
+	}
+	return L("Bot")
 }
 
 func (t *agentPage) step(c *ui.Context, step agentStep, first bool) {
@@ -613,7 +747,7 @@ func (t *agentPage) step(c *ui.Context, step agentStep, first bool) {
 			commandOutput(c, tool.Output, 12).Margin(4, 0, 2, 0)
 		}
 	case item.Kind == "prompt":
-		agentPromptCard(c, item.Text, first, open, toggle)
+		agentPromptCard(c, t.promptAuthor(item.From), item.Text, item.From == "user", false, open, toggle)
 	case item.Kind == "status":
 		ui.Text(c, item.Text).FontSize(11.5).TextColor(p.Label3).Selectable()
 	case item.Kind == "thought":
@@ -654,13 +788,23 @@ func (t *agentPage) step(c *ui.Context, step agentStep, first bool) {
 	}
 }
 
-// agentPromptCard is what the agent was sent, under a small "Prompt" label. The first brief is
-// long: past six lines it folds behind Show more.
-func agentPromptCard(c *ui.Context, text string, first, open bool, toggle func()) {
+// agentPromptCard is what the agent was sent, under who wrote it: "You", in the accent's tint, for
+// what the user wrote on its page, else the bot that passed it on. One it has yet to take up
+// reads "Queued". A long one, as the first brief is, folds past six lines behind Show more.
+func agentPromptCard(c *ui.Context, author, text string, mine, queued, open bool, toggle func()) {
 	p := colors(c)
-	long := first && (strings.Count(text, "\n") >= 6 || len([]rune(text)) > 480)
-	ui.Column(c).Gap(4).Padding(9, 12, 10, 12).Radius(10).Background(p.BotBubble).Border(1, p.BotBubbleBorder).Children(func() {
-		ui.Text(c, L("Prompt")).FontSize(textCaption).FontWeight(600).TextColor(p.Label3)
+	long := toggle != nil && (strings.Count(text, "\n") >= 6 || len([]rune(text)) > 480)
+	card := ui.Column(c).Gap(4).Padding(9, 12, 10, 12).Radius(10).Background(p.BotBubble).Border(1, p.BotBubbleBorder)
+	if mine {
+		card.Background(p.Accent.Alpha(0.09)).Border(1, p.Accent.Alpha(0.22))
+	}
+	card.Children(func() {
+		ui.Row(c).Gap(6).Children(func() {
+			ui.Text(c, author).FontSize(textCaption).FontWeight(600).TextColor(p.Label3)
+			if queued {
+				ui.Text(c, "· "+L("Queued")).FontSize(textCaption).TextColor(p.Label3).Tooltip(L("It takes this up once it is done with what it is doing"))
+			}
+		})
 		body := ui.Text(c, text).FontSize(12.5).LineHeight(1.4).Selectable()
 		if long && !open {
 			body.MaxLines(6)

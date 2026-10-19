@@ -1,9 +1,12 @@
-//! Coding agents a bot runs on its Runner and supervises: Claude Code, Codex, OpenCode, pi, or fx,
-//! in a git worktree of a repository there, on a prompt and under a title the bot gives the job.
+//! Coding agents a bot hands jobs to on its Runner: Claude Code, Codex, OpenCode, pi, or fx, in a
+//! folder there, as it is, on the user's request the bot passes on and under a title it gives the
+//! job. The agent decides how to do the job, pushes it, and opens a pull request; the user reviews it.
 //! The agent is a process of its own that outlives the turn that started it. The bot keeps its id
-//! across turns, reads its transcript, sends it follow-ups (queued, or cutting in), and stops it.
-//! When the agent is done with what it was asked, or ends on its own, what it said arrives in the
-//! chat as a message from it, and the bot gets a turn to check its work. Every command it runs
+//! across turns, and when the user asks, reads its transcript, passes it what they say (queued, or
+//! cutting in), and stops it. When the agent is done with what it was asked, what it said arrives
+//! in the chat as its report to the user, and the bot gets a turn that only relays it: no checking,
+//! building, testing, or new instructions; when it ends on its own, the bot gets a turn to tell
+//! the user. Every command it runs
 //! goes through the bot's Access and Auto-review, as the bot's own commands do, and what the
 //! review asks the user shows on the row that started it.
 //!
@@ -17,6 +20,7 @@ pub(crate) mod codex;
 pub(crate) mod driver;
 pub(crate) mod pi;
 pub(crate) mod process;
+pub mod pull;
 pub mod settings;
 pub(crate) mod tool;
 pub mod transcript;
@@ -33,7 +37,7 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 
 use crate::app::App;
-use crate::model::{AgentChanges, AgentQuestion, AgentRun, Author, Body, Message};
+use crate::model::{AgentChanges, AgentRun, Author, Body, Message};
 use driver::{Approval, Driver, Event};
 use transcript::{Item, Transcript};
 
@@ -85,12 +89,18 @@ pub(crate) struct Record {
     /// The commit it started from, which its changes count from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
+    /// The repository its folder is a clone of: "github.com/egoist/lorca".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
     pub task: String,
     pub state: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull_request: Option<String>,
+    /// How its pull request stands, as `gh` last said (`pull::state`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_state: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changes: Option<AgentChanges>,
     pub started_at: f64,
@@ -109,6 +119,10 @@ pub(crate) struct Record {
     /// commands are weighed against the owner's task for it, never against the event's text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event: Option<crate::event_triggers::EventTask>,
+    /// A routine's run or an event started it, with nobody watching: what its review would ask
+    /// goes back to it at once, as an unattended turn's does, instead of waiting on a card.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unattended: bool,
 }
 
 impl Record {
@@ -154,8 +168,8 @@ pub struct Agent {
     record: Mutex<Record>,
     driver: Mutex<Option<Arc<dyn Driver>>>,
     transcript: Mutex<Transcript>,
-    /// What it asks the user now, on the row that started it.
-    question: Mutex<Option<AgentQuestion>>,
+    /// A question of its waits for the user in the chat.
+    asks: AtomicBool,
     /// One question to the user at a time.
     asking: tokio::sync::Mutex<()>,
     /// When it last showed something new.
@@ -167,6 +181,28 @@ pub struct Agent {
     stopping: AtomicBool,
     /// Which run of its process the supervisor follows: a resumed agent is a new one.
     generation: AtomicU64,
+    /// Messages it was sent and has yet to take up, oldest first.
+    queued: Mutex<Vec<Queued>>,
+}
+
+/// A message an agent was sent and has yet to take up: the apps show it under its transcript
+/// until its `prompt` step comes, which then says who wrote it.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub(crate) struct Queued {
+    pub text: String,
+    /// `user` when the user wrote it on the agent's page; none when the bot passed it on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    pub at: f64,
+}
+
+/// Who writes to an agent.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Sender {
+    /// Its bot, passing on what the user said in the chat (`coding_agent send`).
+    Bot,
+    /// The user, on the agent's page (`coding.send`).
+    User,
 }
 
 impl Agent {
@@ -175,13 +211,14 @@ impl Agent {
             record: Mutex::new(record),
             driver: Mutex::new(None),
             transcript: Mutex::new(transcript),
-            question: Mutex::new(None),
+            asks: AtomicBool::new(false),
             asking: tokio::sync::Mutex::new(()),
             active_at: Mutex::new(Instant::now()),
             budget: Mutex::new(None),
             hold: Mutex::new(None),
             stopping: AtomicBool::new(false),
             generation: AtomicU64::new(0),
+            queued: Mutex::new(Vec::new()),
         })
     }
 
@@ -208,7 +245,14 @@ impl Agent {
 
     /// Puts a step in its transcript and its file. True when it changed anything.
     fn add(&self, app: &App, item: Item) -> bool {
-        let item = item_without_secrets(app, item);
+        let mut item = item_without_secrets(app, item);
+        // A message it takes up leaves the queue, and its step says who wrote it.
+        if item.kind == "prompt" && item.from.is_none() {
+            let mut queued = self.queued.lock().unwrap();
+            if let Some(position) = queued.iter().position(|sent| sent.text == item.text) {
+                item.from = queued.remove(position).from;
+            }
+        }
         let pull_request = match &item.tool {
             Some(step) => step.output.as_deref().and_then(workspace::pull_request),
             None => workspace::pull_request(&item.text),
@@ -220,7 +264,11 @@ impl Agent {
         transcript::append(&app.config.home, &self.id(), &item);
         *self.active_at.lock().unwrap() = Instant::now();
         if let Some(link) = pull_request {
-            self.record.lock().unwrap().pull_request = Some(link);
+            let mut record = self.record.lock().unwrap();
+            if record.pull_request.as_ref() != Some(&link) {
+                record.pull_request = Some(link);
+                record.pull_state = None;
+            }
         }
         true
     }
@@ -285,7 +333,6 @@ impl Agents {
         let Body::Tool { agent: Some(card), .. } = &mut message.body else { return };
         if card.is_open() {
             card.state = "stopped".into();
-            card.question = None;
             card.outcome = Some("Stopped".into());
             card.updated_at = Some(crate::config::now_secs());
             app.upsert_message(message, true);
@@ -312,6 +359,11 @@ impl Agents {
         })
     }
 
+    /// The bot that started agent `id`.
+    pub fn started_by(&self, id: &str) -> Option<String> {
+        self.all().into_iter().map(|agent| agent.record()).find(|record| record.id == id).map(|record| record.bot_id)
+    }
+
     /// The agents bot `bot_id` started in chat `chat_id`, oldest first.
     pub fn of(&self, chat_id: &str, bot_id: &str) -> Vec<Arc<Agent>> {
         self.all()
@@ -326,13 +378,14 @@ impl Agents {
     /// The card for `agent`, as it stands.
     fn card(&self, app: &App, agent: &Agent) -> AgentRun {
         let record = agent.record();
-        let question = agent.question.lock().unwrap().clone().filter(|_| record.state == "working" || record.state == "starting");
-        let device = app.bot(&record.bot_id).and_then(|bot| app.device(&bot.runner_id)).map(|device| device.name);
+        let asks = agent.asks.load(Ordering::SeqCst) && (record.state == "working" || record.state == "starting");
+        // This Runner: an agent whose bot moved elsewhere stays here until it is forgotten.
+        let device_id = app.this_device_id();
+        let device = device_id.as_deref().and_then(|id| app.device(id)).map(|device| device.name);
         // The card goes to every Device: what the agent was asked, asks, or ended on, without a
         // saved secret, as a command's card.
         let redactions = crate::secrets::Redactions::load(app);
         let clean = |text: String| redactions.text(&text).unwrap_or(text);
-        let question = question.map(|question| AgentQuestion { command: question.command.map(clean), ..question });
         AgentRun {
             id: record.id,
             kind: record.kind,
@@ -340,12 +393,14 @@ impl Agents {
             task: clean(record.task),
             folder: home_relative(&record.folder),
             branch: record.branch,
-            state: if question.is_some() { "asking".into() } else { record.state },
-            question,
+            state: if asks { "asking".into() } else { record.state },
             outcome: record.outcome.map(clean),
             pull_request: record.pull_request,
+            pull_state: record.pull_state,
             changes: record.changes,
             device,
+            device_id,
+            repository: record.repository,
             started_at: Some(record.started_at),
             updated_at: Some(record.updated_at),
         }
@@ -357,8 +412,9 @@ impl Agents {
             let record = agent.record.lock().unwrap();
             (record.chat_id.clone(), record.message_id.clone())
         };
-        let card = self.card(app, agent);
+        // Read under the lock, so a sync that read the agent earlier cannot write over a later one.
         let _row = self.rows.lock().unwrap();
+        let card = self.card(app, agent);
         let Some(mut message) = app.message(&chat_id, &message_id) else { return };
         let Body::Tool { agent: Some(current), .. } = &mut message.body else { return };
         if *current == card {
@@ -414,7 +470,7 @@ impl Agents {
                     record.ended_at = Some(crate::config::now_secs());
                 }
             }
-            *agent.question.lock().unwrap() = None;
+            agent.asks.store(false, Ordering::SeqCst);
             self.sync(app, &agent);
         }
         save(app);
@@ -480,6 +536,7 @@ pub(crate) struct Start {
     /// The bot's command secrets to give it as environment variables, by name.
     pub secrets: Vec<String>,
     pub event: Option<crate::event_triggers::EventTask>,
+    pub unattended: bool,
 }
 
 /// Starts an agent and follows it. It returns once the agent runs; its work goes on.
@@ -498,10 +555,12 @@ pub(crate) async fn start(app: &Arc<App>, start: Start) -> Result<Arc<Agent>, St
         folder: start.place.folder.clone(),
         branch: start.place.branch.clone(),
         base: start.place.base.clone(),
+        repository: start.place.repository.clone(),
         task: without_secrets(app, start.task.clone()),
         state: "starting".into(),
         outcome: None,
         pull_request: None,
+        pull_state: None,
         changes: None,
         started_at: now,
         updated_at: now,
@@ -509,12 +568,13 @@ pub(crate) async fn start(app: &Arc<App>, start: Start) -> Result<Arc<Agent>, St
         unheard: None,
         secrets: start.secrets.clone(),
         event: start.event.clone(),
+        unattended: start.unattended,
     };
     let agent = Agent::new(record, Transcript::default());
     *agent.budget.lock().unwrap() = crate::budgets::current();
     app.coding_agents.agents.lock().unwrap().push(agent.clone());
     let place = match &start.place.branch {
-        Some(branch) => format!("Worktree ready on {branch}"),
+        Some(branch) => format!("Working in {} on {branch}", home_relative(&start.place.folder)),
         None => format!("Working in {}", home_relative(&start.place.folder)),
     };
     agent.add(app, Item::text("place", "status", &place));
@@ -568,25 +628,59 @@ async fn launch(app: &Arc<App>, agent: &Arc<Agent>, program: &Path, prompt: &str
     Ok(())
 }
 
-/// Gives the agent a message from the bot: to its running process, or to a new process on its
-/// session when its process is gone (it was done and stopped, or Lorca restarted).
-pub(crate) async fn send(app: &Arc<App>, agent: &Arc<Agent>, text: &str, interrupt: bool) -> Result<String, String> {
-    let text = &without_secrets(app, text.to_string());
+/// Gives the agent a message, from its bot or from the user on its page, down the same path: to
+/// its running process, or to a new process on its session when its process is gone (it was
+/// done and stopped, it was stopped or failed, or Lorca restarted). Until it takes the message
+/// up, the message waits in its queue.
+pub(crate) async fn send(app: &Arc<App>, agent: &Arc<Agent>, text: &str, interrupt: bool, sender: Sender) -> Result<String, String> {
+    let text = &without_secrets(app, text.trim().to_string());
     let record = agent.record();
-    agent.record.lock().unwrap().unheard = None;
-    *agent.budget.lock().unwrap() = crate::budgets::current();
-    if let Some(driver) = agent.driver() {
-        driver.send(text, interrupt).await?;
+    let who = name(&record.kind);
+    let driver = agent.driver();
+    // Its first process is on its way: a second one would race it on the same session.
+    if driver.is_none() && record.state == "starting" {
+        return Err(format!("{who} is still starting. Send it again in a moment."));
+    }
+    if driver.is_none() && record.session.is_none() {
+        return Err(format!("{who} ended before its session began, so there is nothing to go on from. Start a new agent for the job."));
+    }
+    // The user is at its page: what its review asks now has someone to answer it. What it said
+    // last stays unheard until a turn reads it.
+    if sender == Sender::User {
+        agent.record.lock().unwrap().unattended = false;
+    }
+    // A turn's message counts its work toward that turn's limits; the user's, written outside
+    // any turn, leaves it counting toward the turn that last gave it work.
+    if sender == Sender::Bot {
+        *agent.budget.lock().unwrap() = crate::budgets::current();
+    }
+    let from = (sender == Sender::User).then(|| "user".to_string());
+    agent.queued.lock().unwrap().push(Queued { text: text.clone(), from, at: crate::config::now_secs() });
+    let unqueue = || {
+        let mut queued = agent.queued.lock().unwrap();
+        if let Some(position) = queued.iter().rposition(|sent| sent.text == *text) {
+            queued.remove(position);
+        }
+    };
+    if let Some(driver) = driver {
+        if let Err(error) = driver.send(text, interrupt).await {
+            unqueue();
+            return Err(error);
+        }
         *agent.active_at.lock().unwrap() = Instant::now();
         let busy = matches!(record.state.as_str(), "working" | "starting");
         return Ok(match (busy, interrupt) {
-            (true, false) => format!("Sent. {} takes it up once it is done with what it is doing.", name(&record.kind)),
-            (true, true) => format!("Sent. {} stopped what it was doing to take it up.", name(&record.kind)),
-            _ => format!("Sent. {} is working on it.", name(&record.kind)),
+            (true, false) => format!("Sent. {who} takes it up once it is done with what it is doing."),
+            (true, true) => format!("Sent. {who} stopped what it was doing to take it up."),
+            _ => format!("Sent. {who} is working on it."),
         });
     }
-    let program = settings::find(&record.kind).await.ok_or_else(|| format!("{} is no longer installed on this Runner.", name(&record.kind)))?;
+    let Some(program) = settings::find(&record.kind).await else {
+        unqueue();
+        return Err(format!("{who} is no longer installed on this Runner."));
+    };
     if !record.folder.is_dir() {
+        unqueue();
         return Err(format!("{} is gone, so it cannot go on there.", home_relative(&record.folder)));
     }
     {
@@ -596,12 +690,22 @@ pub(crate) async fn send(app: &Arc<App>, agent: &Arc<Agent>, text: &str, interru
         kept.ended_at = None;
     }
     app.coding_agents.sync(app, agent);
+    // Another agent may have taken up the work while this one was gone.
+    let device_id = app.this_device_id();
+    let folder = home_relative(&record.folder);
+    let at = crate::agent_roster::Place { device_id: device_id.as_deref(), folder: &folder, repository: record.repository.as_deref() };
+    let others = crate::agent_roster::working_at(app, &at, Some(&record.id));
     match launch(app, agent, &program, text, record.session.as_deref()).await {
         Ok(()) => {
             save(app);
-            Ok(format!("{} started again on its session and is working on it.", name(&record.kind)))
+            let started = format!("{who} started again on its session and is working on it.");
+            Ok(match crate::agent_roster::warning(&others, &record.bot_id, &record.chat_id) {
+                Some(warning) => format!("{started}\n\n{warning}"),
+                None => started,
+            })
         }
         Err(error) => {
+            unqueue();
             {
                 let mut kept = agent.record.lock().unwrap();
                 kept.set_state("failed");
@@ -618,7 +722,7 @@ pub(crate) async fn send(app: &Arc<App>, agent: &Arc<Agent>, text: &str, interru
 /// Stops the agent; its card says `reason`.
 pub(crate) fn stop(app: &Arc<App>, agent: &Arc<Agent>, reason: &str) {
     agent.stopping.store(true, Ordering::SeqCst);
-    *agent.question.lock().unwrap() = None;
+    agent.asks.store(false, Ordering::SeqCst);
     let driver = agent.driver.lock().unwrap().take();
     {
         let mut record = agent.record.lock().unwrap();
@@ -626,10 +730,11 @@ pub(crate) fn stop(app: &Arc<App>, agent: &Arc<Agent>, reason: &str) {
             record.set_state("stopped");
             record.outcome = Some(reason.to_string());
             record.ended_at = Some(crate::config::now_secs());
-            record.unheard = None;
         }
     }
     agent.hold.lock().unwrap().take();
+    // What waited for it goes with it.
+    agent.queued.lock().unwrap().clear();
     if let Some(driver) = driver {
         tokio::spawn(async move { driver.stop().await });
     }
@@ -646,7 +751,7 @@ async fn supervise(app: Arc<App>, agent: Arc<Agent>, mut events: mpsc::Unbounded
         let active_at = *agent.active_at.lock().unwrap();
         let idle = agent.record.lock().unwrap().state == "idle";
         // Done and quiet for long: it stops, and a follow-up resumes it.
-        if idle && agent.question.lock().unwrap().is_none() && Instant::now() >= active_at + IDLE_LIMIT {
+        if idle && !agent.asks.load(Ordering::SeqCst) && Instant::now() >= active_at + IDLE_LIMIT {
             if let Some(driver) = agent.driver.lock().unwrap().take() {
                 agent.stopping.store(true, Ordering::SeqCst);
                 tokio::spawn(async move { driver.stop().await });
@@ -733,11 +838,34 @@ async fn handle(app: &Arc<App>, agent: &Arc<Agent>, event: Event, generation: u6
                 (record.folder.clone(), record.base.clone())
             };
             if let Some(base) = base {
-                let changes = workspace::changes(&folder, &base).await;
-                agent.record.lock().unwrap().changes = changes;
+                // The agent may have moved to a branch of its own.
+                let (changes, branch) = (workspace::changes(&folder, &base).await, workspace::branch(&folder).await);
+                let mut record = agent.record.lock().unwrap();
+                record.changes = changes;
+                record.branch = branch.or(record.branch.take());
             }
             let said = said.or_else(|| agent.transcript.lock().unwrap().last_said()).unwrap_or_else(|| "Done.".into());
             tell(app, agent, &said, false);
+        }
+        // A turn that ended in an error ends the agent as one that ended on its own: its process
+        // stops, a later message resumes its session, and its bot hears why.
+        Event::Failed(reason) => {
+            {
+                let mut record = agent.record.lock().unwrap();
+                if !matches!(record.state.as_str(), "working" | "starting") {
+                    return;
+                }
+                record.set_state("failed");
+                record.outcome = Some(reason.clone());
+                record.ended_at = Some(crate::config::now_secs());
+            }
+            agent.hold.lock().unwrap().take();
+            agent.asks.store(false, Ordering::SeqCst);
+            if let Some(driver) = agent.driver.lock().unwrap().take() {
+                agent.stopping.store(true, Ordering::SeqCst);
+                tokio::spawn(async move { driver.stop().await });
+            }
+            tell(app, agent, &reason, true);
         }
         Event::Approve(approval, reply) => {
             let (app, agent) = (app.clone(), agent.clone());
@@ -758,7 +886,9 @@ fn ended(app: &Arc<App>, agent: &Arc<Agent>, end: driver::Ended, generation: u64
     }
     agent.driver.lock().unwrap().take();
     agent.hold.lock().unwrap().take();
-    *agent.question.lock().unwrap() = None;
+    agent.asks.store(false, Ordering::SeqCst);
+    // Its process took what waited for it along.
+    agent.queued.lock().unwrap().clear();
     let stopping = agent.stopping.load(Ordering::SeqCst);
     let tell_bot = {
         let mut record = agent.record.lock().unwrap();
@@ -789,14 +919,16 @@ fn ended(app: &Arc<App>, agent: &Arc<Agent>, end: driver::Ended, generation: u64
     }
 }
 
-/// Puts what the agent said, or why it ended, in the chat as a message from it, and wakes its
-/// bot to hear it.
+/// Puts what the agent said, or why it ended, in the chat as a message from it, and wakes its bot
+/// to hear it. What it said when done is its report to the user, which alerts as a reply does,
+/// and the bot's turn for it only relays it.
 fn tell(app: &Arc<App>, agent: &Arc<Agent>, text: &str, failed: bool) {
     let record = agent.record();
     let mut text = without_secrets(app, text.trim().to_string());
     if text.chars().count() > MESSAGE_CHARS {
         text = format!("{}…", text.chars().take(MESSAGE_CHARS).collect::<String>());
     }
+    let notice = format!("{}: {text}", record.title);
     let message = Message::new(
         &record.chat_id,
         Author::Bot { bot_id: record.bot_id.clone() },
@@ -807,6 +939,12 @@ fn tell(app: &Arc<App>, agent: &Arc<Agent>, text: &str, failed: bool) {
     agent.record.lock().unwrap().unheard = Some(message_id.clone());
     app.coding_agents.sync(app, agent);
     save(app);
+    // Done: the user reviews the work from its report, which alerts on its own.
+    if !failed {
+        if let (Some(chat), Some(bot)) = (app.chat(&record.chat_id), app.bot(&record.bot_id)) {
+            crate::push::reply(app, &chat, &bot, &notice);
+        }
+    }
     let job = crate::runtime::agent_job(app, &record.chat_id, &record.bot_id, &message_id);
     let (app, agent) = (app.clone(), agent.clone());
     tokio::spawn(async move {
@@ -821,8 +959,9 @@ fn tell(app: &Arc<App>, agent: &Arc<Agent>, text: &str, failed: bool) {
     });
 }
 
-/// What an `agent` turn opens with, beside the agent's message the bot reads in the chat: what
-/// came of its work and what to do. None when a turn heard it already.
+/// What an `agent` turn opens with, beside the message the bot reads in the chat. For an agent
+/// that is done, to relay its report to the user and nothing more: the user reviews the work. For
+/// one that ended on its own, why, and what to do. None when a turn heard it already.
 pub fn wake_cue(app: &App, job: &crate::model::Job) -> Option<String> {
     let agent = app.coding_agents.all().into_iter().find(|agent| agent.record.lock().unwrap().unheard.as_deref() == Some(job.trigger_message_id.as_str()))?;
     let record = {
@@ -831,30 +970,51 @@ pub fn wake_cue(app: &App, job: &crate::model::Job) -> Option<String> {
         record.clone()
     };
     save(app);
-    let who = format!("{} ({}), the coding agent you started on “{}”", name(&record.kind), record.id, record.title);
-    let place = match &record.branch {
-        Some(branch) => format!("It works in {} on branch {branch}.", home_relative(&record.folder)),
-        None => format!("It works in {}.", home_relative(&record.folder)),
+    // The message that woke it says whether the agent was done or ended on its own.
+    let failed = match app.message(&job.chat_id, &job.trigger_message_id).map(|message| message.body) {
+        Some(Body::AgentMessage { failed, .. }) => failed,
+        _ => record.state == "failed",
     };
-    let cue = if record.state == "failed" {
+    Some(heard_cue(app, &record, &agent, failed))
+}
+
+/// What the bot hears about the agent, from the message that woke it: its report when done,
+/// why it ended when `failed`.
+pub(crate) fn heard_cue(app: &App, record: &Record, agent: &Agent, failed: bool) -> String {
+    let who = format!("{} ({}), the coding agent you started on “{}”", name(&record.kind), record.id, record.title);
+    // Why it ended, unless a message started it again before a turn heard it.
+    if failed && record.state != "failed" {
+        let cue = format!(
+            "[{who}, ended on its own; its message in the chat says why. It has been started again since and is {}. Tell the user why it \
+             ended in a line or two, unless you have already; do not start it again.]",
+            match record.state.as_str() {
+                "idle" => "done",
+                "stopped" => "stopped again",
+                state => state,
+            }
+        );
+        return without_secrets(app, cue);
+    }
+    let cue = if failed {
         let tail = agent.transcript.lock().unwrap().last_lines(12);
         let tail = if tail.trim().is_empty() { String::new() } else { format!(" Its last lines:\n{tail}\n") };
         format!(
-            "[{who}, has ended: {}. Its last message in the chat says why.{tail} Tell the user, or send it a message with coding_agent send to start it again on its session.]",
+            "[{who}, has ended on its own: {}. Its last message in the chat says why.{tail} Tell the user why in a line or two. When it ended \
+             for a passing reason, such as a lost connection, you may start it again on its session with coding_agent send and a message \
+             that asks it to go on, adding nothing of your own; do not take the job over or change it.]",
             record.outcome.as_deref().unwrap_or("it exited")
         )
     } else {
-        let changes = match record.changes {
-            Some(AgentChanges { files: 0, .. }) => " It changed no files.".to_string(),
-            Some(changes) => format!(" It changed {} file{} (+{} −{}).", changes.files, if changes.files == 1 { "" } else { "s" }, changes.added, changes.removed),
-            None => String::new(),
-        };
         let pull_request = record.pull_request.as_ref().map(|link| format!(" Its pull request: {link}.")).unwrap_or_default();
         format!(
-            "[{who}, is done; its message in the chat says what it did. {place}{changes}{pull_request} Check its work against what you asked (coding_agent read shows its transcript), then send it a follow-up with coding_agent send, or tell the user how it went.]"
+            "[{who}, is done; its message in the chat is its report to the user.{pull_request} Relay it to the user in your reply: its \
+             conclusion, its pull request's link, and the evidence it brought back, the commands it ran and what they printed, as it \
+             reported them. Say where its report leaves something out, such as no pull request or no command output, without filling it \
+             in. This turn only relays: use no tools, and do not open its code, its diff, or its transcript, run a build or a test, judge \
+             its work against the request, or send it a message. The user reviews the work and decides what comes next.]"
         )
     };
-    Some(without_secrets(app, cue))
+    without_secrets(app, cue)
 }
 
 /// What Auto-review hears about an agent's environment: the saved secrets in it.
@@ -866,7 +1026,7 @@ pub(crate) fn holds_secrets(names: &[String]) -> String {
 }
 
 /// Whether the agent may do what it asks: the bot's Access as it stands, then Auto-review, and
-/// the user on its row when the review asks.
+/// the user in the chat when the review asks.
 async fn approve(app: &Arc<App>, agent: &Arc<Agent>, approval: Approval) -> Result<(), String> {
     // Neither the review nor the card sees a saved secret the agent wrote out.
     let approval = match approval {
@@ -894,7 +1054,7 @@ async fn approve(app: &Arc<App>, agent: &Arc<Agent>, approval: Approval) -> Resu
                 return Ok(());
             }
             let mut description = format!(
-                "{who}, a coding agent this bot started, wants to run this shell command as the user on {runner_name}, with full filesystem, process, credential, and network access. Working directory: {}.",
+                "{who}, a coding agent this bot started, wants to run this shell command as the user on {runner_name}, with full filesystem, process, credential, and network access. Working directory: {}. Lorca asks every coding agent to push its work and open a pull request when it is done, unless the user's request says otherwise.",
                 home_relative(&folder)
             );
             if !record.secrets.is_empty() {
@@ -926,7 +1086,7 @@ async fn approve(app: &Arc<App>, agent: &Arc<Agent>, approval: Approval) -> Resu
     let cancel = tokio_util::sync::CancellationToken::new();
     let propose_rule = matches!(approval, Approval::Command { .. });
     let facts = match &approval {
-        Approval::Command { command } => crate::local_review::facts(app, command, &folder).await,
+        Approval::Command { command } => crate::local_review::facts(command, &folder).await,
         _ => Vec::new(),
     };
     let action = crate::plugins::review::Action { target_name: &runner_name, tool, description: &description, args: &args, script: None, facts: &facts, propose_rule };
@@ -936,29 +1096,53 @@ async fn approve(app: &Arc<App>, agent: &Arc<Agent>, approval: Approval) -> Resu
         crate::plugins::review::Outcome::Held { reason, .. } => return Err(crate::plugins::review::agent_note(&reason)),
         crate::plugins::review::Outcome::Ask { reason, rule } => (reason, rule),
     };
-    // One question at a time, on its row.
+    // Nobody watches the run that started it, so a question would wait for no one.
+    if record.unattended {
+        let why = reason.as_deref().unwrap_or("Auto-review is off, so every command asks");
+        return Err(format!(
+            "This needs the user's permission ({why}), and nobody is watching the run that started you, so it did not run. Go on \
+             with work that does not depend on it, or stop and name this action exactly in your last message, so the user \
+             can decide."
+        ));
+    }
+    // One question at a time.
     let _one = agent.asking.lock().await;
     if !agent.is_running() {
         return Err("Stopped".into());
     }
-    let always_rule = rule.clone().map(|text| crate::model::AutoReviewRule { id: uuid::Uuid::new_v4().to_string(), text, behavior: "allow".into(), tool: None });
-    let question = AgentQuestion { kind: "command".into(), command: Some(shown), reason, rule: always_rule.as_ref().map(|rule| rule.text.clone()) };
+    let always_rule = rule.map(|text| crate::model::AutoReviewRule { id: uuid::Uuid::new_v4().to_string(), text, behavior: "allow".into(), tool: None });
+    // The card is the bot's, so it says which of its agents asks.
+    let asks = if tool == "bash" { "asks to run this." } else { "asks for this." };
+    let who_asks = format!("{who}, the coding agent on “{}”, {asks}", without_secrets(app, record.title.clone()));
+    let reason = Some(match reason {
+        Some(reason) => format!("{who_asks} {reason}"),
+        None => who_asks,
+    });
     use crate::plugins::mcp::Decision;
-    match ask_on_card(app, agent, question, always_rule).await {
+    match ask_in_chat(app, agent, &bot.id, &runner_name, tool, &shown, reason, always_rule).await {
         Decision::Allowed | Decision::Always => Ok(()),
         Decision::Denied => Err("The user did not allow this in Lorca. Do not retry it; go on without it or stop and say what you needed.".into()),
         Decision::Expired => Err("Nobody answered in time, so it did not run. Go on without it or stop and say what you needed.".into()),
-        Decision::Dismissed => Err("The user wrote to the bot instead of answering, so it did not run. Go on without it or stop and say what you needed.".into()),
+        Decision::Dismissed => Err("Stopped".into()),
     }
 }
 
-/// Puts `question` on the agent's row and waits for the user's Allow or Deny from any Device
-/// (`chats.permission` names the row), as a command's card does.
-async fn ask_on_card(app: &Arc<App>, agent: &Arc<Agent>, question: AgentQuestion, always_rule: Option<crate::model::AutoReviewRule>) -> crate::plugins::mcp::Decision {
-    let (chat_id, message_id) = {
-        let record = agent.record.lock().unwrap();
-        (record.chat_id.clone(), record.message_id.clone())
-    };
+/// Asks the user whether the agent may do `shown`, on a card at the end of the chat as a command
+/// of the bot's own asks, and waits for the answer from any Device (`chats.permission` names the
+/// card). The agent's row reads `asking` meanwhile. The bot's turn does not wait on the card, so
+/// the user's messages to the bot leave it up; stopping the agent dismisses it.
+#[allow(clippy::too_many_arguments)]
+async fn ask_in_chat(
+    app: &Arc<App>,
+    agent: &Arc<Agent>,
+    bot_id: &str,
+    runner_name: &str,
+    tool: &str,
+    shown: &str,
+    reason: Option<String>,
+    always_rule: Option<crate::model::AutoReviewRule>,
+) -> crate::plugins::mcp::Decision {
+    let chat_id = agent.record.lock().unwrap().chat_id.clone();
     let cancel = tokio_util::sync::CancellationToken::new();
     // Stopping the agent stops the question.
     let watch = {
@@ -973,23 +1157,25 @@ async fn ask_on_card(app: &Arc<App>, agent: &Arc<Agent>, question: AgentQuestion
             }
         })
     };
-    let decision = crate::plugins::mcp::await_answer(app, &chat_id, &message_id, always_rule, &cancel, || {
-        *agent.question.lock().unwrap() = Some(question);
-        app.coding_agents.sync(app, agent);
-        if let Some(message) = app.message(&chat_id, &message_id) {
-            crate::push::permission(app, &message);
-        }
-    })
-    .await;
+    agent.asks.store(true, Ordering::SeqCst);
+    app.coding_agents.sync(app, agent);
+    let summary = crate::local_review::command_summary(shown);
+    let target = crate::local_review::LOCAL_TARGET_ID;
+    let decision = crate::plugins::mcp::ask_aside(app, &chat_id, bot_id, target, runner_name, tool, &summary, json!({ "command": shown }), reason, always_rule, &cancel).await;
     cancel.cancel();
     watch.abort();
-    *agent.question.lock().unwrap() = None;
+    agent.asks.store(false, Ordering::SeqCst);
     app.coding_agents.sync(app, agent);
     decision
 }
 
-/// `coding.transcript` and `coding.stop` for an agent on this Runner, from the local app or a
-/// sealed request: `{ chat_id, message_id }` names the row that started it.
+/// How long `coding.send` waits for the message to reach the agent before it answers, which a
+/// sealed request must do within 20 s; an agent that takes longer to start again goes on, and
+/// its row says how that went.
+const SEND_WAIT: Duration = Duration::from_secs(12);
+
+/// `coding.transcript`, `coding.send`, and `coding.stop` for an agent on this Runner, from the
+/// local app or a sealed request: `{ chat_id, message_id }` names the row that started it.
 pub async fn serve(app: &Arc<App>, verb: &str, body: &Value) -> Result<Value, String> {
     let chat_id = body["chat_id"].as_str().ok_or("missing chat_id")?;
     let message_id = body["message_id"].as_str().ok_or("missing message_id")?;
@@ -999,7 +1185,35 @@ pub async fn serve(app: &Arc<App>, verb: &str, body: &Value) -> Result<Value, St
     match verb {
         "coding.transcript" => {
             let items = agent.transcript.lock().unwrap().tail(APP_ITEMS);
-            Ok(json!({ "items": items, "card": app.coding_agents.card(app, &agent) }))
+            let queued = agent.queued.lock().unwrap().clone();
+            let record = agent.record();
+            // Whether a message can reach it: it runs, or a session waits to be resumed.
+            let open = agent.is_running() || (record.session.is_some() && record.state != "starting");
+            Ok(json!({ "items": items, "card": app.coding_agents.card(app, &agent), "queued": queued, "open": open }))
+        }
+        // The user writes to the agent on its page: the same path as the bot's `send`, taken up
+        // when it is done with what it does now, and in the chat as the user's message to it.
+        "coding.send" => {
+            let text = body["text"].as_str().map(str::trim).filter(|text| !text.is_empty()).ok_or("Write a message first")?.to_string();
+            let sending = {
+                let (app, agent, text) = (app.clone(), agent.clone(), text.clone());
+                tokio::spawn(async move { send(&app, &agent, &text, false, Sender::User).await })
+            };
+            match tokio::time::timeout(SEND_WAIT, sending).await {
+                Ok(Ok(sent)) => {
+                    sent?;
+                }
+                Ok(Err(error)) => return Err(error.to_string()),
+                Err(_) => {}
+            }
+            let record = agent.record();
+            let mut shown = without_secrets(app, text);
+            if shown.chars().count() > MESSAGE_CHARS {
+                shown = format!("{}…", shown.chars().take(MESSAGE_CHARS).collect::<String>());
+            }
+            let body = Body::AgentMessage { agent_id: record.id, agent_kind: record.kind, title: record.title, text: shown, failed: false };
+            app.upsert_message(Message::new(chat_id, Author::You, body), true);
+            Ok(json!({ "sent": true, "card": app.coding_agents.card(app, &agent) }))
         }
         "coding.stop" => {
             if !agent.is_open() {

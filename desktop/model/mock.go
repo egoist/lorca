@@ -487,12 +487,12 @@ func developerThread() []*Message {
 			Agent: &AgentRun{
 				ID: "agent-7d21e0b4", Kind: "claude", Title: "Docs: use mygo.json in the launcher examples",
 				Task:   "Update the launcher examples in the docs to read mygo.json instead of the old flags.",
-				Folder: "~/.lorca/worktrees/site-1a2b3c/docs-use-mygo-json-1f2e", Branch: "docs-use-mygo-json-1f2e", State: AgentIdle,
+				Folder: "~/Projects/site", Branch: "docs-use-mygo-json", State: AgentIdle,
 				PullRequest: "https://github.com/lorca-app/site/pull/7", Changes: &AgentChanges{Files: 4, Added: 12, Removed: 3},
 				Device: "Studio", StartedAt: minutesAgo(129), UpdatedAt: minutesAgo(101),
 			},
 		}}, minutesAgo(129)),
-		mockMessage(BotAuthor("bot-patch"), textBody("Claude Code is updating the examples in a worktree of its own."), minutesAgo(129)),
+		mockMessage(BotAuthor("bot-patch"), textBody("Claude Code is updating the examples in ~/Projects/site."), minutesAgo(129)),
 		mockMessage(BotAuthor("bot-patch"), Body{Kind: BodyAgentMessage, AgentMessage: &AgentMessage{
 			AgentID: "agent-7d21e0b4", AgentKind: "claude", Title: "Docs: use mygo.json in the launcher examples",
 			Text: "Updated the four launcher examples to read mygo.json, in English and Chinese. The docs build passes.\n\nOpened https://github.com/lorca-app/site/pull/7.",
@@ -507,11 +507,11 @@ func developerThread() []*Message {
 			Agent: &AgentRun{
 				ID: "agent-3f9a2c1d", Kind: "claude", Title: "Fix the broken docs link on the download page",
 				Task:   "Fix the broken docs link on the download page, with a test.",
-				Folder: "~/.lorca/worktrees/site-1a2b3c/fix-docs-link", Branch: "fix-docs-link", State: AgentWorking,
+				Folder: "~/Projects/site", Branch: "fix-docs-link", State: AgentWorking,
 				Device: "Studio", StartedAt: minutesAgo(11), UpdatedAt: minutesAgo(10),
 			},
 		}}, minutesAgo(11)),
-		mockMessage(BotAuthor("bot-patch"), textBody("Claude Code is fixing the link in a worktree of its own. I'll check its test when it's done."), minutesAgo(11)),
+		mockMessage(BotAuthor("bot-patch"), textBody("Claude Code is fixing the link in ~/Projects/site. I'll check its test when it's done."), minutesAgo(11)),
 		mockMessage(You, textBody("The Chinese download page has the same link. And have Codex add a dark mode toggle to Settings."), minutesAgo(6)),
 		mockMessage(BotAuthor("bot-patch"), Body{Kind: BodyTool, Tool: &ToolInvocation{
 			Name: "coding_agent", Summary: "Messaged Claude Code", Detail: "Fix the same link on the Chinese download page too, and cover it in the test.",
@@ -522,12 +522,17 @@ func developerThread() []*Message {
 			Agent: &AgentRun{
 				ID: "agent-b85e4f10", Kind: "codex", Title: "Settings: add a dark mode toggle",
 				Task:   "Add a dark mode toggle to the Settings page, after the Appearance row.",
-				Folder: "~/.lorca/worktrees/site-1a2b3c/dark-mode-toggle", Branch: "dark-mode-toggle", State: AgentAsking,
-				Question: &AgentQuestion{Command: "git push -u origin dark-mode-toggle", Reason: "Pushing sends the branch to GitHub, where others can see it.", Rule: "push coding agents' branches to GitHub", HasRule: true},
-				Device:   "Studio", StartedAt: minutesAgo(5), UpdatedAt: minutesAgo(1),
+				Folder: "~/Projects/site", Branch: "dark-mode-toggle", State: AgentAsking,
+				Device: "Studio", StartedAt: minutesAgo(5), UpdatedAt: minutesAgo(1),
 			},
 		}}, minutesAgo(5)),
 		mockMessage(BotAuthor("bot-patch"), textBody("I asked Claude Code to fix the Chinese page too. Codex is adding the dark mode toggle on a branch of its own."), minutesAgo(5)),
+		// What the asking agent asks: a card of its own at the end of the chat.
+		mockMessage(BotAuthor("bot-patch"), Body{Kind: BodyPermission, Request: &PermissionRequest{
+			PluginID: "computer", PluginName: "Studio", Tool: "bash", Summary: "$ git push -u origin dark-mode-toggle", Command: "git push -u origin dark-mode-toggle",
+			Reason: "Codex, the coding agent on “Settings: add a dark mode toggle”, asks to run this. Pushing sends the branch to GitHub, where others can see it.",
+			Rule:   "push coding agents' branches to GitHub", HasRule: true, Decision: DecisionPending,
+		}}, minutesAgo(1)),
 	}
 }
 
@@ -547,10 +552,10 @@ func MockAgentTranscript() []AgentItem {
 		{ID: "p1", Kind: "prompt", At: at, Text: "Fix the broken docs link on the download page, with a test.\n\n" +
 			"The \"Install the CLI\" link points at /docs/install, which moved to /docs/cli/install. " +
 			"Add a test in tests/links.test.ts that fails on any link to a page the site doesn't build.\n\n" +
-			"You work in ~/.lorca/worktrees/site-1a2b3c/fix-docs-link, a worktree of ~/Projects/site on the branch fix-docs-link. " +
+			"You work in ~/Projects/site. " +
 			"Commit your work there when it is done; don't push unless asked.\n\n" +
 			"When you are done, say in a few lines what you changed and how you checked it."},
-		{ID: "s1", Kind: "status", At: at, Text: "Worktree ready on fix-docs-link"},
+		{ID: "s1", Kind: "status", At: at, Text: "Working in ~/Projects/site on main"},
 		{ID: "th1", Kind: "thought", At: at, Seconds: &thought, Text: "The link is probably in the download page's install section. I'll search for the old path, then read the page and the existing link tests."},
 		{ID: "x1", Kind: "text", At: at, Text: "I'll find where the old `/docs/install` path is used first."},
 		tool("t1", "search", "/docs/install", "done", "src/pages/download.astro:42\nsrc/pages/zh/download.astro:40"),
@@ -627,7 +632,8 @@ func devopsThread() []*Message {
 }
 
 // MockBackupPhrase is the demo's backup phrase, for onboarding without a CLI.
-var MockBackupPhrase = []string{"k4mq", "7rth", "2bnz", "wq5f", "j3xd", "pv82", "ct6m", "9hsa", "e7lw", "4knr", "zb3u", "m5yq"}
+// It is a real one: 32 bytes in base32, 13 groups of four, as the CLI makes them.
+var MockBackupPhrase = []string{"dla2", "rose", "5nga", "6a3k", "o3qi", "empu", "7iaz", "nspd", "jaow", "zymz", "xkqs", "t3ua", "g5pq"}
 
 // mockPlaybooks are the demo's skills: two of the Developer's and a draft it proposed, and one for
 // the Launch room.

@@ -343,6 +343,7 @@ mod tests {
     #[test]
     fn phrase_round_trips() {
         let identity = Identity::generate();
+        assert_eq!(identity.phrase().len(), 13);
         let phrase = identity.phrase().join(" ");
         assert_eq!(secret_from_phrase(&phrase).unwrap(), identity.master);
         let again = Identity::from_master(secret_from_phrase(&phrase.to_uppercase()).unwrap());

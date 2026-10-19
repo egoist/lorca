@@ -140,6 +140,8 @@ enum IdentityCommand {
     },
     /// Print the identity id and public keys.
     Show,
+    /// Print the backup phrase again. Only on the Device that holds the identity.
+    Phrase,
 }
 
 #[derive(Subcommands, Debug)]
@@ -356,6 +358,8 @@ async fn main() -> anyhow::Result<()> {
             // The coding agents the last run left: their cards and handles stay, and one that
             // was done takes a follow-up.
             lorca::coding::load(&app);
+            // Their pull requests' states follow GitHub's, until merged or closed.
+            lorca::coding::pull::watch(app.clone());
             #[cfg(unix)]
             tokio::spawn(stop_on_signal(app.clone()));
             // Installed marketplace plugins follow the index in use: this build's, or a later
@@ -410,6 +414,12 @@ async fn main() -> anyhow::Result<()> {
                     }
                     None => println!("No identity on this Device. Run `lorca identity new`."),
                 }
+                Ok(())
+            }
+            IdentityCommand::Phrase => {
+                let phrase = identity::phrase(&app)?;
+                println!("Backup phrase (anyone who has it has the identity):\n");
+                println!("  {}", phrase.join(" "));
                 Ok(())
             }
         },

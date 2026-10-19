@@ -3,6 +3,7 @@
 //! binary adds the local websocket server and the command line; the phone links the core
 //! alone through `lorca-mobile`.
 
+pub mod agent_roster;
 pub mod api;
 pub mod app;
 #[cfg(feature = "cli")]

@@ -15,7 +15,7 @@ import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSequence, with
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import { ShimmerView } from "../../modules/lorca-core/ShimmerView";
-import { agentName, agentStartRow, agentTitle, agentWrote, canBeQuoted, isAgentRow, isLive, isSentMessage, showsCard, showsSpeakers, type AgentRun, type Author, type Body, type Bot, type Chat, type CommandRun, type Message } from "../core/model";
+import { agentMessageFromUser, agentStartRow, agentTitle, agentWrote, canBeQuoted, isAgentRow, isLive, isSentMessage, showsCard, showsSpeakers, type Author, type Body, type Bot, type Chat, type CommandRun, type Message } from "../core/model";
 import { engine } from "../core/engine";
 import { useStore } from "../core/store";
 import { language, t, useLanguage } from "../i18n";
@@ -49,10 +49,10 @@ export type Row =
   | { key: string; type: "notice"; text: string; groupStart: boolean }
   | { key: string; type: "permission"; message: Message; body: Extract<Body, { kind: "permission" }>; bot: Bot | undefined; groupStart: boolean }
   | { key: string; type: "command"; message: Message; run: CommandRun; bot: Bot | undefined; groupStart: boolean }
-  /// A coding agent's marker: the start or a message the bot sent it ("Messaged ⬢ Title"), or what
-  /// it said ("Message from ⬢ Title"). `agent` is the start row's card, which asks under the marker;
-  /// `start` is the row that started it, whose page a tap opens, when it is loaded.
-  | { key: string; type: "agent"; message: Message; incoming: boolean; title: string; kind: string; text: string; failed: boolean; agent: AgentRun | undefined; start: string | undefined; bot: Bot | undefined; groupStart: boolean }
+  /// A coding agent's marker: the start or a message the bot sent it ("Messaged ⬢ Title"), what
+  /// the user wrote it from its page (`byYou`, "You messaged ⬢ Title"), or what it said ("Message
+  /// from ⬢ Title"). `start` is the row that started it, whose page a tap opens, when it is loaded.
+  | { key: string; type: "agent"; message: Message; incoming: boolean; byYou: boolean; title: string; kind: string; text: string; failed: boolean; start: string | undefined; groupStart: boolean }
   | { key: string; type: "draft"; message: Message; body: DraftBody; bot: Bot | undefined; groupStart: boolean }
   | { key: string; type: "working"; bots: Bot[] }
   | { key: string; type: "status"; text: string };
@@ -96,22 +96,19 @@ export function buildRows(chat: Chat, bots: Map<string, Bot>, workingBotIds: str
       case "tool":
         if (isAgentRow(message.body)) {
           const body = message.body;
-          const bot = message.author.kind === "bot" ? bots.get(message.author.bot_id) : undefined;
-          const own = body.agent;
-          const start = own ? message : agentStartRow(chat.messages, body.target_agent_id ?? "");
+          const start = body.agent ? message : agentStartRow(chat.messages, body.target_agent_id ?? "");
           const agent = start?.body.kind === "tool" ? start.body.agent : undefined;
           rows.push({
             key: message.id,
             type: "agent",
             message,
             incoming: false,
+            byYou: false,
             title: agent ? agentTitle(agent) : t("a coding agent"),
             kind: agent?.kind ?? "",
             text: agentWrote(body),
             failed: false,
-            agent: own,
             start: start?.id,
-            bot,
             groupStart,
           });
         } else if (message.body.run) {
@@ -138,18 +135,18 @@ export function buildRows(chat: Chat, bots: Map<string, Bot>, workingBotIds: str
       }
       case "agent_message": {
         const start = agentStartRow(chat.messages, message.body.agent_id);
+        const byYou = agentMessageFromUser(message);
         rows.push({
           key: message.id,
           type: "agent",
           message,
-          incoming: true,
+          incoming: !byYou,
+          byYou,
           title: message.body.title || t("a coding agent"),
           kind: message.body.agent_kind,
           text: message.body.text,
           failed: !!message.body.failed,
-          agent: undefined,
           start: start?.id,
-          bot: message.author.kind === "bot" ? bots.get(message.author.bot_id) : undefined,
           groupStart,
         });
         previousAuthorKey = null;
@@ -878,109 +875,44 @@ export const CommandRow = memo(function CommandRow({
   );
 });
 
+/// "Message from", "You messaged", or "Messaged": the words before an agent marker's title.
+export function agentRowLabel(row: Extract<Row, { type: "agent" }>): string {
+  return row.incoming ? t("Message from") : row.byYou ? t("You messaged") : t("Messaged");
+}
+
 /// A coding agent's marker, after the bot-to-bot one: "Messaged ⬢ Title" for the start and for a
-/// message the bot sent it, "Message from ⬢ Title" for what it said, the agent's mark where a bot's
+/// message the bot sent it, "You messaged ⬢ Title" for what the user wrote it from its page,
+/// "Message from ⬢ Title" for what it said, the agent's mark where a bot's
 /// avatar would be, and the message's first line under it (red when the agent ended on its own). A
-/// tap opens the agent's page. While it asks, its question sits under the marker as a card like a
-/// command's: who asks, the command on one line in a code block that opens the whole command, why,
-/// the answers, and the rule Always allow adds; in a group the card carries the bot's avatar.
-export const AgentRow = memo(function AgentRow({
-  row,
-  isGroup,
-  onOpen,
-  onDecide,
-}: {
-  row: Extract<Row, { type: "agent" }>;
-  isGroup: boolean;
-  onOpen: (row: Extract<Row, { type: "agent" }>) => void;
-  onDecide: (message: Message, decision: "allow" | "always" | "deny") => void;
-}) {
+/// tap opens the agent's page.
+export const AgentRow = memo(function AgentRow({ row, onOpen }: { row: Extract<Row, { type: "agent" }>; onOpen: (row: Extract<Row, { type: "agent" }>) => void }) {
   useLanguage();
   const p = usePalette();
-  const label = row.incoming ? t("Message from") : t("Messaged");
+  const label = agentRowLabel(row);
   const preview = firstLine(row.text).replace(/\*\*|`/g, "");
-  const question = row.agent?.state === "asking" ? row.agent.question : undefined;
   return (
-    <View>
-      <Pressable
-        style={({ pressed }) => [styles.centered, { paddingTop: row.groupStart ? 14 : 6, opacity: pressed ? 0.5 : 1 }]}
-        onPress={() => onOpen(row)}
-        accessibilityRole="button"
-        accessibilityLabel={`${label} ${row.title}${preview ? `: ${preview}` : ""}`}
-      >
-        <View style={[styles.markerLine, { maxWidth: 320 }]}>
-          <Text style={[styles.caption, { color: p.secondaryLabel }]}>{label} </Text>
-          <AgentLogo kind={row.kind} size={13} color={p.secondaryLabel} />
-          <Text style={[styles.caption, { color: p.secondaryLabel, fontWeight: "600", flexShrink: 1 }]} numberOfLines={1}>
-            {" "}
-            {row.title}
-          </Text>
-        </View>
-        {preview ? (
-          <Text style={[styles.caption, { color: row.failed ? p.red : p.tertiaryLabel, marginTop: 3, maxWidth: 300, textAlign: "center" }]} numberOfLines={1}>
-            {preview}
-          </Text>
-        ) : null}
-      </Pressable>
-      {row.agent && question ? <AgentAskCard message={row.message} agent={row.agent} bot={row.bot} isGroup={isGroup} onDecide={onDecide} /> : null}
-    </View>
+    <Pressable
+      style={({ pressed }) => [styles.centered, { paddingTop: row.groupStart ? 14 : 6, opacity: pressed ? 0.5 : 1 }]}
+      onPress={() => onOpen(row)}
+      accessibilityRole="button"
+      accessibilityLabel={`${label} ${row.title}${preview ? `: ${preview}` : ""}`}
+    >
+      <View style={[styles.markerLine, { maxWidth: 320 }]}>
+        <Text style={[styles.caption, { color: p.secondaryLabel }]}>{label} </Text>
+        <AgentLogo kind={row.kind} size={13} color={p.secondaryLabel} />
+        <Text style={[styles.caption, { color: p.secondaryLabel, fontWeight: "600", flexShrink: 1 }]} numberOfLines={1}>
+          {" "}
+          {row.title}
+        </Text>
+      </View>
+      {preview ? (
+        <Text style={[styles.caption, { color: row.failed ? p.red : p.tertiaryLabel, marginTop: 3, maxWidth: 300, textAlign: "center" }]} numberOfLines={1}>
+          {preview}
+        </Text>
+      ) : null}
+    </Pressable>
   );
 });
-
-/// What a coding agent asks while Auto-review asks, as a command's card: who asks, the command on
-/// one line in a code block that opens the whole command, why, the answers, and the rule Always
-/// allow adds. Under its marker in the chat, and atop its page. In a group the card sits in the
-/// bubbles' column, the bot's avatar beside its bottom edge.
-export function AgentAskCard({ message, agent, bot, isGroup, onDecide }: { message: Message; agent: AgentRun; bot: Bot | undefined; isGroup: boolean; onDecide: (message: Message, decision: "allow" | "always" | "deny") => void }) {
-  useLanguage();
-  const p = usePalette();
-  const router = useRouter();
-  const question = agent.question;
-  if (!question) return null;
-  const name = agentName(agent.kind);
-  const showsAvatar = isGroup && message.author.kind === "bot";
-  const choices: [string, "allow" | "always" | "deny"][] = question.rule
-    ? [[t("Allow once"), "allow"], [t("Always allow"), "always"], [t("Deny"), "deny"]]
-    : [[t("Allow once"), "allow"], [t("Deny"), "deny"]];
-  return (
-    <View style={[styles.messageRow, { paddingTop: 8 }]}>
-      {showsAvatar && (
-        <View style={{ width: AVATAR + GUTTER, alignSelf: "flex-end" }}>
-          <BotAvatar bot={bot} size={AVATAR} />
-        </View>
-      )}
-      <View style={[styles.permission, { backgroundColor: p.cell, borderColor: p.separator }]}>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-          <AgentLogo kind={agent.kind} size={15} color={p.label} />
-          <Text style={[styles.permissionTitle, { color: p.label, flex: 1 }]} numberOfLines={2}>
-            {t("{agent} wants to run a command", { agent: name })}
-          </Text>
-        </View>
-        {question.command ? (
-          <Pressable
-            onPress={() => router.push({ pathname: "/command/[id]", params: { id: message.id, chat: message.chat_id, title: t("{who}'s command", { who: name }) } })}
-            style={({ pressed }) => [styles.command, { backgroundColor: p.code, opacity: pressed ? 0.6 : 1 }]}
-            accessibilityRole="button"
-            accessibilityLabel={t("Show the full command")}
-          >
-            <Text style={[styles.commandText, { color: p.label }]} numberOfLines={1}>
-              {`$ ${firstLine(question.command)}`}
-            </Text>
-          </Pressable>
-        ) : null}
-        {question.reason ? <Text style={[styles.reasonText, { color: p.secondaryLabel }]}>{question.reason}</Text> : null}
-        <View style={{ flexDirection: "row", gap: 8, marginTop: 4 }}>
-          {choices.map(([title, decision]) => (
-            <Pressable key={decision} onPress={() => onDecide(message, decision)} style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill }]}>
-              <Text style={{ color: decision === "deny" ? p.label : p.tint, fontSize: 13, fontWeight: "600" }}>{title}</Text>
-            </Pressable>
-          ))}
-        </View>
-        {question.rule ? <Text style={[styles.ruleNote, { color: p.secondaryLabel }]}>{t("Always allow adds the rule “{rule}”.", { rule: question.rule })}</Text> : null}
-      </View>
-    </View>
-  );
-}
 
 /// A running command's last lines: a code block like the command's that grows to six lines and
 /// then scrolls, the newest line in view. An edge with more lines past it fades out: Android

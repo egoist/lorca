@@ -1,10 +1,10 @@
 ---
 title: Coding agents
-description: A bot hands a coding job to Claude Code, Codex, OpenCode, pi, or fx on its Runner, and tells you how it went when the agent is done.
+description: A bot passes your coding request on to Claude Code, Codex, OpenCode, pi, or fx on its Runner; the agent reports back with its pull request, and the bot relays the report to you.
 icon: CodeXml
 ---
 
-A bot can hand a coding job to a coding agent on its Runner: **Claude Code**, **Codex**, **OpenCode**, **pi**, or Vercel's **fx**. The agent works on its own in a branch of its own; the bot tells you it started it, checks its work when the agent is done, and tells you how it went, with the pull request when there is one.
+A bot can hand a coding job to a coding agent on its Runner: **Claude Code**, **Codex**, **OpenCode**, **pi**, or Vercel's **fx**. The bot passes on your request in your words and tells you it started the agent. The agent decides how to do the job, pushes its work, opens a pull request, and reports to you, with the commands it ran and what they printed; the bot then relays that report. You review the work; the bot does not check it for you.
 
 ## Start one
 
@@ -12,9 +12,9 @@ Ask the bot:
 
 > Fix the flaky login test in ~/dev/app and open a pull request.
 
-The bot gives the job a short title and a brief, starts the agent, and the chat shows **Messaged ⬢ Login: fix the flaky test** with the agent's logo. Starting one needs **Shell commands** in the bot's [Access](/docs/access).
+The bot gives the job a short title, passes on your request with where the repository is, starts the agent, and the chat shows **Messaged ⬢ Login: fix the flaky test** with the agent's logo. Starting one needs **Shell commands** in the bot's [Access](/docs/access).
 
-In a git repository the agent never works in your checkout. It gets a worktree of its own in Lorca's folder, on a new branch made from the repository's current commit, named after the job. A later job can go on in the same branch. A folder that isn't a repository is worked in as it is.
+The bot adds no plan, checklist, or instructions of its own. The agent works in the repository the bot names, as it would if you started it there in a terminal: it decides how, where, and on which branch, a worktree of its own included, and how to check its work. Unless you say otherwise, it pushes its work and opens a pull request. Anything you want about how, such as keeping your checkout untouched or not opening a pull request, say in your request, and it reaches the agent in your words.
 
 ## Which agent
 
@@ -22,18 +22,18 @@ Each computer that runs bots keeps its own list of the five, in your order of pr
 
 ## What it may do
 
-Every command the agent runs goes through the bot's Access and [Auto-review](/docs/auto-review), as the bot's own commands do. Commands that only read, and work inside its worktree, run at once; a push or a deploy is weighed against what you asked for. When Auto-review asks you, the card under the agent's marker reads "Claude Code wants to run a command" with the command, **Allow once**, **Always allow**, and **Deny**, on any of your devices.
+Every command the agent runs goes through the bot's Access and [Auto-review](/docs/auto-review), as the bot's own commands do. Commands that only read, and work inside its folder, run at once; a push or a deploy is weighed against what you asked for. When Auto-review asks you, the card under the agent's marker reads "Claude Code wants to run a command" with the command, **Allow once**, **Always allow**, and **Deny**, on any of your devices.
 
 A bot can give an agent [secrets](/docs/secrets) it saved for commands, such as `NPM_TOKEN` to publish a package. The agent has them in its environment; its transcript and messages show their names, never their values.
 
 ## Follow its work
 
-Click the agent's marker in the chat, or its row under **Coding** in the chat's details, to open its page: what the bot asked, what it thought and said, the files it explored, the commands it ran, the edits it made with lines added and removed, and its plan, as they happen. The page shows its branch and pull request, and **Stop** while it works. It is read-only: to change course, tell the bot, which sends the agent a follow-up.
+Click the agent's marker in the chat, or its row under **Coding** in the chat's details, to open its page: what the bot asked, what it thought and said, the files it explored, the commands it ran, the edits it made with lines added and removed, and its plan, as they happen. The page shows its branch and pull request, and **Stop** while it works. It is read-only: to change course, tell the bot, which passes your words on to the agent.
 
-The **Coding** list shows each agent's title and how it stands: **Working**, **Needs attention** (it waits for your answer), **Ready for review** (done, with a pull request), **Finished**, **Run failed**, or **Stopped**.
+The **Coding** list shows each agent's title and how it stands: **Working**, **Needs attention** (it waits for your answer), **Ready for review** (done, with a pull request), **Draft** (its pull request is a draft), **Merged** or **Closed** (its pull request was merged or closed on GitHub), **Finished**, **Run failed**, or **Stopped**. Agents that worked on the same pull request are one row.
 
 ## When it is done
 
-When the agent finishes, what it said lands in the chat as **Message from ⬢ Login: fix the flaky test**, and the bot picks it up: it checks the work against what you asked, sends the agent a follow-up if something is missing, and tells you how it went. An agent that stops on its own says why the same way.
+When the agent finishes, its report lands in the chat as **Message from ⬢ Login: fix the flaky test** and notifies you as a reply does: what it did, the commands it ran to check it with what they printed, and its pull request's link. Click it for the whole report and transcript. The bot then relays the report to you in its own reply: the agent's conclusion, the pull request, and the commands it ran with their results, and what the report leaves out. That reply is only a relay: the bot doesn't read the code, build, test, or judge the work, and doesn't send the agent new instructions; if something is missing, tell the bot and it passes that on to the agent. An agent that stops on its own says why the same way, and the bot tells you what happened.
 
-**Stop** in the chat stops the chat's coding agents along with the bot's work. Quitting Lorca stops the agents at work; one that was done can take a follow-up later and picks up where it left off. The agent's run time counts toward the [limits](/docs/limits) of the turn that started it.
+**Stop** in the chat stops the chat's coding agents along with the bot's work. Quitting Lorca stops the agents at work; one that was done can take another message later and picks up where it left off. The agent's run time counts toward the [limits](/docs/limits) of the turn that started it.
