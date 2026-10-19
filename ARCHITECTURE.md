@@ -114,6 +114,7 @@ One doc per subject under `docs/architecture/`, each short enough to read in one
 | [macOS chat](docs/architecture/macos-chat.md) | Transcript, composer, output previews, working and read state in AppKit |
 | [Windows and Linux app](docs/architecture/desktop-app.md) | The MyGo app: its model, host, and native views, title bar, commands, updates, development and builds |
 | [Phone app](docs/architecture/phone-app.md) | The Expo app over the Rust core: the native module, pairing, relay status, attachments, dictation, notifications, turns |
+| [Phone layout](docs/architecture/phone-layout.md) | The phone's home tabs (Bots, Devices, Search) and a tablet's sidebar and pane |
 | [Phone releases and updates](docs/architecture/phone-updates.md) | TestFlight builds, Android APK releases, and the Android app's self-update: the daily check and offer, the progress dialog, the package installer |
 | [Website](docs/architecture/website.md) | `web/`: the site, its docs, and the install scripts it serves |
 | [Languages](docs/architecture/languages.md) | English and Simplified Chinese in each app, and what the CLI words |

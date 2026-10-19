@@ -1061,4 +1061,6 @@ export const zh: Record<string, string> = {
   "Installed · {version}": "已安装 · {version}",
   "Installed": "已安装",
   "None installed": "均未安装",
+  "Bots": "智能体",
+  "Search your chats and messages.": "搜索你的聊天和消息。",
 };
