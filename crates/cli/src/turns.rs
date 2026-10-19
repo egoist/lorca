@@ -2319,9 +2319,9 @@ fn with_mention_ids(app: &App, text: &str, mentions: &[String]) -> String {
 
 // MARK: - Tools
 
-struct ListTeammates {
-    app: Arc<App>,
-    chat_id: String,
+pub(crate) struct ListTeammates {
+    pub(crate) app: Arc<App>,
+    pub(crate) chat_id: String,
 }
 
 #[async_trait]
@@ -2331,8 +2331,9 @@ impl Tool for ListTeammates {
     }
     fn description(&self) -> &str {
         "List the other bots on this account: their id, name, what they are good at, which Runner they run on, whether that \
-         Runner is online, and the provider, model, and thinking they run with. Also lists the account's Runners, the \
-         machines a bot can run on (name, id, platform, online), for create_bot and edit_bot's runner."
+         Runner is online, and the provider, model, and thinking they run with, and the coding agents each has at work (id, title, state, chat, Runner, \
+         folder, branch, pull request). Also lists the account's Runners, the machines a bot can run on (name, id, platform, \
+         online), for create_bot and edit_bot's runner."
     }
     fn parameters(&self) -> Value {
         json!({ "type": "object", "properties": {}, "additionalProperties": false })
@@ -2341,6 +2342,8 @@ impl Tool for ListTeammates {
         let chat = self.app.chat(&self.chat_id);
         let bots = self.app.state.lock().unwrap().bots.clone();
         let this = self.app.this_device_id();
+        let now = crate::config::now_secs();
+        let live: Vec<crate::agent_roster::Listed> = crate::agent_roster::account(&self.app).into_iter().filter(|listed| listed.is_live(now)).collect();
         let runners: Vec<Value> = runners(&self.app)
             .iter()
             .map(|d| {
@@ -2370,6 +2373,19 @@ impl Tool for ListTeammates {
                     "thinking": bot.thinking.as_deref().unwrap_or("default"),
                     "online": self.app.device_is_online(&bot.runner_id),
                     "in_this_chat": chat.as_ref().map(|c| c.meta.bot_ids.contains(&bot.id)).unwrap_or(false),
+                    // What it has at work: coding_agent list with scope account says the rest.
+                    "coding_agents": live.iter().filter(|listed| listed.bot_id == bot.id).map(|listed| json!({
+                        "id": listed.agent.id,
+                        "kind": listed.agent.kind,
+                        "title": listed.agent.title,
+                        "state": crate::agent_roster::state_words(&listed.agent),
+                        "chat": listed.chat_title,
+                        "chat_id": listed.chat_id,
+                        "runner": listed.agent.device,
+                        "folder": listed.agent.folder,
+                        "branch": listed.agent.branch,
+                        "pull_request": listed.agent.pull_request,
+                    })).collect::<Vec<_>>(),
                 })
             })
             .collect();

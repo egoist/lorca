@@ -22,26 +22,33 @@ pub(crate) struct Place {
     pub branch: Option<String>,
     /// The commit its work starts from, which its changes count from.
     pub base: Option<String>,
+    /// The repository it is a clone of, from its `origin` remote: "github.com/egoist/lorca".
+    pub repository: Option<String>,
 }
 
 /// The folder for an agent: `folder`, relative to `workdir` (the bot's working directory, where
-/// it also defaults to), with its branch and commit when it is in a repository.
+/// it also defaults to), with its branch, commit, and repository when it is in one.
 pub(crate) async fn prepare(workdir: &Path, folder: Option<&str>) -> Result<Place, String> {
     let folder = resolve(workdir, folder);
     if !folder.is_dir() {
         return Err(format!("{} is not a folder on this Runner", super::home_relative(&folder)));
     }
     let base = git(&folder, &["rev-parse", "HEAD"]).await.ok();
-    let branch = match base {
-        Some(_) => branch(&folder).await,
-        None => None,
+    let (branch, repository) = match base {
+        Some(_) => (branch(&folder).await, repository(&folder).await),
+        None => (None, None),
     };
-    Ok(Place { folder, branch, base })
+    Ok(Place { folder, branch, base, repository })
 }
 
 /// The branch checked out in `folder`, none when it is not on one.
 pub(crate) async fn branch(folder: &Path) -> Option<String> {
     git(folder, &["branch", "--show-current"]).await.ok().filter(|branch| !branch.is_empty())
+}
+
+/// The repository `folder` is a clone of, from its `origin` remote.
+pub(crate) async fn repository(folder: &Path) -> Option<String> {
+    git(folder, &["remote", "get-url", "origin"]).await.ok().and_then(|remote| crate::agent_roster::repository_of_remote(&remote))
 }
 
 /// `folder` as a path: `~/…`, absolute, or relative to `workdir`.
@@ -134,11 +141,14 @@ mod tests {
         let changes = changes(&place.folder, place.base.as_deref().unwrap()).await.unwrap();
         assert_eq!(changes, AgentChanges { files: 2, added: 3, removed: 0 });
         assert_eq!(branch(&place.folder).await.as_deref(), Some("fix-login"));
+        assert_eq!(place.repository, None);
+        git(&repo, &["remote", "add", "origin", "git@github.com:acme/shop.git"]).await.unwrap();
+        assert_eq!(prepare(&scratch, Some("shop")).await.unwrap().repository.as_deref(), Some("github.com/acme/shop"));
 
         let plain = scratch.join("notes");
         std::fs::create_dir_all(&plain).unwrap();
         let place = prepare(&scratch, Some("notes")).await.unwrap();
-        assert_eq!((place.folder, place.branch, place.base), (std::fs::canonicalize(&plain).unwrap(), None, None));
+        assert_eq!((place.folder, place.branch, place.base, place.repository), (std::fs::canonicalize(&plain).unwrap(), None, None, None));
         assert!(prepare(&scratch, Some("missing")).await.is_err());
         let _ = std::fs::remove_dir_all(&scratch);
     }

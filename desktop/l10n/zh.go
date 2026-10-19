@@ -1517,4 +1517,7 @@ var zh = map[string]string{
 	"Bot Settings":                    "智能体设置",
 	"Bot Settings…":                   "智能体设置…",
 	"No skills yet. Add one and the bot can follow it whenever it fits.": "还没有技能。添加一个，智能体就能在合适的时候照着做。",
+	"Coding agents":      "编程智能体",
+	"Coding agents (%d)": "编程智能体（%d）",
+	"No coding agents":   "没有编程智能体",
 }

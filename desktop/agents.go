@@ -265,6 +265,23 @@ func (w *appWindow) presentAgentPage(chatID, messageID string) {
 	w.present(func(c *ui.Context, s *sheet) { t.view(c, s, w) }, t.close)
 }
 
+// presentListedAgent shows the page of an agent from the account's list: from its row when its
+// chat is loaded here, else from the list's card, on its Runner as the card names it.
+func (w *appWindow) presentListedAgent(listed model.ListedAgent) {
+	if chat := store.Chat(listed.ChatID); chat != nil && model.AgentOf(chat.Message(listed.MessageID)) != nil {
+		w.presentAgentPage(listed.ChatID, listed.MessageID)
+		return
+	}
+	if listed.Agent == nil || !listed.Agent.Started() {
+		return
+	}
+	here := store.ThisDevice()
+	remote := here == nil || listed.Agent.DeviceID != here.ID
+	t := &agentPage{chatID: listed.ChatID, messageID: listed.MessageID, remote: remote, card: listed.Agent, open: map[string]bool{}}
+	t.load()
+	w.present(func(c *ui.Context, s *sheet) { t.view(c, s, w) }, t.close)
+}
+
 // subtitle is "Claude Code · Working · fix-login", and the Runner's name when it is another
 // Device.
 func (t *agentPage) subtitle(agent *model.AgentRun) string {

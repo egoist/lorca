@@ -1646,8 +1646,12 @@ type AgentRun struct {
 	PullRequest string
 	Changes     *AgentChanges
 	Device      string
-	StartedAt   time.Time
-	UpdatedAt   time.Time
+	// DeviceID is the Runner it runs on, by Device id.
+	DeviceID string
+	// Repository is its folder's git origin, as "github.com/owner/repo".
+	Repository string
+	StartedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 // Name is its product's name.
