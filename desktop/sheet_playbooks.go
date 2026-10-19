@@ -17,14 +17,10 @@ import (
 // PlaybookViewController, and PlaybookCaptureViewController: the list in the inspector, a sheet per
 // skill, and Save as Skill on a message.
 
-// inspectorSkills are the skills of the bot in a DM, or of the group, hidden while there are none:
+// inspectorSkills are the skills of a bot, in its settings, or of a group, hidden while there are none:
 // past five rows the rest wait behind Show More. A row opens its skill, and its menu exports or
 // deletes it; + adds one.
-func (m *mainWindow) inspectorSkills(c *ui.Context, chat *model.Chat, members []*model.Bot) {
-	scope, ok := model.SkillScope(chat, members)
-	if !ok {
-		return
-	}
+func (m *mainWindow) inspectorSkills(c *ui.Context, scope model.PlaybookScope) {
 	skills := store.Skills(scope)
 	if len(skills) == 0 {
 		return

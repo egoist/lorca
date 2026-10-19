@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -8,22 +9,30 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// A DM shows its bot's skills and a group its own, drafts first; a chat with none shows no section.
-// A row opens the skill's sheet, which says who can use it.
+// A bot's settings show its skills and a group's inspector its own, drafts first; with none there
+// is no section. A row opens the skill's sheet, which says who can use it.
 func TestInspectorSkills(t *testing.T) {
 	m := demoWindow(t)
 	m.selectChat("chat-patch")
-	// Tall enough for the Skills section under the developer's coding agents.
 	tt := ui.NewTester(m.frame(m.view), 1180, 1100)
 	settle(tt)
+	if tt.HasText("release-notes") {
+		t.Error("the DM's inspector shows the bot's skills, which are in its settings")
+	}
+	m.presentBotSettings("bot-patch")
+	settleTransitions(tt)
 	wantText(t, tt, L("Skills"), "flaky-tests", "release-notes", "ship-checklist", L("Draft"))
 	renderBoth(t, tt, "skills-inspector")
+	click(t, tt, L("Done"))
+	settleTransitions(tt)
 
-	m.selectChat("chat-scout")
-	settle(tt)
-	if tt.HasText(L("Skills")) {
+	m.presentBotSettings("bot-scout")
+	settleTransitions(tt)
+	if tt.HasText(strings.ToUpper(L("Skills"))) {
 		t.Errorf("a bot without skills shows the section: %q", tt.Texts())
 	}
+	click(t, tt, L("Done"))
+	settleTransitions(tt)
 	m.selectChat("chat-relay")
 	settle(tt)
 	wantText(t, tt, "launch-post")
@@ -33,6 +42,8 @@ func TestInspectorSkills(t *testing.T) {
 
 	m.selectChat("chat-patch")
 	settle(tt)
+	m.presentBotSettings("bot-patch")
+	settleTransitions(tt)
 	if err := tt.Click("release-notes"); err != nil {
 		t.Fatal(err)
 	}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/egoist/lorca/desktop/model"
@@ -57,7 +58,7 @@ func TestInspectorLeavesDecisionModelsOut(t *testing.T) {
 	store.SetBotRuntime(bot.ID, "opencode", "", "")
 	tt := ui.NewTester(func(c *ui.Context) {
 		applyTheme(c)
-		m.inspectorRuntime(c, store.Bot("bot-nova"), store.Chat("chat-nova"))
+		m.inspectorRuntime(c, store.Bot("bot-nova"))
 	}, 360, 400)
 	settle(tt)
 	if err := tt.Click("OpenCode Zen"); err != nil {
@@ -73,5 +74,45 @@ func TestInspectorLeavesDecisionModelsOut(t *testing.T) {
 	}
 	if got := tt.Menu(); slices.Contains(got, "Jev 1.13") || slices.Contains(got, "Jev 1.13 Free") || !slices.Contains(got, "Kimi K3") {
 		t.Errorf("models %q", got)
+	}
+}
+
+// The DM inspector shows what goes on in the chat; a click on its bot opens the bot's settings,
+// where what it runs with, its memory, and its plugins are.
+func TestInspectorBotOpensSettings(t *testing.T) {
+	m := demoWindow(t)
+	m.selectChat("chat-nova")
+	inspector := ui.NewTester(func(c *ui.Context) {
+		applyTheme(c)
+		m.inspectorView(c, "chat-nova")
+	}, 300, 900)
+	inspector.SetScale(2)
+	settle(inspector)
+	for _, moved := range []string{L("Runs with"), L("Memory"), L("Plugins"), L("Where turns run")} {
+		if inspector.HasText(strings.ToUpper(moved)) {
+			t.Errorf("the inspector still shows %s", moved)
+		}
+	}
+	if !inspector.HasText(strings.ToUpper(L("Usage"))) || !inspector.HasText(strings.ToUpper(L("Routines"))) {
+		t.Fatalf("the inspector lacks Usage or Routines in %q", inspector.Texts())
+	}
+	renderBoth(t, inspector, "inspector-dm")
+	click(t, inspector, "Project Manager")
+	if !m.hasSheet() {
+		t.Fatal("a click on the bot did not open its settings")
+	}
+	sheet := ui.NewTester(m.frame(m.view), 1100, 900)
+	sheet.SetScale(2)
+	settleTransitions(sheet)
+	for _, shown := range []string{L("Bot Settings"), strings.ToUpper(L("Runs with")), strings.ToUpper(L("Memory")), strings.ToUpper(L("Plugins"))} {
+		if !sheet.HasText(shown) {
+			t.Errorf("the settings sheet lacks %s", shown)
+		}
+	}
+	renderBoth(t, sheet, "bot-settings")
+	click(t, sheet, L("Done"))
+	settleTransitions(sheet)
+	if m.hasSheet() {
+		t.Fatal("Done did not close the settings")
 	}
 }
