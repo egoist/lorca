@@ -1,0 +1,15 @@
+{
+  "name": "lorca-sandbox",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261008.1",
+    "typescript": "^6.0.3",
+    "wrangler": "^4.148.0"
+  }
+}

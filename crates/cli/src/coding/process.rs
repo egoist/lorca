@@ -1,14 +1,14 @@
-//! A headless coding agent's process: started with the login shell's environment in a process
-//! group of its own (a job object on Windows), so Stop ends what it started too, and spoken to
-//! with one JSON value per line on its stdin and stdout.
+//! A headless coding agent's process, spoken to with one JSON value per line on its stdin and
+//! stdout wherever it runs ([`Host`]): on this Runner, started with the login shell's environment
+//! in a process group of its own (a job object on Windows), so Stop ends what it started too; or
+//! in a cloud sandbox the user set up (`super::sandbox`), whose streams come over the network.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use process_wrap::tokio::{ChildWrapper, CommandWrap};
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{ChildStdin, ChildStdout};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::{oneshot, Mutex};
 use tokio_util::sync::CancellationToken;
 
@@ -36,12 +36,30 @@ pub(crate) struct Exit {
     pub stopped: bool,
 }
 
+/// What a process prints, line by line.
+pub(crate) type Stdout = Box<dyn AsyncRead + Send + Unpin>;
+type Stdin = Box<dyn AsyncWrite + Send + Unpin>;
+
+/// Where an agent's process runs.
+#[derive(Clone)]
+pub(crate) enum Host {
+    /// This Runner.
+    Local,
+    /// A cloud sandbox the user set up, with the repository cloned into it.
+    Sandbox(Arc<super::sandbox::Sandbox>),
+}
+
 pub(crate) struct Process {
-    stdin: Mutex<Option<ChildStdin>>,
+    stdin: Mutex<Option<Stdin>>,
     kill: CancellationToken,
 }
 
 impl Process {
+    /// A process whose stdin is `stdin`, and which ends when `kill` is cancelled.
+    pub fn new(stdin: impl AsyncWrite + Send + Unpin + 'static, kill: CancellationToken) -> Arc<Process> {
+        Arc::new(Process { stdin: Mutex::new(Some(Box::new(stdin))), kill })
+    }
+
     /// Writes one JSON value and a line break.
     pub async fn send(&self, value: &Value) -> Result<(), String> {
         let mut line = serde_json::to_vec(value).map_err(|e| e.to_string())?;
@@ -61,9 +79,16 @@ impl Process {
 /// An environment variable the agent is given: a saved secret the bot named.
 pub(crate) type Variable = (std::ffi::OsString, std::ffi::OsString);
 
-/// Starts `program` in `cwd`. Its stdout goes to the caller line by line; how it ended arrives
-/// once it has.
-pub(crate) async fn spawn(program: &Path, args: &[String], cwd: &Path, variables: &[Variable]) -> Result<(Arc<Process>, ChildStdout, oneshot::Receiver<Exit>), String> {
+/// Starts `program` in `cwd` on `host`. Its stdout goes to the caller line by line; how it ended
+/// arrives once it has.
+pub(crate) async fn spawn(host: &Host, program: &Path, args: &[String], cwd: &Path, variables: &[Variable]) -> Result<(Arc<Process>, Stdout, oneshot::Receiver<Exit>), String> {
+    match host {
+        Host::Local => spawn_here(program, args, cwd, variables).await,
+        Host::Sandbox(sandbox) => sandbox.spawn(program, args, cwd, variables).await,
+    }
+}
+
+async fn spawn_here(program: &Path, args: &[String], cwd: &Path, variables: &[Variable]) -> Result<(Arc<Process>, Stdout, oneshot::Receiver<Exit>), String> {
     let mut command = lorca_agent::login_shell::command(program).await;
     command.args(args).current_dir(cwd).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
     for name in INHERITED_MARKERS {
@@ -112,11 +137,11 @@ pub(crate) async fn spawn(program: &Path, args: &[String], cwd: &Path, variables
         let said = tokio::time::timeout(std::time::Duration::from_secs(1), said).await.ok().and_then(Result::ok).flatten();
         let _ = tx.send(Exit { code: status.and_then(|status| status.code()), said, stopped });
     });
-    Ok((Arc::new(Process { stdin: Mutex::new(Some(stdin)), kill }), stdout, rx))
+    Ok((Process::new(stdin, kill), Box::new(stdout), rx))
 }
 
 /// The lines of `stdout`, as JSON values; a line that is not JSON is skipped.
-pub(crate) fn json_lines(stdout: ChildStdout) -> tokio::sync::mpsc::UnboundedReceiver<Value> {
+pub(crate) fn json_lines(stdout: Stdout) -> tokio::sync::mpsc::UnboundedReceiver<Value> {
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     tokio::spawn(async move {
         let mut lines = BufReader::new(stdout).lines();

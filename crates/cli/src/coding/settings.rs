@@ -26,7 +26,7 @@ pub(crate) const FX_PERMISSION_MODE: &str = "ask";
 const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The program each agent is.
-fn program(kind: &str) -> &'static str {
+pub(crate) fn program(kind: &str) -> &'static str {
     match kind {
         "codex" => "codex",
         "opencode" => "opencode",
@@ -84,6 +84,20 @@ pub(crate) async fn pick(app: &App, asked: Option<&str>) -> Result<(String, Path
     }
     let names: Vec<&str> = on.iter().map(|kind| name(kind)).collect();
     Err(format!("None of the coding agents the user turned on ({}) is installed on this Runner. Ask the user to install one and sign in to it there.", names.join(", ")))
+}
+
+/// The agents a start in a cloud sandbox may take, in the account's order: the one the bot names
+/// when it is on, else every one on. Which is installed is the sandbox's to say.
+pub(crate) fn pick_anywhere(app: &App, asked: Option<&str>) -> Result<Vec<String>, String> {
+    let settings = of(app);
+    let on: Vec<String> = settings.agents.iter().filter(|choice| choice.enabled).map(|choice| choice.kind.clone()).collect();
+    match asked.map(str::trim).filter(|kind| !kind.is_empty()) {
+        Some(kind) if !KINDS.contains(&kind) => Err(format!("agent is one of {}", KINDS.join(", "))),
+        Some(kind) if !on.iter().any(|each| each == kind) => Err(format!("The user turned {} off for this Runner in Settings → Coding Agents. Use another, or leave agent out.", name(kind))),
+        Some(kind) => Ok(vec![kind.to_string()]),
+        None if on.is_empty() => Err("The user turned every coding agent off for this Runner in Settings → Coding Agents.".into()),
+        None => Ok(on),
+    }
 }
 
 /// What `--version` says, its first line.

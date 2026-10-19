@@ -1,6 +1,6 @@
 //! `coding_agent`: the bot's handle on the coding agents it runs.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -8,7 +8,7 @@ use lorca_agent::{Tool, ToolError, ToolResult, ToolUpdateFn};
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
-use super::{name, settings, workspace, Start, KINDS};
+use super::{name, sandbox, settings, workspace, Start, KINDS};
 use crate::app::App;
 use crate::model::Bot;
 
@@ -55,7 +55,9 @@ or a job is (`query` narrows it: a pull request's link, a folder, a title, a bot
 stops it, from its chat: for another bot's, message that bot. When `start` finds another agent already at work in the same folder \
 or repository, it says whose and on what: tell the user. Every command it runs goes through Auto-review as yours do. Saved secrets never go in a prompt or \
 a message: for a job that needs one, such as publishing a package, name your command secrets in `secrets`, and the agent has each \
-as $NAME in its environment.";
+as $NAME in its environment. The user may have set up a cloud sandbox in Settings → Coding Agents (Vercel Sandbox or Cloudflare \
+Sandbox), where an agent runs on a clone of the folder's git repository instead of on this Runner, and may run agents there by \
+default; name `sandbox` only when the user asked where it runs.";
 
 #[async_trait]
 impl Tool for CodingAgentTool {
@@ -77,6 +79,7 @@ impl Tool for CodingAgentTool {
                 "agent": { "type": "string", "enum": KINDS, "description": "start: which agent, only when the user asked for one. Default: the first the user turned on that this Runner has." },
                 "folder": { "type": "string", "description": "start: the repository or folder the job is in, absolute, ~/…, or relative to your working directory. The agent decides where in it to work, and whether on a branch or worktree of its own." },
                 "secrets": { "type": "array", "items": { "type": "string" }, "description": "start: names of your saved command secrets the job needs, given to the agent as environment variables. Every command it runs is then reviewed knowing which." },
+                "sandbox": { "type": "string", "enum": ["local", "vercel", "cloudflare"], "description": "start: where it runs, only when the user asked: local (this Runner) or a cloud sandbox the user set up, on a clone of the folder's repository. Default: where the user chose in Settings → Coding Agents." },
                 "id": { "type": "string", "description": "read, send, stop: the agent's id." },
                 "message": { "type": "string", "description": "send: what the user tells the agent, in their words." },
                 "interrupt": { "type": "boolean", "description": "send: stop what it does now and take this message at once." },
@@ -143,8 +146,8 @@ impl Tool for CodingAgentTool {
                     .map(|agent| {
                         let record = agent.record();
                         let place = match &record.branch {
-                            Some(branch) => format!("{} on {branch}", super::home_relative(&record.folder)),
-                            None => super::home_relative(&record.folder),
+                            Some(branch) => format!("{} on {branch}", record.place()),
+                            None => record.place(),
                         };
                         let pull_request = match (&record.pull_request, &record.pull_state) {
                             (Some(link), Some(state)) => format!(", {link} ({state})"),
@@ -204,7 +207,18 @@ impl CodingAgentTool {
         if let Err(denied) = crate::permissions::check_tool(app, &self.bot, "bash") {
             return Err(format!("{denied}. A coding agent runs commands, so it needs Shell commands too."));
         }
-        let (kind, program) = settings::pick(app, args["agent"].as_str()).await?;
+        let sandbox = sandbox::pick(app, args["sandbox"].as_str())?;
+        // An agent in a sandbox is the first one installed there, not on this Runner.
+        let (kind, program, agents) = match &sandbox {
+            None => {
+                let (kind, program) = settings::pick(app, args["agent"].as_str()).await?;
+                (kind, program, Vec::new())
+            }
+            Some(_) => {
+                let agents = settings::pick_anywhere(app, args["agent"].as_str())?;
+                (agents[0].clone(), PathBuf::from(settings::program(&agents[0])), agents)
+            }
+        };
         // Only the bot's own command secrets, which must be saved already.
         let secrets = secret_names(args)?;
         if !secrets.is_empty() {
@@ -216,6 +230,10 @@ impl CodingAgentTool {
         let folder = super::home_relative(&place.folder);
         let at = crate::agent_roster::Place { device_id: device_id.as_deref(), folder: &folder, repository: place.repository.as_deref() };
         let others = crate::agent_roster::working_at(app, &at, None);
+        let sandbox = match sandbox {
+            Some(kind) => Some(super::SandboxStart { kind, source: sandbox::source(&place).await?, agents }),
+            None => None,
+        };
         let start = Start {
             chat_id: self.chat_id.clone(),
             bot_id: self.bot.id.clone(),
@@ -223,19 +241,21 @@ impl CodingAgentTool {
             trigger_message_id: self.trigger_message_id.clone(),
             kind: kind.clone(),
             program,
-            place: place.clone(),
+            place,
+            sandbox,
             title: title.clone(),
             task,
-            prompt: brief(prompt, &place, &secrets),
+            prompt: prompt.to_string(),
             secrets,
             event: self.event.as_ref().map(|event| crate::event_triggers::EventTask { data: String::new(), ..event.clone() }),
             unattended: self.unattended,
         };
         let agent = super::start(app, start).await?;
         let id = agent.id();
-        let place = match &place.branch {
-            Some(branch) => format!("{} (on branch {branch})", super::home_relative(&place.folder)),
-            None => super::home_relative(&place.folder),
+        let record = agent.record();
+        let place = match &record.branch {
+            Some(branch) => format!("{} (on branch {branch})", record.place()),
+            None => record.place(),
         };
         let started = format!(
             "Started {} ({id}) on “{title}” in {place}. It works on its own and reports to the user in the chat when it is done, with its pull request; then you get a turn to relay its report, or to say why if it ends on its own. Tell the user you started it and end your turn. When the user asks, coding_agent read {id} shows its transcript, send passes it what they say, and stop ends it.",
@@ -249,11 +269,25 @@ impl CodingAgentTool {
 }
 
 /// The job as the agent reads it: the user's request the bot passed on, where it is, and what to
-/// hand the user back, since the user reviews the work and nobody checks it before.
-fn brief(prompt: &str, place: &workspace::Place, secrets: &[String]) -> String {
-    let folder = place.folder.display();
+/// hand the user back, since the user reviews the work and nobody checks it before. In a sandbox,
+/// that it works on a clone the user's own copy does not see, and which variables it holds there.
+pub(super) fn brief(prompt: &str, folder: &Path, secrets: &[String], sandbox: Option<(&sandbox::Place, &[String])>) -> String {
+    let folder = folder.display();
     let mut brief = prompt.trim().to_string();
-    brief.push_str(&format!("\n\nThe job is in {folder}."));
+    match sandbox {
+        None => brief.push_str(&format!("\n\nThe job is in {folder}.")),
+        Some((place, env)) => {
+            brief.push_str(&format!(
+                "\n\nThe job is in {folder}, a clone of {} in a {}, a cloud machine the user set up for coding agents. Their own copy is on their computer: what you do here reaches them only through what you push.",
+                place.repository,
+                sandbox::name(&place.kind)
+            ));
+            if !env.is_empty() {
+                let names = env.iter().map(|name| format!("${name}")).collect::<Vec<_>>().join(", ");
+                brief.push_str(&format!(" Its environment holds {names}, which the user gave it: use each only with the service it is for, and never print it, write it into a file, or put it in a commit."));
+            }
+        }
+    }
     brief.push_str(
         " How you do it is yours to decide: where you work, whether on a branch or a worktree of your own, and how you check it. \
          The user reviews your work, and nobody checks it before. Unless the request says otherwise, push your work and open a pull \

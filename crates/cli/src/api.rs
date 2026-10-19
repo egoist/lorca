@@ -973,6 +973,20 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             }
             requests::ask(app, &runner_id, method, body).await
         }
+        // A Runner's cloud sandboxes for its coding agents, set up with the user's own accounts:
+        // there when this Device is the Runner, else sealed to it, tokens and values included.
+        "coding.sandboxes" | "coding.sandboxes.set" | "coding.sandboxes.check" => {
+            let runner_id = string(&params, "runner_id")?;
+            let mut body = params.clone();
+            if let Some(fields) = body.as_object_mut() {
+                fields.remove("runner_id");
+            }
+            if app.this_device_id().as_deref() == Some(runner_id.as_str()) {
+                #[cfg(feature = "runner")]
+                return crate::coding::sandbox::serve(app, method, &body).await;
+            }
+            requests::ask(app, &runner_id, method, body).await
+        }
 
         // Read one API key on demand for the local settings editor. Snapshots and events
         // continue to carry masked provider statuses.

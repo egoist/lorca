@@ -372,9 +372,16 @@ where
 pub struct Redactions(Vec<(String, String)>);
 
 impl Redactions {
+    /// The Runner's saved secrets, and the tokens and variables the user gave its coding agents'
+    /// cloud sandboxes.
     pub fn load(app: &App) -> Redactions {
-        let Ok(items) = loaded(app) else { return Redactions(Vec::new()) };
-        let mut pairs: Vec<(String, String)> = items.iter().flat_map(|secret| spellings(&secret.value).into_iter().map(|spelling| (spelling, placeholder(&secret.name)))).collect();
+        let mut pairs: Vec<(String, String)> = match loaded(app) {
+            Ok(items) => items.iter().flat_map(|secret| spellings(&secret.value).into_iter().map(|spelling| (spelling, placeholder(&secret.name)))).collect(),
+            Err(_) => Vec::new(),
+        };
+        for (value, placeholder) in crate::coding::sandbox::redactions(app) {
+            pairs.extend(spellings(&value).into_iter().map(|spelling| (spelling, placeholder.clone())));
+        }
         pairs.sort_by(|a, b| b.0.len().cmp(&a.0.len()).then_with(|| a.0.cmp(&b.0)));
         pairs.dedup_by(|a, b| a.0 == b.0);
         Redactions(pairs)

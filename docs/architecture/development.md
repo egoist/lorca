@@ -23,6 +23,7 @@ lorca/
   desktop/             # the app for macOS, Windows, and Linux: Go on MyGo's native UI; the build bundles the CLI
   mobile/              # Expo app for iOS and Android: a paired Device over the core (modules/lorca-core)
   web/                 # the site
+  sandboxes/cloudflare/ # the Worker users deploy to their own Cloudflare account so coding agents run in its Containers
   scripts/             # bun scripts: the desktop app's dev loop, builds, and releases, the phone's loop and releases, the deprecated Mac app's, string and doc checks
   .github/workflows/   # release-cli.yml, release-mac.yml, release-desktop.yml, and release-mobile.yml: release builds; test.yml: every app's and crate's tests on each pull request; docs.yml: the doc check
 ```

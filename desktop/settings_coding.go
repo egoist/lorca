@@ -21,6 +21,12 @@ type settingsCodingState struct {
 	// passed is the row the dragged one last made room past. The row under the pointer is found
 	// as the pointer moves, so until it moves again it is still that row, now in another place.
 	passed string
+
+	// sandboxes is the Runner's cloud sandboxes as it last answered, asked with the agents.
+	sandboxes        model.CloudSandboxes
+	sandboxesLoaded  bool
+	sandboxesFailure string
+	sandboxLoads     int
 }
 
 func (s *settingsCodingState) load(runnerID string) {
@@ -36,6 +42,83 @@ func (s *settingsCodingState) load(runnerID string) {
 		}
 		s.list, s.loaded, s.failure = list, true, ""
 	})
+	s.sandboxLoads++
+	sandboxLoad := s.sandboxLoads
+	store.CloudSandboxes(runnerID, func(sandboxes model.CloudSandboxes, err error) {
+		if sandboxLoad != s.sandboxLoads {
+			return
+		}
+		if err != nil {
+			s.sandboxesFailure = model.ErrorText(err)
+			return
+		}
+		s.sandboxes, s.sandboxesLoaded, s.sandboxesFailure = sandboxes, true, ""
+	})
+}
+
+// took is the sandboxes as the Runner answered a change, unless the pane moved to another Runner.
+func (s *settingsCodingState) took(runnerID string, sandboxes model.CloudSandboxes) {
+	if s.deviceID != runnerID {
+		return
+	}
+	s.sandboxLoads++
+	s.sandboxes, s.sandboxesLoaded, s.sandboxesFailure = sandboxes, true, ""
+}
+
+// cloudSandboxes is the picked Runner's cloud sandboxes: where its agents run when a bot names no
+// place, and a row each for Vercel Sandbox and Cloudflare Sandbox that opens its sheet.
+func (s settingsPane) cloudSandboxes(c *ui.Context, k *card, device *model.Device, state *settingsCodingState) {
+	p := colors(c)
+	switch {
+	case !state.sandboxesLoaded && state.sandboxesFailure != "":
+		noteRow(c, k, state.sandboxesFailure, nil)
+		return
+	case !state.sandboxesLoaded:
+		keyValueRow(c, k, L("Loading…"), "", false, nil)
+		return
+	}
+	runnerID := device.ID
+	options := []popUpOption{{Value: "", Label: device.Name}}
+	for _, sandbox := range state.sandboxes.Sandboxes {
+		if sandbox.SetUp {
+			options = append(options, popUpOption{Value: sandbox.Kind, Label: sandbox.Name})
+		}
+	}
+	where := L("Run agents on")
+	if picked, changed := popUpRow(c, k, where, popUp{Options: options, Value: state.sandboxes.Default, Label: where, Disabled: len(options) == 1}, true); changed {
+		previous := state.sandboxes
+		state.sandboxes.Default = picked
+		store.SetDefaultCloudSandbox(runnerID, picked, func(sandboxes model.CloudSandboxes, err error) {
+			if err != nil {
+				if state.deviceID == runnerID {
+					state.sandboxes = previous
+				}
+				s.w.showAlert(alertOptions{Message: L("Could not change where agents run"), Informative: model.ErrorText(err)}, nil)
+				return
+			}
+			state.took(runnerID, sandboxes)
+		})
+	}
+	for _, kind := range model.CloudSandboxKinds {
+		sandbox := state.sandboxes.Sandbox(kind)
+		action := L("Set Up…")
+		if sandbox.SetUp {
+			action = L("Edit…")
+		}
+		row := k.row(rowBox(c).MinHeight(44).Label(sandbox.Name))
+		row.Children(func() {
+			ui.Row(c).Size(22, 22).Center().TextColor(p.Label).Children(func() { symbol(c, "cloud", 16, 2) })
+			ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Gap(1).Children(func() {
+				ui.Text(c, sandbox.Name).FontSize(12.5).FontWeight(500).SingleLine()
+				detail := sandbox.Detail()
+				ui.Text(c, detail).FontSize(textCaption).TextColor(p.Label2).SingleLine().Tooltip(detail)
+			})
+			if linkButton(c, action, false).Clicked() {
+				s.w.presentCloudSandbox(device, sandbox, func(sandboxes model.CloudSandboxes) { state.took(runnerID, sandboxes) })
+			}
+		})
+		s.mark(c, row, sandbox.Name)
+	}
 }
 
 // codingAgentDetail is the line under an agent's name: whether its Runner has it, and which
@@ -179,6 +262,12 @@ func (s settingsPane) codingAgents(c *ui.Context, m *mainWindow) {
 			})
 		})
 		s.footnote(c, L("Bots on this Runner hand coding work to these agents. A bot uses the first one that's on and installed, unless you asked for another. Drag an agent to change the order."))
+		if device != nil && device.IsRunner() {
+			s.section(c, L("Cloud Sandboxes"), nil, func(k *card) {
+				s.cloudSandboxes(c, k, device, state)
+			})
+			s.footnote(c, L("An agent in a cloud sandbox works on a clone of the folder's repository, in your own Vercel or Cloudflare account, and pushes from there instead of running on this Runner. Bots run agents where you pick here, unless you ask for another place."))
+		}
 	})
 	if !dragged && !dropped {
 		state.dragging, state.passed = nil, ""

@@ -31,6 +31,7 @@ type Pending = Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>;
 pub(crate) struct Launch<'a> {
     /// Its name in what Lorca writes: "OpenCode".
     pub name: &'static str,
+    pub host: &'a process::Host,
     pub program: &'a Path,
     pub args: Vec<String>,
     pub folder: &'a Path,
@@ -71,7 +72,7 @@ struct Reader {
 /// Starts the agent in its folder on `prompt`, or resumes `session` with it.
 pub(crate) async fn start(launch: Launch<'_>, prompt: &str, session: Option<&str>, events: Events) -> Result<Arc<dyn Driver>, String> {
     let name = launch.name;
-    let (process, stdout, exit) = process::spawn(launch.program, &launch.args, launch.folder, &launch.variables).await?;
+    let (process, stdout, exit) = process::spawn(launch.host, launch.program, &launch.args, launch.folder, &launch.variables).await?;
     let pending: Arc<Pending> = Arc::new(Mutex::new(HashMap::new()));
     let state = Arc::new(Mutex::new(Reader::default()));
     tokio::spawn(read(name, process.clone(), process::json_lines(stdout), exit, events.clone(), pending.clone(), state.clone(), launch.folder.to_path_buf()));

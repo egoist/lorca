@@ -21,6 +21,7 @@ pub(crate) mod driver;
 pub(crate) mod pi;
 pub(crate) mod process;
 pub mod pull;
+pub(crate) mod sandbox;
 pub mod settings;
 pub(crate) mod tool;
 pub mod transcript;
@@ -123,9 +124,21 @@ pub(crate) struct Record {
     /// goes back to it at once, as an unattended turn's does, instead of waiting on a card.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unattended: bool,
+    /// The cloud sandbox it runs in, when not on this Runner: `folder` is the clone there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox: Option<sandbox::Place>,
 }
 
 impl Record {
+    /// Where it works, as the user reads it: `~/dev/shop`, or "Vercel Sandbox ·
+    /// github.com/acme/shop".
+    pub(crate) fn place(&self) -> String {
+        match &self.sandbox {
+            Some(place) => place.words(),
+            None => home_relative(&self.folder),
+        }
+    }
+
     /// What Auto-review weighs the agent's actions against: the turn that started it.
     fn trigger(&self) -> crate::plugins::review::Trigger {
         crate::plugins::review::Trigger { message_id: self.trigger_message_id.clone(), routine: None, event: self.event.clone() }
@@ -167,6 +180,8 @@ fn item_without_secrets(app: &App, mut item: Item) -> Item {
 pub struct Agent {
     record: Mutex<Record>,
     driver: Mutex<Option<Arc<dyn Driver>>>,
+    /// Where its process runs, while it does.
+    host: Mutex<Option<process::Host>>,
     transcript: Mutex<Transcript>,
     /// A question of its waits for the user in the chat.
     asks: AtomicBool,
@@ -210,6 +225,7 @@ impl Agent {
         Arc::new(Agent {
             record: Mutex::new(record),
             driver: Mutex::new(None),
+            host: Mutex::new(None),
             transcript: Mutex::new(transcript),
             asks: AtomicBool::new(false),
             asking: tokio::sync::Mutex::new(()),
@@ -386,12 +402,13 @@ impl Agents {
         // saved secret, as a command's card.
         let redactions = crate::secrets::Redactions::load(app);
         let clean = |text: String| redactions.text(&text).unwrap_or(text);
+        let place = record.place();
         AgentRun {
             id: record.id,
             kind: record.kind,
             title: clean(record.title),
             task: clean(record.task),
-            folder: home_relative(&record.folder),
+            folder: place,
             branch: record.branch,
             state: if asks { "asking".into() } else { record.state },
             outcome: record.outcome.map(clean),
@@ -447,9 +464,17 @@ impl Agents {
         }
         for agent in &orphans {
             agent.stopping.store(true, Ordering::SeqCst);
-            if let Some(driver) = agent.driver.lock().unwrap().take() {
-                tokio::spawn(async move { driver.stop().await });
-            }
+            let driver = agent.driver.lock().unwrap().take();
+            let place = agent.record.lock().unwrap().sandbox.clone();
+            let app = app.config.clone();
+            tokio::spawn(async move {
+                if let Some(driver) = driver {
+                    driver.stop().await;
+                }
+                if let Some(place) = place {
+                    sandbox::discard(&app, &place).await;
+                }
+            });
         }
         self.agents.lock().unwrap().retain(|agent| !orphans.iter().any(|orphan| Arc::ptr_eq(agent, orphan)));
         save(app);
@@ -491,6 +516,11 @@ pub fn load(app: &Arc<App>) {
     let this_device = app.this_device_id();
     for mut record in records {
         if record.ended_at.is_some_and(|ended| now - ended > FORGET_AFTER) {
+            // Its sandbox goes with it.
+            if let Some(place) = record.sandbox.clone() {
+                let config = app.config.clone();
+                tokio::spawn(async move { sandbox::discard(&config, &place).await });
+            }
             continue;
         }
         if app.bot(&record.bot_id).is_none_or(|bot| Some(&bot.runner_id) != this_device.as_ref()) {
@@ -529,14 +559,27 @@ pub(crate) struct Start {
     pub trigger_message_id: String,
     pub kind: String,
     pub program: PathBuf,
+    /// The folder the bot named, on this Runner.
     pub place: workspace::Place,
+    /// The cloud sandbox it runs in instead, with the repository it clones there.
+    pub sandbox: Option<SandboxStart>,
     pub title: String,
     pub task: String,
+    /// The user's request as the bot passed it on, which Lorca's brief follows.
     pub prompt: String,
     /// The bot's command secrets to give it as environment variables, by name.
     pub secrets: Vec<String>,
     pub event: Option<crate::event_triggers::EventTask>,
     pub unattended: bool,
+}
+
+/// A start in a cloud sandbox.
+pub(crate) struct SandboxStart {
+    /// `vercel` or `cloudflare`.
+    pub kind: String,
+    pub source: sandbox::Source,
+    /// The agents it may be, in the user's order: the first one installed there runs.
+    pub agents: Vec<String>,
 }
 
 /// Starts an agent and follows it. It returns once the agent runs; its work goes on.
@@ -569,18 +612,30 @@ pub(crate) async fn start(app: &Arc<App>, start: Start) -> Result<Arc<Agent>, St
         secrets: start.secrets.clone(),
         event: start.event.clone(),
         unattended: start.unattended,
+        sandbox: start.sandbox.as_ref().map(|sandbox| sandbox::Place { kind: sandbox.kind.clone(), name: format!("lorca-{id}"), repository: sandbox.source.shown.clone() }),
     };
     let agent = Agent::new(record, Transcript::default());
     *agent.budget.lock().unwrap() = crate::budgets::current();
     app.coding_agents.agents.lock().unwrap().push(agent.clone());
-    let place = match &start.place.branch {
-        Some(branch) => format!("Working in {} on {branch}", home_relative(&start.place.folder)),
-        None => format!("Working in {}", home_relative(&start.place.folder)),
+    let status = match (&start.sandbox, &start.place.branch) {
+        (Some(sandbox), _) => format!("Starting a {} for {}", sandbox::name(&sandbox.kind), sandbox.source.shown),
+        (None, Some(branch)) => format!("Working in {} on {branch}", home_relative(&start.place.folder)),
+        (None, None) => format!("Working in {}", home_relative(&start.place.folder)),
     };
-    agent.add(app, Item::text("place", "status", &place));
+    agent.add(app, Item::text("place", "status", &status));
     save(app);
     app.coding_agents.sync(app, &agent);
-    let launched = launch(app, &agent, &start.program, &start.prompt, None).await;
+    let launched = async {
+        let (host, program) = match &start.sandbox {
+            None => (process::Host::Local, start.program.clone()),
+            Some(sandbox) => prepare_sandbox(app, &agent, sandbox).await?,
+        };
+        let record = agent.record();
+        let env: Vec<String> = sandbox::of(app).env_names(record.sandbox.as_ref().map(|place| place.kind.as_str()).unwrap_or(""));
+        let prompt = tool::brief(&start.prompt, &record.folder, &start.secrets, record.sandbox.as_ref().map(|place| (place, env.as_slice())));
+        launch(app, &agent, &program, &prompt, None, host).await
+    }
+    .await;
     if let Err(error) = &launched {
         let mut record = agent.record.lock().unwrap();
         record.set_state("failed");
@@ -592,8 +647,59 @@ pub(crate) async fn start(app: &Arc<App>, start: Start) -> Result<Arc<Agent>, St
     launched.map(|_| agent)
 }
 
-/// Starts the agent's process on `prompt` (resuming `session`), with a supervisor that follows it.
-async fn launch(app: &Arc<App>, agent: &Arc<Agent>, program: &Path, prompt: &str, session: Option<&str>) -> Result<(), String> {
+/// Opens the agent's sandbox, picks the first of its agents installed there, and clones the
+/// repository into it; its record then works in the clone, from the commit it is on.
+async fn prepare_sandbox(app: &Arc<App>, agent: &Arc<Agent>, start: &SandboxStart) -> Result<(process::Host, PathBuf), String> {
+    let place = agent.record().sandbox.ok_or("It has no sandbox")?;
+    let where_ = sandbox::name(&start.kind);
+    let opened = sandbox::Sandbox::open(app, &place).await?;
+    let mut kind = None;
+    for each in &start.agents {
+        if opened.has(settings::program(each)).await {
+            kind = Some(each.clone());
+            break;
+        }
+    }
+    let kind = kind.ok_or_else(|| match start.agents.as_slice() {
+        [only] => format!("{} is not installed in the {where_}. Use an image that has it, or leave agent out.", name(only)),
+        all => format!("None of the coding agents the user turned on ({}) is installed in the {where_}. Use an image that has one.", all.iter().map(|kind| name(kind)).collect::<Vec<_>>().join(", ")),
+    })?;
+    let folder = PathBuf::from(format!("{}/{}", opened.root(), start.source.folder));
+    let (branch, head) = opened.clone_repository(&start.source, &folder).await?;
+    let mut status = match &branch {
+        Some(branch) => format!("Working in {} on {branch}, a clone of {} in {where_}", folder.display(), start.source.shown),
+        None => format!("Working in {}, a clone of {} in {where_}", folder.display(), start.source.shown),
+    };
+    if start.source.base.is_some() && head != start.source.base {
+        status.push_str(". It starts from what the remote has: commits not pushed from this Runner are not in it");
+    }
+    {
+        let mut record = agent.record.lock().unwrap();
+        record.kind = kind.clone();
+        record.folder = folder;
+        record.branch = branch;
+        record.base = head;
+    }
+    agent.add(app, Item::text("place", "status", &status));
+    save(app);
+    app.coding_agents.sync(app, agent);
+    Ok((process::Host::Sandbox(opened), PathBuf::from(settings::program(&kind))))
+}
+
+/// Where the agent's process runs again: this Runner, or its sandbox resumed, with the clone it
+/// worked in still there.
+async fn reopen(app: &Arc<App>, record: &Record) -> Result<process::Host, String> {
+    let Some(place) = &record.sandbox else { return Ok(process::Host::Local) };
+    let opened = sandbox::Sandbox::open(app, place).await?;
+    if !opened.has_folder(&record.folder).await {
+        return Err(format!("The {} it worked in no longer has its clone of {}, so it cannot go on there. Start a new agent on the job.", sandbox::name(&place.kind), place.repository));
+    }
+    Ok(process::Host::Sandbox(opened))
+}
+
+/// Starts the agent's process on `prompt` (resuming `session`) on `host`, with a supervisor that
+/// follows it.
+async fn launch(app: &Arc<App>, agent: &Arc<Agent>, program: &Path, prompt: &str, session: Option<&str>, host: process::Host) -> Result<(), String> {
     use lorca_agent::tools::SecretVariables;
     let record = agent.record();
     // Looked up as it starts, so one the user deleted meanwhile is not given.
@@ -608,30 +714,31 @@ async fn launch(app: &Arc<App>, agent: &Arc<Agent>, program: &Path, prompt: &str
     tokio::spawn(supervise(app.clone(), agent.clone(), rx, generation));
     let folder = &record.folder;
     let driver = match record.kind.as_str() {
-        "codex" => codex::start(program, folder, &prompt, session, &variables, tx).await?,
+        "codex" => codex::start(&host, program, folder, &prompt, session, &variables, tx).await?,
         "opencode" => {
             let mut variables = variables;
             variables.push(("OPENCODE_CONFIG_CONTENT".into(), settings::OPENCODE_PERMISSIONS.into()));
-            let launch = acp::Launch { name: "OpenCode", program, args: vec!["acp".into()], folder, variables };
+            let launch = acp::Launch { name: "OpenCode", host: &host, program, args: vec!["acp".into()], folder, variables };
             acp::start(launch, &prompt, session, tx).await?
         }
-        "pi" => pi::start(&app.config.home, program, folder, &prompt, session, &variables, tx).await?,
+        "pi" => pi::start(&host, &app.config.home, program, folder, &prompt, session, &variables, tx).await?,
         "fx" => {
             let mut variables = variables;
             variables.push(("FX_PERMISSION_MODE".into(), settings::FX_PERMISSION_MODE.into()));
-            let launch = acp::Launch { name: "fx", program, args: vec!["acp".into()], folder, variables };
+            let launch = acp::Launch { name: "fx", host: &host, program, args: vec!["acp".into()], folder, variables };
             acp::start(launch, &prompt, session, tx).await?
         }
-        _ => claude::start(program, folder, &prompt, session, &variables, tx).await?,
+        _ => claude::start(&host, program, folder, &prompt, session, &variables, tx).await?,
     };
     *agent.driver.lock().unwrap() = Some(driver);
+    *agent.host.lock().unwrap() = Some(host);
     Ok(())
 }
 
 /// Gives the agent a message, from its bot or from the user on its page, down the same path: to
 /// its running process, or to a new process on its session when its process is gone (it was
-/// done and stopped, it was stopped or failed, or Lorca restarted). Until it takes the message
-/// up, the message waits in its queue.
+/// done and stopped, it was stopped or failed, or Lorca restarted), in its sandbox again when it
+/// ran in one. Until it takes the message up, the message waits in its queue.
 pub(crate) async fn send(app: &Arc<App>, agent: &Arc<Agent>, text: &str, interrupt: bool, sender: Sender) -> Result<String, String> {
     let text = &without_secrets(app, text.trim().to_string());
     let record = agent.record();
@@ -675,14 +782,21 @@ pub(crate) async fn send(app: &Arc<App>, agent: &Arc<Agent>, text: &str, interru
             _ => format!("Sent. {who} is working on it."),
         });
     }
-    let Some(program) = settings::find(&record.kind).await else {
-        unqueue();
-        return Err(format!("{who} is no longer installed on this Runner."));
+    // In a sandbox the agent is the one installed there, and its clone is checked as it resumes.
+    let program = match &record.sandbox {
+        Some(_) => PathBuf::from(settings::program(&record.kind)),
+        None => {
+            let Some(program) = settings::find(&record.kind).await else {
+                unqueue();
+                return Err(format!("{who} is no longer installed on this Runner."));
+            };
+            if !record.folder.is_dir() {
+                unqueue();
+                return Err(format!("{} is gone, so it cannot go on there.", home_relative(&record.folder)));
+            }
+            program
+        }
     };
-    if !record.folder.is_dir() {
-        unqueue();
-        return Err(format!("{} is gone, so it cannot go on there.", home_relative(&record.folder)));
-    }
     {
         let mut kept = agent.record.lock().unwrap();
         kept.set_state("starting");
@@ -695,7 +809,12 @@ pub(crate) async fn send(app: &Arc<App>, agent: &Arc<Agent>, text: &str, interru
     let folder = home_relative(&record.folder);
     let at = crate::agent_roster::Place { device_id: device_id.as_deref(), folder: &folder, repository: record.repository.as_deref() };
     let others = crate::agent_roster::working_at(app, &at, Some(&record.id));
-    match launch(app, agent, &program, text, record.session.as_deref()).await {
+    let launched = async {
+        let host = reopen(app, &record).await?;
+        launch(app, agent, &program, text, record.session.as_deref(), host).await
+    }
+    .await;
+    match launched {
         Ok(()) => {
             save(app);
             let started = format!("{who} started again on its session and is working on it.");
@@ -718,6 +837,7 @@ pub(crate) async fn send(app: &Arc<App>, agent: &Arc<Agent>, text: &str, interru
         }
     }
 }
+
 
 /// Stops the agent; its card says `reason`.
 pub(crate) fn stop(app: &Arc<App>, agent: &Arc<Agent>, reason: &str) {
@@ -839,7 +959,11 @@ async fn handle(app: &Arc<App>, agent: &Arc<Agent>, event: Event, generation: u6
             };
             if let Some(base) = base {
                 // The agent may have moved to a branch of its own.
-                let (changes, branch) = (workspace::changes(&folder, &base).await, workspace::branch(&folder).await);
+                let host = agent.host.lock().unwrap().clone();
+                let (changes, branch) = match host {
+                    Some(process::Host::Sandbox(sandbox)) => (sandbox.changes(&folder, &base).await, sandbox.branch(&folder).await),
+                    _ => (workspace::changes(&folder, &base).await, workspace::branch(&folder).await),
+                };
                 let mut record = agent.record.lock().unwrap();
                 record.changes = changes;
                 record.branch = branch.or(record.branch.take());
@@ -885,6 +1009,7 @@ fn ended(app: &Arc<App>, agent: &Arc<Agent>, end: driver::Ended, generation: u64
         return;
     }
     agent.driver.lock().unwrap().take();
+    agent.host.lock().unwrap().take();
     agent.hold.lock().unwrap().take();
     agent.asks.store(false, Ordering::SeqCst);
     // Its process took what waited for it along.
@@ -1043,22 +1168,45 @@ async fn approve(app: &Arc<App>, agent: &Arc<Agent>, approval: Approval) -> Resu
     if crate::permissions::check_tool(app, &bot, "bash").is_err() {
         return Err("Shell commands are off for the bot that started you, so nothing may run. Stop and say what you needed.".into());
     }
-    let folder = std::fs::canonicalize(&record.folder).unwrap_or(record.folder.clone());
+    let folder = match &record.sandbox {
+        Some(_) => record.folder.clone(),
+        None => std::fs::canonicalize(&record.folder).unwrap_or(record.folder.clone()),
+    };
     let runner_name = app.device(&bot.runner_id).map(|device| device.name).unwrap_or_else(|| "this Runner".into());
+    // Where it acts: as the user on the Runner, or in the cloud sandbox the user set up, which
+    // holds the variables the user gave it.
+    let (on, held) = match &record.sandbox {
+        Some(place) => (
+            format!("in the user's {}, a cloud machine they set up for coding agents with a clone of {}, not on {runner_name}", sandbox::name(&place.kind), place.repository),
+            sandbox::of(app).env_names(&place.kind),
+        ),
+        None => (format!("as the user on {runner_name}"), Vec::new()),
+    };
     let auto_review = app.auto_review().is_enabled;
     let (tool, description, args, shown) = match &approval {
         Approval::Command { command } => {
             // An agent holding saved secrets has each command reviewed, knowing which: any of
             // them can read its environment.
-            if auto_review && record.secrets.is_empty() && crate::local_review::needs_no_review(app, command, &folder) {
+            let fast = match &record.sandbox {
+                Some(_) => crate::local_review::needs_no_review_in_sandbox(command, &folder),
+                None => crate::local_review::needs_no_review(app, command, &folder),
+            };
+            if auto_review && record.secrets.is_empty() && fast {
                 return Ok(());
             }
+            let access = if record.sandbox.is_some() { "with that machine's filesystem, processes, and network" } else { "with full filesystem, process, credential, and network access" };
             let mut description = format!(
-                "{who}, a coding agent this bot started, wants to run this shell command as the user on {runner_name}, with full filesystem, process, credential, and network access. Working directory: {}. Lorca asks every coding agent to push its work and open a pull request when it is done, unless the user's request says otherwise.",
+                "{who}, a coding agent this bot started, wants to run this shell command {on}, {access}. Working directory: {}. Lorca asks every coding agent to push its work and open a pull request when it is done, unless the user's request says otherwise.",
                 home_relative(&folder)
             );
             if !record.secrets.is_empty() {
                 description.push_str(&format!(" {}", holds_secrets(&record.secrets)));
+            }
+            if !held.is_empty() {
+                description.push_str(&format!(
+                    " The sandbox's environment holds {}, which the user gave it for its agents; sending one anywhere but the service it is for leaks it.",
+                    held.iter().map(|name| format!("${name}")).collect::<Vec<_>>().join(", ")
+                ));
             }
             ("bash", description, json!({ "command": command }), command.chars().take(crate::model::APP_COMMAND_CHARS).collect::<String>())
         }
@@ -1071,12 +1219,12 @@ async fn approve(app: &Arc<App>, agent: &Arc<Agent>, approval: Approval) -> Resu
             if !paths.is_empty() && paths.iter().all(inside) {
                 return Ok(());
             }
-            let description = format!("{who}, a coding agent this bot started in {}, wants to change files outside that folder, as the user on {runner_name}.", home_relative(&folder));
+            let description = format!("{who}, a coding agent this bot started in {}, wants to change files outside that folder, {on}.", home_relative(&folder));
             let shown = paths.iter().map(|path| home_relative(Path::new(path))).collect::<Vec<_>>().join("\n");
             ("edit", description, json!({ "paths": paths }), format!("Change {shown}"))
         }
         Approval::Tool { name: tool, input } => {
-            let description = format!("{who}, a coding agent this bot started in {}, wants to use its tool {tool} as the user on {runner_name}.", home_relative(&folder));
+            let description = format!("{who}, a coding agent this bot started in {}, wants to use its tool {tool} {on}.", home_relative(&folder));
             let detail = input.as_object().and_then(|fields| fields.values().find_map(|value| value.as_str().filter(|text| text.len() < 120).map(str::to_string))).unwrap_or_default();
             let shown = if detail.is_empty() { tool.clone() } else { format!("{tool}({detail})") };
             ("coding_agent_tool", description, json!({ "tool": tool, "input": input }), shown)
@@ -1085,8 +1233,9 @@ async fn approve(app: &Arc<App>, agent: &Arc<Agent>, approval: Approval) -> Resu
     let trigger = record.trigger();
     let cancel = tokio_util::sync::CancellationToken::new();
     let propose_rule = matches!(approval, Approval::Command { .. });
-    let facts = match &approval {
-        Approval::Command { command } => crate::local_review::facts(command, &folder).await,
+    // What git says of the folders a command would discard is the Runner's to check, here.
+    let facts = match (&approval, &record.sandbox) {
+        (Approval::Command { command }, None) => crate::local_review::facts(command, &folder).await,
         _ => Vec::new(),
     };
     let action = crate::plugins::review::Action { target_name: &runner_name, tool, description: &description, args: &args, script: None, facts: &facts, propose_rule };

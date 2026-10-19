@@ -30,7 +30,7 @@ pub(crate) struct Claude {
 }
 
 /// Starts Claude Code in `folder` on `prompt`, or resumes `session` with it.
-pub(crate) async fn start(program: &Path, folder: &Path, prompt: &str, session: Option<&str>, variables: &[process::Variable], events: Events) -> Result<Arc<dyn Driver>, String> {
+pub(crate) async fn start(host: &process::Host, program: &Path, folder: &Path, prompt: &str, session: Option<&str>, variables: &[process::Variable], events: Events) -> Result<Arc<dyn Driver>, String> {
     let mut args: Vec<String> = [
         "-p",
         "--input-format",
@@ -51,7 +51,7 @@ pub(crate) async fn start(program: &Path, folder: &Path, prompt: &str, session: 
         args.push("--resume".into());
         args.push(session.into());
     }
-    let (process, stdout, exit) = process::spawn(program, &args, folder, variables).await?;
+    let (process, stdout, exit) = process::spawn(host, program, &args, folder, variables).await?;
     let pending = Arc::new(AtomicUsize::new(0));
     tokio::spawn(read(process.clone(), process::json_lines(stdout), exit, events, pending.clone(), folder.to_path_buf()));
     process
