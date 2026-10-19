@@ -226,9 +226,12 @@ async fn read(process: Arc<Process>, mut messages: tokio::sync::mpsc::UnboundedR
             }
             // The end of a turn. With a message still to take up, it goes on with that one.
             "result" => {
+                let mut failed = None;
                 if message["is_error"].as_bool().unwrap_or(false) && message["subtype"] != "error_during_execution" {
                     let reason = message["result"].as_str().or(message["subtype"].as_str()).unwrap_or("error");
-                    item(Item::text(uuid::Uuid::new_v4().to_string(), "error", reason.lines().next().unwrap_or(reason)));
+                    let reason = reason.lines().next().unwrap_or(reason).to_string();
+                    item(Item::text(uuid::Uuid::new_v4().to_string(), "error", &reason));
+                    failed = Some(reason);
                 }
                 // Calls the turn never finished, an interrupt's, end with it.
                 for (call, mut step) in steps.drain() {
@@ -236,6 +239,10 @@ async fn read(process: Arc<Process>, mut messages: tokio::sync::mpsc::UnboundedR
                     item(Item::tool(call, step));
                 }
                 if pending.load(Ordering::SeqCst) == 0 {
+                    if let Some(reason) = failed {
+                        let _ = events.send(Event::Failed(reason));
+                        continue;
+                    }
                     let said = message["result"].as_str().filter(|text| !text.trim().is_empty()).map(str::to_string).or_else(|| last_said.take());
                     let _ = events.send(Event::Idle(said));
                 }

@@ -12,7 +12,8 @@ use tokio_util::sync::CancellationToken;
 
 /// Claude Code's stream-json, scripted: a job asks to run `git push` through the Bash hook,
 /// edits a file, names a pull request, and is done; a "(follow-up)" is answered at once; a
-/// "(crash)" job exits mid-turn. A "(secret)" job keeps what it was sent and writes out, runs,
+/// "(crash)" job exits mid-turn, and an "(auth)" job ends its turn in an error, as a signed-out
+/// Claude Code does, and exits. A "(secret)" job keeps what it was sent and writes out, runs,
 /// and says `$NPM_TOKEN`. Every run appends its arguments to `args.log` beside it.
 const FAKE_CLAUDE: &str = r#"#!/usr/bin/env python3
 import json, os, sys
@@ -45,6 +46,11 @@ while True:
     content = str(message["message"]["content"])
     if "(crash)" in content:
         sys.stderr.write("out of credits\n"); sys.exit(3)
+    if "(auth)" in content:
+        reason = "Failed to authenticate: OAuth session expired and could not be refreshed"
+        out({"type": "assistant", "message": {"id": "a0", "content": [{"type": "text", "text": reason}]}, "parent_tool_use_id": None})
+        out({"type": "result", "subtype": "success", "is_error": True, "result": reason})
+        sys.exit(1)
     if "(secret)" in content:
         token = os.environ.get("NPM_TOKEN", "missing")
         with open("received.txt", "w") as received:
@@ -597,6 +603,41 @@ async fn an_agent_that_ends_on_its_own_says_why_in_the_chat() {
     assert!(!app.message("chat", &message_id).unwrap().counts_unread(), "the bot's reply tells the user");
     let cue = wake_cue(app, &crate::runtime::agent_job(app, "chat", "b1", &message_id)).unwrap();
     assert!(cue.contains("has ended on its own: Claude Code exited with code 3") && cue.contains("Tell the user"), "{cue}");
+}
+
+/// An agent whose first turn fails, as a signed-out Claude Code's does in milliseconds, fails
+/// while the turn that started it still runs: the failure waits for that turn, then the bot gets
+/// a turn of its own that is told why.
+#[tokio::test]
+async fn an_agent_that_fails_during_the_bots_turn_wakes_it_once_the_turn_ends() {
+    let scratch = setup().await;
+    let app = &scratch.app;
+    let tool = tool(&scratch);
+    let row = start_row(app, "call-1");
+    let chat_lock = app.chat_lock("chat");
+    let turn = chat_lock.lock().await;
+    call(&tool, "call-1", json!({ "action": "start", "agent": "claude", "title": "Login", "folder": "shop", "prompt": "Fix the login bug (auth)" })).await.unwrap();
+
+    let reason = "Failed to authenticate: OAuth session expired and could not be refreshed";
+    let failed = card_when(app, &row, |card| card.state == "failed").await;
+    assert_eq!(failed.outcome.as_deref(), Some(reason));
+    let (message_id, _, text, failed) = eventually("its message", || agent_messages(app).pop()).await;
+    assert_eq!((text.as_str(), failed), (reason, true));
+    let agent = app.coding_agents.of("chat", "b1").pop().unwrap();
+    // Its process exits after the failed turn; that changes nothing, and nothing has heard it.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(agent.record().state, "failed");
+    assert_eq!(agent.record().unheard.as_deref(), Some(message_id.as_str()));
+    let cue = heard_cue(app, &agent.record(), &agent, true);
+    assert!(cue.contains(&format!("has ended on its own: {reason}")) && cue.contains("Tell the user"), "{cue}");
+    let ran = |app: &App| app.store.page("chat", None, 200).unwrap().0.into_iter().any(|message| matches!(&message.body, Body::Notice { text, .. } if text.starts_with("Chef cannot run yet")));
+    assert!(!ran(app), "no turn runs while the bot's turn does");
+
+    // The bot's turn ends: the agent's turn follows, reads the failure, and runs (here it finds
+    // no provider, which it says).
+    drop(turn);
+    eventually("the bot's turn about it", || ran(app).then_some(())).await;
+    assert!(agent.record().unheard.is_none());
 }
 
 #[tokio::test]

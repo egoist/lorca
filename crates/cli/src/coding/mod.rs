@@ -361,8 +361,9 @@ impl Agents {
             let record = agent.record.lock().unwrap();
             (record.chat_id.clone(), record.message_id.clone())
         };
-        let card = self.card(app, agent);
+        // Read under the lock, so a sync that read the agent earlier cannot write over a later one.
         let _row = self.rows.lock().unwrap();
+        let card = self.card(app, agent);
         let Some(mut message) = app.message(&chat_id, &message_id) else { return };
         let Body::Tool { agent: Some(current), .. } = &mut message.body else { return };
         if *current == card {
@@ -579,7 +580,6 @@ async fn launch(app: &Arc<App>, agent: &Arc<Agent>, program: &Path, prompt: &str
 pub(crate) async fn send(app: &Arc<App>, agent: &Arc<Agent>, text: &str, interrupt: bool) -> Result<String, String> {
     let text = &without_secrets(app, text.to_string());
     let record = agent.record();
-    agent.record.lock().unwrap().unheard = None;
     *agent.budget.lock().unwrap() = crate::budgets::current();
     if let Some(driver) = agent.driver() {
         driver.send(text, interrupt).await?;
@@ -632,7 +632,6 @@ pub(crate) fn stop(app: &Arc<App>, agent: &Arc<Agent>, reason: &str) {
             record.set_state("stopped");
             record.outcome = Some(reason.to_string());
             record.ended_at = Some(crate::config::now_secs());
-            record.unheard = None;
         }
     }
     agent.hold.lock().unwrap().take();
@@ -748,6 +747,26 @@ async fn handle(app: &Arc<App>, agent: &Arc<Agent>, event: Event, generation: u6
             let said = said.or_else(|| agent.transcript.lock().unwrap().last_said()).unwrap_or_else(|| "Done.".into());
             tell(app, agent, &said, false);
         }
+        // A turn that ended in an error ends the agent as one that ended on its own: its process
+        // stops, a later message resumes its session, and its bot hears why.
+        Event::Failed(reason) => {
+            {
+                let mut record = agent.record.lock().unwrap();
+                if !matches!(record.state.as_str(), "working" | "starting") {
+                    return;
+                }
+                record.set_state("failed");
+                record.outcome = Some(reason.clone());
+                record.ended_at = Some(crate::config::now_secs());
+            }
+            agent.hold.lock().unwrap().take();
+            agent.asks.store(false, Ordering::SeqCst);
+            if let Some(driver) = agent.driver.lock().unwrap().take() {
+                agent.stopping.store(true, Ordering::SeqCst);
+                tokio::spawn(async move { driver.stop().await });
+            }
+            tell(app, agent, &reason, true);
+        }
         Event::Approve(approval, reply) => {
             let (app, agent) = (app.clone(), agent.clone());
             tokio::spawn(async move {
@@ -849,8 +868,32 @@ pub fn wake_cue(app: &App, job: &crate::model::Job) -> Option<String> {
         record.clone()
     };
     save(app);
+    // The message that woke it says whether the agent was done or ended on its own.
+    let failed = match app.message(&job.chat_id, &job.trigger_message_id).map(|message| message.body) {
+        Some(Body::AgentMessage { failed, .. }) => failed,
+        _ => record.state == "failed",
+    };
+    Some(heard_cue(app, &record, &agent, failed))
+}
+
+/// What the bot hears about the agent, from the message that woke it: its report when done,
+/// why it ended when `failed`.
+pub(crate) fn heard_cue(app: &App, record: &Record, agent: &Agent, failed: bool) -> String {
     let who = format!("{} ({}), the coding agent you started on “{}”", name(&record.kind), record.id, record.title);
-    let cue = if record.state == "failed" {
+    // Why it ended, unless a message started it again before a turn heard it.
+    if failed && record.state != "failed" {
+        let cue = format!(
+            "[{who}, ended on its own; its message in the chat says why. It has been started again since and is {}. Tell the user why it \
+             ended in a line or two, unless you have already; do not start it again.]",
+            match record.state.as_str() {
+                "idle" => "done",
+                "stopped" => "stopped again",
+                state => state,
+            }
+        );
+        return without_secrets(app, cue);
+    }
+    let cue = if failed {
         let tail = agent.transcript.lock().unwrap().last_lines(12);
         let tail = if tail.trim().is_empty() { String::new() } else { format!(" Its last lines:\n{tail}\n") };
         format!(
@@ -869,7 +912,7 @@ pub fn wake_cue(app: &App, job: &crate::model::Job) -> Option<String> {
              its work against the request, or send it a message. The user reviews the work and decides what comes next.]"
         )
     };
-    Some(without_secrets(app, cue))
+    without_secrets(app, cue)
 }
 
 /// What Auto-review hears about an agent's environment: the saved secrets in it.
