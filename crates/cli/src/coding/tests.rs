@@ -439,8 +439,22 @@ async fn claude_code_works_in_the_folder_asks_in_the_chat_and_reports_to_the_use
 
     let done = card_when(app, &row, |card| card.state == "idle").await;
     assert_eq!(done.pull_request.as_deref(), Some("https://github.com/acme/shop/pull/7"));
+    assert_eq!(done.pull_state, None);
     assert_eq!(done.changes, Some(AgentChanges { files: 1, added: 1, removed: 0 }));
     assert_eq!((done.title.as_str(), done.branch.as_deref()), ("Login: fix the Safari bug", Some("main")));
+
+    // Its pull request's state follows GitHub's, until it is merged; then it is not read again.
+    let reads = std::sync::atomic::AtomicUsize::new(0);
+    let merged = |link: String| {
+        reads.fetch_add(1, Ordering::SeqCst);
+        assert_eq!(link, "https://github.com/acme/shop/pull/7");
+        async { Some("merged".to_string()) }
+    };
+    pull::refresh(app, merged).await;
+    assert_eq!(card(app, &row).pull_state.as_deref(), Some("merged"));
+    assert_eq!(agent.record().pull_state.as_deref(), Some("merged"));
+    pull::refresh(app, merged).await;
+    assert_eq!(reads.load(Ordering::SeqCst), 1);
 
     // Its transcript is steps: where it works, what it was sent, thought, ran, edited, and said.
     let items = steps(app, &row).await;
@@ -921,6 +935,7 @@ async fn a_bot_without_shell_access_starts_no_agent_and_its_agent_runs_nothing()
             state: "working".into(),
             outcome: None,
             pull_request: None,
+            pull_state: None,
             changes: None,
             started_at: now,
             updated_at: now,

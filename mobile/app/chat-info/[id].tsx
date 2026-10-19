@@ -74,6 +74,7 @@ export default function ChatInfoScreen() {
   const sharedLink = useStore((s) => (bot ? sharedLinkFor(s.shared_links, bot.id) : undefined));
   // A turn or routine stopped at its limits is the user's to act on.
   const orange = Platform.OS === "ios" ? PlatformColor("systemOrange") : accentColor("orange", p.dark);
+  const purple = Platform.OS === "ios" ? PlatformColor("systemPurple") : accentColor("purple", p.dark);
 
   useEffect(() => setBotName(bot?.name ?? ""), [bot?.id, bot?.name]);
   // The chat's outputs, older ones the transcript has not loaded included.
@@ -269,7 +270,7 @@ export default function ChatInfoScreen() {
                 subtitle={[agentStatusWord(agent), agent.pull_request ? pullRequestLabel(agent.pull_request) : agent.branch].filter(Boolean).join(" · ")}
                 leading={
                   <View style={styles.agentMark}>
-                    {mark.spinner ? <ActivityIndicator size="small" /> : <Symbol name={mark.symbol} size={20} color={mark.tone === "orange" ? orange : mark.tone === "red" ? p.red : mark.tone === "green" ? p.green : mark.tone === "tint" ? p.tint : p.secondaryLabel} />}
+                    {mark.spinner ? <ActivityIndicator size="small" /> : <Symbol name={mark.symbol} size={20} color={mark.tone === "orange" ? orange : mark.tone === "red" ? p.red : mark.tone === "green" ? p.green : mark.tone === "tint" ? p.tint : mark.tone === "purple" ? purple : p.secondaryLabel} />}
                   </View>
                 }
                 chevron

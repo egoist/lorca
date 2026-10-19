@@ -123,7 +123,8 @@ func (m *mainWindow) agentMessageRow(c *ui.Context, chat *model.Chat, message *m
 
 // agentStatusMark is a coding agent's state as a mark: a spinner while it works, an exclamation
 // mark when it needs the user (red when it failed), the pull request it is ready with, a check
-// when it finished, a stop mark once stopped.
+// when it finished, a stop mark once stopped; once its pull request is merged or closed, a merge
+// or a cross.
 func agentStatusMark(c *ui.Context, agent *model.AgentRun) {
 	p := colors(c)
 	name, tint := "stop.circle", p.Label3
@@ -140,6 +141,12 @@ func agentStatusMark(c *ui.Context, agent *model.AgentRun) {
 		}
 	case model.AgentFailed:
 		name, tint = "exclamationmark.circle.fill", p.Red
+	}
+	if agent.PullEnded() {
+		name, tint = "xmark.circle", p.Label3
+		if agent.PullState == model.PullMerged {
+			name, tint = "arrow.triangle.merge", p.Purple
+		}
 	}
 	ui.Row(c).TextColor(tint).Children(func() { symbol(c, name, 15, 1.8) })
 }

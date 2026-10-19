@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,14 +25,14 @@ func TestTheAgentRowsDecodeFromTheCLI(t *testing.T) {
 	 "body":{"kind":"tool","name":"coding_agent","summary":"Started","detail":"Add dark mode\n\nTo Settings.","is_running":false,
 	  "agent":{"id":"agent-1","kind":"codex","title":"Settings: dark mode","task":"Add dark mode","folder":"~/x/dark","branch":"dark",
 	   "state":"asking",
-	   "pull_request":"https://github.com/acme/shop/pull/7","changes":{"files":4,"added":12,"removed":3},
+	   "pull_request":"https://github.com/acme/shop/pull/7","pull_state":"merged","changes":{"files":4,"added":12,"removed":3},
 	   "device":"Workbench","started_at":1792069627.1,"updated_at":1792069700.4}}}`)
 	agent := model.AgentOf(start)
 	if agent == nil || !start.Body.Tool.IsShown() || !start.Body.Tool.IsAgentMessage() {
 		t.Fatalf("no agent shown: %+v", start.Body.Tool)
 	}
 	if agent.Name() != "Codex" || agent.Label() != "Settings: dark mode" || agent.State != model.AgentAsking ||
-		agent.PullNumber() != "#7" || agent.Changes == nil || agent.Changes.Added != 12 || agent.UpdatedAt.Unix() != 1792069700 {
+		agent.PullNumber() != "#7" || agent.PullState != model.PullMerged || agent.Changes == nil || agent.Changes.Added != 12 || agent.UpdatedAt.Unix() != 1792069700 {
 		t.Errorf("decoded %+v", agent)
 	}
 	// A message to it names it; the chat's start row has its title and kind.
@@ -56,25 +57,34 @@ func TestTheAgentRowsDecodeFromTheCLI(t *testing.T) {
 func TestTheAgentSaysHowItStands(t *testing.T) {
 	demoWindow(t)
 	agent := &model.AgentRun{ID: "agent-1", Kind: "claude", Title: "Fix it", Branch: "fix-it", State: model.AgentWorking}
+	const pr = "https://github.com/acme/shop/pull/7"
 	cases := []struct {
 		state  model.AgentState
 		pr     string
+		pull   model.PullState
 		detail string
 	}{
-		{model.AgentStarting, "", "Working · fix-it"},
-		{model.AgentWorking, "", "Working · fix-it"},
-		{model.AgentAsking, "", "Needs attention · fix-it"},
-		{model.AgentIdle, "", "Finished · fix-it"},
-		{model.AgentIdle, "https://github.com/acme/shop/pull/7", "Ready for review · #7"},
-		{model.AgentFailed, "", "Run failed · fix-it"},
-		{model.AgentStopped, "", "Stopped · fix-it"},
+		{model.AgentStarting, "", "", "Working · fix-it"},
+		{model.AgentWorking, "", "", "Working · fix-it"},
+		{model.AgentAsking, "", "", "Needs attention · fix-it"},
+		{model.AgentIdle, "", "", "Finished · fix-it"},
+		{model.AgentIdle, pr, "", "Ready for review · #7"},
+		{model.AgentIdle, pr, model.PullOpen, "Ready for review · #7"},
+		{model.AgentIdle, pr, model.PullDraft, "Draft · #7"},
+		{model.AgentIdle, pr, model.PullMerged, "Merged · #7"},
+		{model.AgentIdle, pr, model.PullClosed, "Closed · #7"},
+		{model.AgentStopped, pr, model.PullMerged, "Merged · #7"},
+		{model.AgentWorking, pr, model.PullMerged, "Working · #7"},
+		{model.AgentFailed, "", "", "Run failed · fix-it"},
+		{model.AgentStopped, "", "", "Stopped · fix-it"},
 	}
 	for _, each := range cases {
-		agent.State, agent.PullRequest = each.state, each.pr
+		agent.State, agent.PullRequest, agent.PullState = each.state, each.pr, each.pull
 		if got := agentRowDetail(agent); got != each.detail {
-			t.Errorf("%s: %q", each.state, got)
+			t.Errorf("%s %s: %q", each.state, each.pull, got)
 		}
 	}
+	agent.PullRequest, agent.PullState = "", ""
 	agent.State = model.AgentIdle
 	if agent.IsRunning() || !agent.IsOpen() {
 		t.Error("a finished agent offers no Stop and takes a follow-up")
@@ -115,6 +125,29 @@ func TestTheChatsCodingAgents(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("listed %q, want %q", got, want)
 		}
+	}
+}
+
+// Agents on the same pull request are one row in Details: the latest of them.
+func TestAgentsOnOnePullRequestAreOneRow(t *testing.T) {
+	now := time.Now()
+	row := func(id, pr string, updated time.Duration) *model.Message {
+		return &model.Message{ID: id, Body: model.Body{Kind: model.BodyTool, Tool: &model.ToolInvocation{Name: "coding_agent",
+			Agent: &model.AgentRun{ID: "agent-" + id, State: model.AgentIdle, PullRequest: pr, PullState: model.PullMerged, UpdatedAt: now.Add(-updated)}}}}
+	}
+	chat := &model.Chat{Messages: []*model.Message{
+		row("tabs", "https://github.com/egoist/lorca/pull/254", 2*time.Hour),
+		row("inspector", "https://github.com/egoist/lorca/pull/254/", time.Hour),
+		row("phone", "https://github.com/egoist/lorca/pull/256", 3*time.Hour),
+		row("plain", "", 4*time.Hour),
+		row("plain-too", "", 5*time.Hour),
+	}}
+	var got []string
+	for _, message := range model.CodingAgentsIn(chat, now) {
+		got = append(got, message.ID)
+	}
+	if want := []string{"inspector", "phone", "plain", "plain-too"}; strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("listed %q, want %q", got, want)
 	}
 }
 

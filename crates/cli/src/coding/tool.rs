@@ -127,7 +127,11 @@ impl Tool for CodingAgentTool {
                             Some(branch) => format!("{} on {branch}", super::home_relative(&record.folder)),
                             None => super::home_relative(&record.folder),
                         };
-                        let pull_request = record.pull_request.as_ref().map(|link| format!(", {link}")).unwrap_or_default();
+                        let pull_request = match (&record.pull_request, &record.pull_state) {
+                            (Some(link), Some(state)) => format!(", {link} ({state})"),
+                            (Some(link), None) => format!(", {link}"),
+                            _ => String::new(),
+                        };
                         format!("- {} {} “{}”: {} in {place}{pull_request}", record.id, name(&record.kind), record.title, state_words(&record))
                     })
                     .collect();
