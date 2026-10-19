@@ -122,6 +122,8 @@ static CONNECTIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64:
 
 async fn connection(app: Arc<App>, socket: WebSocket) {
     let connection = CONNECTIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // Cancelled as the connection closes, for the requests on it still under way.
+    let closed = tokio_util::sync::CancellationToken::new();
     let (mut sink, mut stream) = socket.split();
     let (out_tx, mut out_rx) = mpsc::channel::<String>(256);
     let mut events = app.events.subscribe();
@@ -152,11 +154,16 @@ async fn connection(app: Arc<App>, socket: WebSocket) {
                 };
                 let app = app.clone();
                 let out = out_tx.clone();
+                let closed = closed.clone();
                 tokio::spawn(async move {
+                    #[cfg(not(feature = "cli"))]
+                    let _ = closed;
                     let result = match request.method.as_str() {
                         // The desktop app on this connection, about its own updates.
                         #[cfg(feature = "cli")]
-                        "app.update_status" => crate::app_update::report(&app, connection, request.params),
+                        "app.update_status" => crate::app_update::report(&app, connection, &closed, request.params),
+                        #[cfg(feature = "cli")]
+                        "app.relaunch_when_idle" => crate::app_update::relaunch_when_idle(&app, &closed).await,
                         _ => dispatch(&app, &request.method, request.params).await,
                     };
                     let response = match result {
@@ -182,6 +189,7 @@ async fn connection(app: Arc<App>, socket: WebSocket) {
         }
     }
     writer.abort();
+    closed.cancel();
     // The app that said what it was watching is gone.
     app.watch_chat(None);
     #[cfg(feature = "cli")]

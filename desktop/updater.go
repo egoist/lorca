@@ -108,7 +108,8 @@ type appUpdates struct {
 	err string
 	// busy is set while a check or an install runs.
 	busy bool
-	// wanted is an install a Device asked for while a check ran, which follows it.
+	// wanted is an install a Device asked for while a background check ran, which follows it.
+	// One asked for while an install checks is answered by that install.
 	wanted bool
 	// waiting is set while a request waits for the CLI to say the Runner is idle.
 	waiting bool
@@ -203,7 +204,7 @@ func (u *appUpdates) install() {
 	u.mu.Lock()
 	u.found(release, err)
 	if release == nil {
-		u.busy = false
+		u.busy, u.wanted = false, false
 		u.mu.Unlock()
 		u.report()
 		return
@@ -216,7 +217,7 @@ func (u *appUpdates) install() {
 	err = release.install(ctx)
 	cancel()
 	u.mu.Lock()
-	u.busy = false
+	u.busy, u.wanted = false, false
 	if err != nil {
 		u.state, u.err = "", err.Error()
 		u.mu.Unlock()

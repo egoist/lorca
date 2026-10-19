@@ -209,8 +209,6 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             };
             crate::requests::ask(app, &id, "app.update.install", json!({})).await
         }
-        #[cfg(feature = "cli")]
-        "app.relaunch_when_idle" => crate::app_update::relaunch_when_idle(app).await,
         "identity.forget" => {
             crate::sync::revoke_self(app).await;
             app.forget_identity().map_err(|e| e.to_string())?;

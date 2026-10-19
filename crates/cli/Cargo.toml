@@ -88,5 +88,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_
 zip = { version = "2", default-features = false, features = ["deflate"], optional = true }
 
 [dev-dependencies]
+# Paused time for the tests of waits that last seconds or a day.
+tokio = { workspace = true, features = ["test-util"] }
 # Real images for the attachment tests; the agent crate builds the same crate already.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

@@ -155,3 +155,39 @@ func TestRemoteAppUpdateFailures(t *testing.T) {
 	}
 	report.reply <- nil
 }
+
+// A request that comes while a Device's install checks the feed is answered by that install: when
+// it finds nothing newer, a later check that finds a version says so and installs nothing.
+func TestRemoteAppUpdateRequestDuringItsOwnCheck(t *testing.T) {
+	checks := make(chan chan *appRelease, 2)
+	u, calls, _ := remoteUpdatesTester(t, func(context.Context) (*appRelease, error) {
+		answer := make(chan *appRelease)
+		checks <- answer
+		return <-answer, nil
+	})
+	installed := make(chan struct{}, 1)
+	newer := &appRelease{version: "0.1.15", install: func(context.Context) error { installed <- struct{}{}; return nil }}
+	go u.install()
+	own := <-checks
+	u.install() // the same request again, while it checks
+	own <- nil
+	nextUpdateCall(t, calls, "app.update_status").reply <- nil
+
+	u.mu.Lock()
+	u.busy = true
+	u.mu.Unlock()
+	go u.refresh()
+	(<-checks) <- newer
+	report := nextUpdateCall(t, calls, "app.update_status")
+	if report.params["latest"] != "0.1.15" || report.params["state"] != nil {
+		t.Fatalf("daily check %v", report.params)
+	}
+	report.reply <- nil
+	select {
+	case <-checks:
+		t.Fatal("an install nobody asked for checked the feed")
+	case <-installed:
+		t.Fatal("an install nobody asked for went in")
+	case <-time.After(200 * time.Millisecond):
+	}
+}
