@@ -930,6 +930,7 @@ async fn a_bot_without_shell_access_starts_no_agent_and_its_agent_runs_nothing()
             secrets: Vec::new(),
             event: None,
             unattended: false,
+            sandbox: None,
         },
         Transcript::default(),
     );
@@ -1254,4 +1255,80 @@ async fn a_start_where_no_other_agent_works_says_nothing_of_others() {
     assert!(!started.contains("Other coding agents"), "{started}");
     let empty = call(&tool, "call-2", json!({ "action": "list", "scope": "account", "query": "nothing like this" })).await.unwrap();
     assert_eq!(empty, "No coding agent on the account matches that.");
+}
+
+/// A bot's agent in a cloud sandbox: the repository is cloned there from its remote, with the
+/// user's name on commits, the agent runs and asks there as it does on the Runner, its changes
+/// count in the clone and leave the Runner's copy as it was, the sandbox pauses once its process
+/// ended, and a follow-up resumes it there. The sandbox here is a folder standing in for one.
+#[tokio::test]
+async fn an_agent_in_a_sandbox_works_on_a_clone_and_goes_on_there_after_a_stop() {
+    let scratch = setup().await;
+    let app = &scratch.app;
+    auto_review_off(app);
+    sandbox::here::install(programs());
+    let remote = scratch.home.join("remote.git");
+    workspace::git(&scratch.home, &["clone", "-q", "--bare", &scratch.repo.to_string_lossy(), &remote.to_string_lossy()]).await.unwrap();
+    let local = workspace::prepare(&scratch.home.join("work"), Some("shop")).await.unwrap();
+    let row = start_row(app, "call-1");
+    let chat_lock = app.chat_lock("chat");
+    let held = chat_lock.lock().await;
+
+    let source = sandbox::Source {
+        url: remote.to_string_lossy().to_string(),
+        shown: "example.com/acme/shop".into(),
+        folder: "shop".into(),
+        branch: Some("main".into()),
+        base: local.base.clone(),
+        author: ("Ada".into(), "ada@example.com".into()),
+    };
+    let start = Start {
+        chat_id: "chat".into(),
+        bot_id: "b1".into(),
+        message_id: row.clone(),
+        trigger_message_id: "msg-trigger".into(),
+        kind: "claude".into(),
+        program: "claude".into(),
+        place: local.clone(),
+        sandbox: Some(SandboxStart { kind: "here".into(), source, agents: vec!["claude".into()] }),
+        title: "Login: fix the Safari bug".into(),
+        task: "Fix the login bug".into(),
+        prompt: "Fix the login bug".into(),
+        secrets: Vec::new(),
+        event: None,
+        unattended: false,
+    };
+    let agent = super::start(app, start).await.unwrap();
+    let record = agent.record();
+    let place = record.sandbox.clone().unwrap();
+    let clone = app.config.home.join("sandboxes").join(&place.name).join("shop");
+    assert_eq!((place.name, record.folder.clone(), record.branch.as_deref(), record.base.clone()), (format!("lorca-{}", record.id), clone.clone(), Some("main"), local.base.clone()));
+    assert!(clone.join(".git").is_dir() && clone.join("README.md").is_file());
+    let gitconfig = std::fs::read_to_string(app.config.home.join("sandboxes").join(format!("lorca-{}", record.id)).join(".gitconfig")).unwrap();
+    assert!(gitconfig.contains("Ada") && gitconfig.contains("ada@example.com") && gitconfig.contains("GITHUB_TOKEN"), "{gitconfig}");
+    assert!(card(app, &row).folder.ends_with("· example.com/acme/shop"), "{:?}", card(app, &row).folder);
+
+    // It asks in the chat as it would on the Runner.
+    let (asked, command, _) = question(app).await;
+    assert_eq!(command.as_deref(), Some("git push origin feature"));
+    assert!(crate::plugins::mcp::answer(app, &asked, Decision::Allowed));
+    let done = card_when(app, &row, |card| card.state == "idle").await;
+    assert_eq!(done.changes, Some(AgentChanges { files: 1, added: 1, removed: 0 }));
+    assert_eq!(std::fs::read_to_string(clone.join("README.md")).unwrap(), "shop\nlogin fixed\n");
+    assert_eq!(std::fs::read_to_string(scratch.repo.join("README.md")).unwrap(), "shop\n");
+    let items = steps(app, &row).await;
+    assert!(items[0].text.starts_with(&format!("Working in {} on main, a clone of example.com/acme/shop in", clone.display())), "{}", items[0].text);
+    assert!(items[1].text.contains("a clone of example.com/acme/shop in a ") && items[1].text.contains("reaches them only through what you push"), "{}", items[1].text);
+    eventually("its message", || agent_messages(app).pop()).await;
+
+    // Stopped, its process group ends and the sandbox pauses; a follow-up goes on there.
+    app.coding_agents.stop_chat(app, "chat");
+    card_when(app, &row, |card| card.state == "stopped").await;
+    eventually("the sandbox pausing", || (sandbox::here::pauses(&format!("lorca-{}", record.id)) >= 1).then_some(())).await;
+    let sent = send(app, &agent, "Also update the docs (follow-up)", false, Sender::Bot).await.unwrap();
+    assert!(sent.contains("started again on its session"), "{sent}");
+    eventually("the follow-up's answer", || Some(agent_messages(app)).filter(|messages| messages.len() == 2)).await;
+    assert_eq!(agent.record().folder, clone);
+    app.coding_agents.stop_chat(app, "chat");
+    drop(held);
 }

@@ -171,6 +171,8 @@ type Store struct {
 	mockPlaybooks []PlaybookRecord
 	// mockCodingAgents is the demo's coding agents per Runner, once one changed.
 	mockCodingAgents map[string][]InstalledCodingAgent
+	// mockCloudSandboxes is the demo's cloud sandboxes per Runner, once one changed.
+	mockCloudSandboxes map[string]CloudSandboxes
 
 	// IsConnected is the CLI answering on localhost (mock: toggled from the Debug menu).
 	IsConnected bool
@@ -262,6 +264,7 @@ func NewStore(transport Transport, post func(func()), mock bool) *Store {
 		outputRequests:     map[string]bool{},
 		staleOutputs:       map[string]bool{},
 		mockMcp:            map[string][]McpServer{},
+		mockCloudSandboxes: map[string]CloudSandboxes{},
 		mockFeedback:       map[string]BotFeedback{},
 		isBootstrapping:    true,
 	}
@@ -3369,6 +3372,7 @@ func (s *Store) ResetMockData() {
 	s.Budgets = mockBudgets()
 	s.AutoReview = mockAutoReview()
 	s.mockCodingAgents = map[string][]InstalledCodingAgent{}
+	s.mockCloudSandboxes = map[string]CloudSandboxes{}
 	s.Attention = DefaultAttention()
 	s.SharedLinks = mockSharedLinks()
 	s.Sections = mockSections()

@@ -230,6 +230,13 @@ pub(crate) fn needs_no_review(app: &App, command: &str, workdir: &Path) -> bool 
     read_only(command) || stays_in_lorca(command, workdir, &lorca_folders(app), home.as_deref()) || stays_in_workdir(command, workdir, home.as_deref())
 }
 
+/// The fast path for a coding agent's command in a cloud sandbox: one that only reads, or only
+/// makes, copies, and moves files in the folder it works in there. Lorca's folders and the
+/// user's home are the Runner's, not the sandbox's.
+pub(crate) fn needs_no_review_in_sandbox(command: &str, workdir: &Path) -> bool {
+    read_only(command) || stays_in_workdir(command, workdir, None)
+}
+
 /// What Lorca checks before a command that could discard work, for the review to take as ground
 /// truth: whether each folder it would delete, reset, or clean is a git working tree with
 /// changes, untracked files, or commits found on no remote, and what work only a branch it would

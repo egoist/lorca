@@ -47,22 +47,30 @@ pub(crate) struct Pi {
     busy: Arc<AtomicBool>,
 }
 
-/// Where Lorca keeps the review extension, written again as each agent starts.
-fn extension(home: &Path) -> Result<PathBuf, String> {
+/// Where the review extension goes in a cloud sandbox.
+const SANDBOX_EXTENSION: &str = "/tmp/lorca-review.ts";
+
+/// Where Lorca keeps the review extension on `host`, written again as each agent starts.
+async fn extension(host: &process::Host, home: &Path) -> Result<String, String> {
+    if let process::Host::Sandbox(sandbox) = host {
+        sandbox.write(SANDBOX_EXTENSION, REVIEW_EXTENSION).await.map_err(|e| format!("Could not write pi's review extension: {e}"))?;
+        return Ok(SANDBOX_EXTENSION.into());
+    }
     let path = home.join("agents").join("lorca-review.ts");
     std::fs::create_dir_all(path.parent().unwrap_or(home)).map_err(|e| e.to_string())?;
     std::fs::write(&path, REVIEW_EXTENSION).map_err(|e| format!("Could not write pi's review extension: {e}"))?;
-    Ok(path)
+    Ok(path.to_string_lossy().to_string())
 }
 
 /// Starts pi in `folder` on `prompt`, or resumes `session`, its session file, with it.
-pub(crate) async fn start(home: &Path, program: &Path, folder: &Path, prompt: &str, session: Option<&str>, variables: &[process::Variable], events: Events) -> Result<Arc<dyn Driver>, String> {
-    let mut args: Vec<String> = vec!["--mode".into(), "rpc".into(), "-e".into(), extension(home)?.to_string_lossy().to_string()];
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn start(host: &process::Host, home: &Path, program: &Path, folder: &Path, prompt: &str, session: Option<&str>, variables: &[process::Variable], events: Events) -> Result<Arc<dyn Driver>, String> {
+    let mut args: Vec<String> = vec!["--mode".into(), "rpc".into(), "-e".into(), extension(host, home).await?];
     if let Some(session) = session {
         args.push("--session".into());
         args.push(session.into());
     }
-    let (process, stdout, exit) = process::spawn(program, &args, folder, variables).await?;
+    let (process, stdout, exit) = process::spawn(host, program, &args, folder, variables).await?;
     let pending: Arc<Pending> = Arc::new(Mutex::new(HashMap::new()));
     let busy = Arc::new(AtomicBool::new(false));
     tokio::spawn(read(process.clone(), process::json_lines(stdout), exit, events.clone(), pending.clone(), busy.clone(), folder.to_path_buf()));

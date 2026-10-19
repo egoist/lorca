@@ -81,15 +81,7 @@ pub(crate) async fn git(folder: &Path, args: &[&str]) -> Result<String, String> 
 /// when git cannot tell.
 pub(crate) async fn changes(folder: &Path, base: &str) -> Option<AgentChanges> {
     let numstat = git(folder, &["-c", "core.quotepath=off", "diff", "--numstat", base, "--"]).await.ok()?;
-    let mut changes = AgentChanges::default();
-    for line in numstat.lines() {
-        let mut fields = line.split('\t');
-        let (Some(added), Some(removed)) = (fields.next(), fields.next()) else { continue };
-        changes.files += 1;
-        // A binary file counts as changed, with no lines.
-        changes.added += added.parse::<u32>().unwrap_or(0);
-        changes.removed += removed.parse::<u32>().unwrap_or(0);
-    }
+    let mut changes = self::numstat(&numstat);
     let untracked = git(folder, &["ls-files", "--others", "--exclude-standard"]).await.unwrap_or_default();
     for file in untracked.lines().filter(|file| !file.is_empty()).take(NEW_FILES) {
         changes.files += 1;
@@ -101,6 +93,20 @@ pub(crate) async fn changes(folder: &Path, base: &str) -> Option<AgentChanges> {
         }
     }
     Some(changes)
+}
+
+/// The files and lines `git diff --numstat` counts.
+pub(crate) fn numstat(text: &str) -> AgentChanges {
+    let mut changes = AgentChanges::default();
+    for line in text.lines() {
+        let mut fields = line.split('\t');
+        let (Some(added), Some(removed)) = (fields.next(), fields.next()) else { continue };
+        changes.files += 1;
+        // A binary file counts as changed, with no lines.
+        changes.added += added.parse::<u32>().unwrap_or(0);
+        changes.removed += removed.parse::<u32>().unwrap_or(0);
+    }
+    changes
 }
 
 static PULL_REQUEST: LazyLock<Regex> =
