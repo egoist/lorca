@@ -1057,6 +1057,28 @@ impl App {
         turns
     }
 
+    /// The turns another online Device lists as running there. A bot's turns run on its own
+    /// Runner, so one listed elsewhere is a turn its old Runner finishes after a move.
+    fn turns_elsewhere(&self, matches: impl Fn(&LiveTurn) -> bool) -> bool {
+        let this = self.this_device_id();
+        let state = self.state.lock().unwrap();
+        state
+            .device_turns
+            .iter()
+            .filter(|(id, _)| Some(id.as_str()) != this.as_deref() && state.turns_online.contains(*id))
+            .any(|(_, turns)| turns.iter().any(&matches))
+    }
+
+    /// Whether `bot_id` has a turn in `chat_id` on another Device, its old Runner after a move.
+    pub fn bot_turn_elsewhere(&self, chat_id: &str, bot_id: &str) -> bool {
+        self.turns_elsewhere(|turn| turn.chat_id == chat_id && turn.bot_id == bot_id)
+    }
+
+    /// Whether a run of the routine goes on on another Device, its bot's old Runner after a move.
+    pub fn routine_running_elsewhere(&self, routine_id: &str) -> bool {
+        self.turns_elsewhere(|turn| turn.routine_id.as_deref() == Some(routine_id))
+    }
+
     /// Every turn in flight this Device knows of, by job id: what the other Devices list while
     /// the relay last saw them online, then this Device's own jobs, including one it sent to a
     /// Runner that has not listed it yet. A job sent to a Runner the relay's last machine list

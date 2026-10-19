@@ -1,0 +1,11 @@
+[
+  { "os": "macos", "runner": true },
+  { "os": "linux", "runner": true },
+  { "os": "windows", "runner": true },
+  { "os": "ios", "runner": false },
+  { "os": "ipados", "runner": false },
+  { "os": "android", "runner": false },
+  { "os": "freebsd", "runner": false },
+  { "os": "", "runner": false },
+  { "os": "", "unknown": true, "runner": false }
+]

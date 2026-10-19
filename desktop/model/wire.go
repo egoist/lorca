@@ -775,11 +775,8 @@ func ToDevice(wire WireDevice) *Device {
 		Version:      str(wire.Version),
 		MachineName:  str(wire.MachineName),
 	}
-	switch device.OS {
-	case OSMacOS, OSLinux, OSWindows, OSIOS, OSIPadOS, OSAndroid:
-	default:
-		device.OS = OSLinux
-	}
+	// An `os` the app has no name for stays as the CLI reported it: no Runner, as the CLI judges
+	// it (`Device::is_runner`).
 	if wire.Unknown {
 		device.Name, device.OS = L("Unknown Device"), OSUnknown
 	}

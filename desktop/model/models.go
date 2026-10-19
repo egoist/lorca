@@ -731,6 +731,8 @@ type DeviceUpdate struct {
 }
 
 // IsRunner is derived from the OS alone: a desktop Device is a Runner and can be assigned bots.
+// The CLI's bot tools judge it the same way (`Device::is_runner`), against the same cases in
+// `crates/cli/testdata/runners.json`.
 func (d *Device) IsRunner() bool { return d.OS.IsDesktop() }
 
 // IsStandaloneRunner identifies released standalone CLIs by their advertised updates.

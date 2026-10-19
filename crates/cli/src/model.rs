@@ -109,8 +109,25 @@ pub struct PluginStatus {
 }
 
 impl Device {
+    /// Whether the Device runs bots: its `os` is a desktop one. The apps judge it the same way
+    /// (`Device.IsRunner` in `desktop/model`), against the same cases in
+    /// `crates/cli/testdata/runners.json`.
     pub fn is_runner(&self) -> bool {
         matches!(self.os.as_str(), "macos" | "linux" | "windows")
+    }
+
+    /// The system by the name people know it by, else what the Device reported.
+    pub fn platform(&self) -> &str {
+        match self.os.as_str() {
+            "macos" => "macOS",
+            "linux" => "Linux",
+            "windows" => "Windows",
+            "ios" => "iOS",
+            "ipados" => "iPadOS",
+            "android" => "Android",
+            "" => "an unknown system",
+            other => other,
+        }
     }
 }
 
@@ -1543,5 +1560,24 @@ mod host_tests {
     fn the_host_name_is_what_hostname_prints() {
         let printed = std::process::Command::new("hostname").output().unwrap().stdout;
         assert_eq!(host_name().as_deref(), Some(String::from_utf8_lossy(&printed).trim()));
+    }
+}
+
+#[cfg(test)]
+mod runner_tests {
+    use super::*;
+
+    /// The cases the desktop app's `Device.IsRunner` is tested against too
+    /// (`desktop/model/runners_test.go`). A machine the relay lists that never sent its
+    /// `machine` blob is no Device here; the apps get it with an empty `os`.
+    #[test]
+    fn runners_are_the_devices_the_apps_offer_as_runners() {
+        let cases: Vec<serde_json::Value> = serde_json::from_str(include_str!("../testdata/runners.json")).unwrap();
+        assert!(cases.len() >= 9);
+        for case in cases {
+            let os = if case["unknown"] == true { "" } else { case["os"].as_str().unwrap() };
+            let device = Device { id: "d".into(), name: "D".into(), os: os.into(), ..Default::default() };
+            assert_eq!(device.is_runner(), case["runner"].as_bool().unwrap(), "{case}");
+        }
     }
 }

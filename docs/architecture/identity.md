@@ -48,7 +48,7 @@ Every Device writes its `os` into its machine metadata blob. Values: `macos`, `l
 | `macos`, `linux`, `windows` | **Runner** | Everything a Device can, plus be assigned bots and run Jobs with the account’s credentials. |
 | `ios`, `ipados`, `android`  | Device     | Hold keys, configure account providers, read and write chats, create bots for Runners. |
 
-Runner status is derived from `os` alone. There is no flag to opt a phone in or a desktop out. Peers read `os` from the decrypted metadata blob, so the relay never learns which Devices are Runners.
+Runner status is derived from `os` alone. There is no flag to opt a phone in or a desktop out. Peers read `os` from the decrypted metadata blob, so the relay never learns which Devices are Runners. Any other `os`, and a machine that never sent its `machine` blob, is a Device and never a Runner. The CLI (`Device::is_runner`, which bot create and the team tools check) and the desktop app (`Device.IsRunner`, which its Runner menus offer) make the same test, each tested against the cases in `crates/cli/testdata/runners.json`; the desktop app keeps an `os` it has no name for as the CLI reported it.
 
 ## Relay surface
 
