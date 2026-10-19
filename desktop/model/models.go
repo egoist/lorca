@@ -802,7 +802,10 @@ type Bot struct {
 	// place of the symbol and accent once this computer has the bytes.
 	Avatar      *Attachment
 	Permissions *BotPermissions
-	CreatedAt   time.Time
+	// Workdir is the folder on its Runner where it mainly works, as the user wrote it: absolute or
+	// `~/…`. Empty for its own workspace in the CLI's data directory.
+	Workdir   string
+	CreatedAt time.Time
 }
 
 // MARK: - Auto-review

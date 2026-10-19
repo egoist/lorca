@@ -96,9 +96,9 @@ pub fn serve(app: Arc<App>, from: String, request: Request, blob_id: String) {
 /// that reached the wrong machine is refused, not forwarded. The plugin verbs act on this
 /// Runner's own installs, the `mcp.*` verbs on its mcp.json, and the `events.*` verbs on its
 /// event subscriptions; the permission verb answers a card a bot here is waiting on; the bash
-/// verbs type into, stop, or background a command here;
-/// Send now has a turn here read a message it holds. The update verbs install the latest release
-/// of this CLI, or turn its automatic updates on or off. A request names no release and no
+/// verbs type into, stop, or background a command here; the `workdir.*` verbs read a bot's working
+/// folder here; Send now has a turn here read a message it holds. The update verbs install the
+/// latest release of this CLI, or turn its automatic updates on or off. A request names no release and no
 /// download: the Runner installs only what its own signed manifest offers.
 async fn answer(app: &Arc<App>, from: &str, request: &Request) -> Result<Value, String> {
     let body = &request.body;
@@ -134,6 +134,8 @@ async fn answer(app: &Arc<App>, from: &str, request: &Request) -> Result<Value, 
         // A coding agent's transcript and Stop, from another Device.
         #[cfg(feature = "runner")]
         "coding.transcript" | "coding.stop" => crate::coding::serve(app, &request.verb, body).await,
+        #[cfg(feature = "runner")]
+        verb if verb.starts_with("workdir.") => crate::workdir::serve(app, verb, body).await,
         #[cfg(feature = "runner")]
         "coding.agents" | "coding.agents.set" => crate::coding::settings::serve(app, &request.verb, body).await,
         #[cfg(feature = "runner")]

@@ -72,6 +72,8 @@ pub mod shell;
 pub mod sync;
 pub mod tasks;
 pub mod templates;
+#[cfg(feature = "runner")]
+pub mod workdir;
 pub mod local_store;
 #[cfg(feature = "runner")]
 pub mod turns;

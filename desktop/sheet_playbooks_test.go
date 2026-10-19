@@ -13,8 +13,8 @@ import (
 func TestInspectorSkills(t *testing.T) {
 	m := demoWindow(t)
 	m.selectChat("chat-patch")
-	// Tall enough for the Skills section under the developer's coding agents.
-	tt := ui.NewTester(m.frame(m.view), 1180, 1100)
+	// Tall enough for the Skills section under the developer's coding agents, working folder, and profile.
+	tt := ui.NewTester(m.frame(m.view), 1180, 1450)
 	settle(tt)
 	wantText(t, tt, L("Skills"), "flaky-tests", "release-notes", "ship-checklist", L("Draft"))
 	renderBoth(t, tt, "skills-inspector")

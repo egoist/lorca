@@ -1313,6 +1313,32 @@ func (s *Store) SetBotRuntime(id string, provider ProviderKind, model, thinking 
 	s.perform("bots.update", map[string]any{"id": id, "provider": provider, "model": model, "thinking": thinking})
 }
 
+// SetBotWorkdir is the folder on its Runner where the bot mainly works; empty for its own
+// workspace. done runs once the CLI has it, so what reads the folder next reads the new one; a
+// refusal puts the old folder back.
+func (s *Store) SetBotWorkdir(id, workdir string, done func(error)) {
+	bot := s.Bot(id)
+	if bot == nil {
+		return
+	}
+	previous := bot.Workdir
+	bot.Workdir = workdir
+	s.rosterTouched(id)
+	if s.IsMock {
+		s.post(func() { done(nil) })
+		return
+	}
+	Async(s, func() (struct{}, error) {
+		return struct{}{}, s.request("bots.update", map[string]any{"id": id, "workdir": workdir}, nil)
+	}, func(_ struct{}, err error) {
+		if bot := s.Bot(id); err != nil && bot != nil && bot.Workdir == workdir {
+			bot.Workdir = previous
+			s.rosterTouched(id)
+		}
+		done(err)
+	})
+}
+
 // CompactChat summarizes the chat's older part for its bot now, on the Runner.
 func (s *Store) CompactChat(id string) {
 	s.perform("chats.compact", map[string]any{"chat_id": id})
