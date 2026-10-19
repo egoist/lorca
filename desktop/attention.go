@@ -101,6 +101,9 @@ func (m *mainWindow) openAttention(anchor ui.Rect) {
 	if m.tasks.open {
 		m.closeRunningTasks()
 	}
+	if m.coding.open {
+		m.closeCodingAgents()
+	}
 	s := &m.attention
 	s.height = flyoutHeight(attentionWidth, m.attentionPanel)
 	var flyout flyoutWindow

@@ -7,14 +7,13 @@ import { ActivityIndicator, Alert, Platform, ScrollView, StyleSheet, Text, View 
 import { engine } from "../../src/core/engine";
 import { loadPrefs } from "../../src/core/prefs";
 import { checkForUpdates, installedVersion, installUpdate, setDailyChecks, updatesSupported, useUpdates, type Updates } from "../../src/core/updates";
-import { CUSTOM_PRESETS, customProviderNamed, deviceName, isCustomProvider, isRunner, presetGroup, providerLabel, reviewModelRows, reviewPicker, withCustomModels, type ReviewModelRow } from "../../src/core/model";
-import { deviceIsOnline, useStore } from "../../src/core/store";
+import { CUSTOM_PRESETS, customProviderNamed, isCustomProvider, presetGroup, providerLabel, reviewModelRows, reviewPicker, withCustomModels, type ReviewModelRow } from "../../src/core/model";
+import { useStore } from "../../src/core/store";
 import { deviceLanguage, languageNames, languages, setAppLanguage, t, useLanguage } from "../../src/i18n";
 import { FieldRow, MenuRow, Row, Section, ToggleRow, type MenuChoice } from "../../src/ui/forms";
-import { lastSeen } from "../../src/ui/format";
-import { Symbol } from "../../src/ui/Symbol";
 import { usePalette } from "../../src/ui/theme";
-import { deviceSymbol } from "../../src/ui/devices";
+import { useDeviceRows } from "../../src/ui/devices";
+import { useWide } from "../../src/ui/layout";
 import { CloseToolbar } from "../../src/ui/navigation";
 import { alert } from "../../src/ui/alert";
 import {
@@ -45,8 +44,9 @@ function updateStatus(updates: Updates): string {
 export default function SettingsScreen() {
   const router = useRouter();
   const p = usePalette();
+  const wide = useWide();
+  const deviceRows = useDeviceRows();
   const devices = useStore((s) => s.devices);
-  const seen = useStore((s) => s.device_seen);
   const relayConnected = useStore((s) => s.relayConnected);
   const relayUpdateRequired = useStore((s) => s.relayUpdateRequired);
   const relayError = useStore((s) => s.relayError);
@@ -141,11 +141,6 @@ export default function SettingsScreen() {
     }),
     { title: t("Other Server…"), selected: false, onPress: () => router.push("/settings/custom-provider") },
   ];
-  const thisId = engine.deviceId;
-  // This phone first, and machines that never said what they are last.
-  const sorted = [...devices].sort((a, b) =>
-    a.id === thisId ? -1 : b.id === thisId ? 1 : Number(!!a.unknown) - Number(!!b.unknown) || a.name.localeCompare(b.name),
-  );
 
   // Blank takes back the name the phone itself goes by.
   function commitName() {
@@ -372,51 +367,15 @@ export default function SettingsScreen() {
           <Row title={t("Shared Links")} detail={sharedLinks.length ? String(sharedLinks.length) : undefined} chevron onPress={() => router.push("/settings/shared-links")} />
         </Section>
 
-        <Section
-          title={t("Devices")}
-          footer={t("Desktop Devices are Runners: they run bots with your account's provider credentials. Phones and tablets read and write chats.")}
-        >
-          {sorted.map((device) => {
-            const online = device.id === thisId || deviceIsOnline(device.id);
-            return (
-              <Row
-                key={device.id}
-                title={
-                  device.id === thisId
-                    ? t("{name} (this phone)", { name: device.name })
-                    : deviceName(device)
-                }
-                onPress={() => router.push(`/settings/device/${device.id}`)}
-                chevron
-                subtitle={[
-                  device.model,
-                  isRunner(device) ? t("Runner") : t("Device"),
-                  online ? t("Online") : lastSeen(seen[device.id]),
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
-                leading={
-                  <View style={styles.deviceIcon}>
-                    <Symbol
-                      name={deviceSymbol(device.os, device.model)}
-                      size={22}
-                      color={p.label}
-                    />
-                    <View
-                      style={[
-                        styles.deviceDot,
-                        {
-                          backgroundColor: online ? p.green : p.tertiaryLabel,
-                          borderColor: p.cell,
-                        },
-                      ]}
-                    />
-                  </View>
-                }
-              />
-            );
-          })}
-        </Section>
+        {/* On a phone the Devices tab lists them; beside the sidebar there is no tab bar. */}
+        {wide ? (
+          <Section
+            title={t("Devices")}
+            footer={t("Desktop Devices are Runners: they run bots with your account's provider credentials. Phones and tablets read and write chats.")}
+          >
+            {deviceRows}
+          </Section>
+        ) : null}
 
         {updatesSupported && (
           <Section title={t("Updates")}>
@@ -512,16 +471,6 @@ export default function SettingsScreen() {
 }
 
 const styles = StyleSheet.create({
-  deviceIcon: { width: 32, alignItems: "center" },
-  deviceDot: {
-    position: "absolute",
-    right: 0,
-    bottom: -2,
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    borderWidth: 2,
-  },
   version: { textAlign: "center", fontSize: 12, marginTop: 28 },
   dialogHost: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0 },
 });

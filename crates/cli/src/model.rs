@@ -552,6 +552,12 @@ pub struct AgentRun {
     /// The Runner it runs on, by name: "Workbench".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device: Option<String>,
+    /// The same Runner, by Device id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+    /// The repository its folder is a clone of, from its `origin` remote: "github.com/egoist/lorca".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
     /// When it started, in Unix seconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<f64>,

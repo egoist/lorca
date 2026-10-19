@@ -89,6 +89,9 @@ pub(crate) struct Record {
     /// The commit it started from, which its changes count from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base: Option<String>,
+    /// The repository its folder is a clone of: "github.com/egoist/lorca".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
     pub task: String,
     pub state: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -376,7 +379,9 @@ impl Agents {
     fn card(&self, app: &App, agent: &Agent) -> AgentRun {
         let record = agent.record();
         let asks = agent.asks.load(Ordering::SeqCst) && (record.state == "working" || record.state == "starting");
-        let device = app.bot(&record.bot_id).and_then(|bot| app.device(&bot.runner_id)).map(|device| device.name);
+        // This Runner: an agent whose bot moved elsewhere stays here until it is forgotten.
+        let device_id = app.this_device_id();
+        let device = device_id.as_deref().and_then(|id| app.device(id)).map(|device| device.name);
         // The card goes to every Device: what the agent was asked, asks, or ended on, without a
         // saved secret, as a command's card.
         let redactions = crate::secrets::Redactions::load(app);
@@ -394,6 +399,8 @@ impl Agents {
             pull_state: record.pull_state,
             changes: record.changes,
             device,
+            device_id,
+            repository: record.repository,
             started_at: Some(record.started_at),
             updated_at: Some(record.updated_at),
         }
@@ -548,6 +555,7 @@ pub(crate) async fn start(app: &Arc<App>, start: Start) -> Result<Arc<Agent>, St
         folder: start.place.folder.clone(),
         branch: start.place.branch.clone(),
         base: start.place.base.clone(),
+        repository: start.place.repository.clone(),
         task: without_secrets(app, start.task.clone()),
         state: "starting".into(),
         outcome: None,
@@ -682,10 +690,19 @@ pub(crate) async fn send(app: &Arc<App>, agent: &Arc<Agent>, text: &str, interru
         kept.ended_at = None;
     }
     app.coding_agents.sync(app, agent);
+    // Another agent may have taken up the work while this one was gone.
+    let device_id = app.this_device_id();
+    let folder = home_relative(&record.folder);
+    let at = crate::agent_roster::Place { device_id: device_id.as_deref(), folder: &folder, repository: record.repository.as_deref() };
+    let others = crate::agent_roster::working_at(app, &at, Some(&record.id));
     match launch(app, agent, &program, text, record.session.as_deref()).await {
         Ok(()) => {
             save(app);
-            Ok(format!("{who} started again on its session and is working on it."))
+            let started = format!("{who} started again on its session and is working on it.");
+            Ok(match crate::agent_roster::warning(&others, &record.bot_id, &record.chat_id) {
+                Some(warning) => format!("{started}\n\n{warning}"),
+                None => started,
+            })
         }
         Err(error) => {
             unqueue();

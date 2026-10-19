@@ -86,6 +86,8 @@ const (
 	EventDurableTasksChanged
 	EventAttentionChanged
 	EventProjectContextChanged
+	// EventCodingAgentsChanged is the account's coding agents, as `coding.list` answered them.
+	EventCodingAgentsChanged
 )
 
 // Event says what in the store changed.
@@ -152,6 +154,8 @@ type Store struct {
 	AutoReview AutoReview
 	// Attention is what waits on the user across chats, kept by the bots (attention.changed).
 	Attention AttentionView
+	// coding is the account's coding agents, every bot's in every chat (coding.list).
+	coding codingList
 	// SharedLinks are the bots the account shares as links, shared through the roster.
 	SharedLinks []SharedLink
 	// Sections are the sidebar's sections, in order, shared through the roster.
@@ -413,6 +417,7 @@ func (s *Store) bootstrap(generation int) {
 		s.emit(Event{Kind: EventSnapshotReplaced})
 		s.emit(Event{Kind: EventConnectionChanged})
 		s.emit(Event{Kind: EventIdentityChanged})
+		s.refreshAccountAgents()
 	})
 }
 
@@ -656,15 +661,25 @@ func (s *Store) handle(name string, data json.RawMessage) {
 		if name == "message.added" && botID != "" && s.thinkingBots[payload.ChatID] == botID {
 			delete(s.thinkingBots, payload.ChatID)
 		}
-		s.upsert(ToMessage(payload.Message), payload.ChatID)
+		message := ToMessage(payload.Message)
+		s.upsert(message, payload.ChatID)
+		// A start row's card changed: the account's list follows it.
+		if AgentOf(message) != nil {
+			s.refreshAccountAgents()
+		}
 
 	case "message.removed":
 		payload, ok := decode[struct {
 			ChatID    string `json:"chat_id"`
 			MessageID string `json:"message_id"`
 		}](data)
+		if !ok {
+			return
+		}
+		// The row may carry an agent, in a chat this app has not loaded.
+		s.refreshAccountAgents()
 		chat := s.Chat(payload.ChatID)
-		if !ok || chat == nil {
+		if chat == nil {
 			return
 		}
 		chat.Messages = slices.DeleteFunc(slices.Clone(chat.Messages), func(m *Message) bool { return m.ID == payload.MessageID })
@@ -684,6 +699,7 @@ func (s *Store) handle(name string, data json.RawMessage) {
 		delete(s.outputMessages, payload.ChatID)
 		delete(s.staleOutputs, payload.ChatID)
 		s.emit(Event{Kind: EventChatsChanged})
+		s.refreshAccountAgents()
 
 	case "job.started":
 		job, ok := decode[WireJobEvent](data)

@@ -956,6 +956,9 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             }
             requests::ask(app, &bot.runner_id, method, body).await
         }
+        // Every coding agent on the account, whichever bot, chat, and Runner started it, from
+        // the cards this Device's chats carry.
+        "coding.list" => Ok(crate::agent_roster::serve(app)),
         // A Runner's coding agents in its order, each on or off and installed or not, and a new
         // order: there when this Device is the Runner, else sealed to it.
         "coding.agents" | "coding.agents.set" => {

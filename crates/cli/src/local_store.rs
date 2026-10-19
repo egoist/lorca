@@ -643,6 +643,15 @@ impl LocalStore {
         collect_messages(rows)
     }
 
+    /// Every row that carries a coding agent's card (`Body::Tool.agent`), in any chat: the
+    /// account's agents, whichever bot and Runner started them.
+    pub fn agent_rows(&self) -> anyhow::Result<Vec<Message>> {
+        let connection = self.connection.lock().unwrap();
+        let mut statement = connection.prepare("SELECT message_json FROM messages WHERE body_kind = 'tool' AND message_json LIKE '%\"agent\":{%'")?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        collect_messages(rows)
+    }
+
     /// A plugin's sign-in cards (`Body::Permission` with `tool` `connect`) in one chat, or in
     /// every chat, in order, each with whether it came after the user last wrote in its chat.
     pub fn sign_in_cards(&self, chat_id: Option<&str>, plugin_id: &str) -> anyhow::Result<Vec<(Message, bool)>> {

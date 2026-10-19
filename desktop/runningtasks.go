@@ -159,6 +159,9 @@ func (m *mainWindow) openRunningTasks(anchor ui.Rect) {
 	if m.attention.open {
 		m.closeAttention()
 	}
+	if m.coding.open {
+		m.closeCodingAgents()
+	}
 	s := &m.tasks
 	s.listed, s.errors, s.busy, s.hadAny = map[string]bool{}, map[string]string{}, map[string]bool{}, false
 	s.height = flyoutHeight(runningTasksWidth, m.runningTasksPanel)
