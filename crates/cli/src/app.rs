@@ -2167,6 +2167,8 @@ impl App {
                     "model": device.model,
                     "os": device.os,
                     "os_version": device.os_version,
+                    // Whether it runs bots, so the apps' Runner pop-ups offer what bot create takes.
+                    "runner": device.is_runner(),
                     "machine_key": short_key(&device.id),
                     "is_this_device": is_this,
                     "status": status,
@@ -2188,6 +2190,7 @@ impl App {
                 "model": "",
                 "os": "",
                 "os_version": "",
+                "runner": false,
                 "machine_key": short_key(id),
                 "is_this_device": false,
                 "status": if state.device_online.contains(id) { "online" } else { "offline" },

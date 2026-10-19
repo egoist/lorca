@@ -92,6 +92,8 @@ type WireDevice struct {
 	Unknown bool              `json:"unknown"`
 	Version *string           `json:"version"`
 	Update  *WireDeviceUpdate `json:"update"`
+	// Runner is the CLI's `Device::is_runner`, which bot create and the bot tools go by.
+	Runner bool `json:"runner"`
 }
 
 type WireAttachment struct {
@@ -768,6 +770,7 @@ func ToDevice(wire WireDevice) *Device {
 		Model:        wire.Model,
 		OS:           DeviceOS(wire.OS),
 		OSVersion:    wire.OSVersion,
+		Runner:       wire.Runner,
 		IsThisDevice: wire.IsThisDevice,
 		Status:       StatusOffline,
 		LastSeen:     seconds(wire.LastSeen),

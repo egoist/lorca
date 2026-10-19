@@ -1,0 +1,10 @@
+[
+  { "id": "mac", "name": "Mac", "os": "macos", "runner": true },
+  { "id": "pc", "name": "DESKTOP-34HK9JT", "os": "windows", "runner": true },
+  { "id": "buildbox", "name": "buildbox", "os": "linux", "runner": true },
+  { "id": "iphone", "name": "iPhone", "os": "ios", "runner": false },
+  { "id": "ipad", "name": "iPad", "os": "ipados", "runner": false },
+  { "id": "pixel", "name": "Pixel 9", "os": "android", "runner": false },
+  { "id": "haiku", "name": "Haiku box", "os": "haiku", "runner": false },
+  { "id": "blank", "name": "Blank", "os": "", "runner": false }
+]

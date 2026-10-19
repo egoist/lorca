@@ -1889,7 +1889,11 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
         );
     }
     if let Some(runner) = runner {
-        prompt.push_str(&format!("\nYou run on the Runner \"{}\" ({}).", runner.name, runner.os_version));
+        prompt.push_str(&format!(
+            "\nYou run on the Runner \"{}\" ({}, {}). Your working directory, plugins, coding agents, browser, and secrets are \
+             that machine's; a teammate on another Runner has its own.",
+            runner.name, runner.os, runner.os_version
+        ));
     }
     prompt
 }
@@ -2317,7 +2321,8 @@ impl Tool for ListTeammates {
     }
     fn description(&self) -> &str {
         "List the other bots on this account: their id, name, what they are good at, which Runner they run on, whether that \
-         Runner is online, and the provider, model, and thinking they run with."
+         Runner is online, and the provider, model, and thinking they run with. Also lists the account's Runners, the \
+         computers a bot can run on, with their system and whether each is online: create_bot and edit_bot take one."
     }
     fn parameters(&self) -> Value {
         json!({ "type": "object", "properties": {}, "additionalProperties": false })
@@ -2334,6 +2339,7 @@ impl Tool for ListTeammates {
                     "name": bot.name,
                     "description": bot.description,
                     "runner": runner.as_ref().map(|d| d.name.clone()).unwrap_or_else(|| "unassigned".into()),
+                    "runner_id": bot.runner_id,
                     "provider": bot.provider,
                     // The model it runs: its own, else the provider's default.
                     "model": bot.model.clone().or_else(|| self.app.credentials.lock().unwrap().models(&bot.provider).first().map(|m| m.id.clone())),
@@ -2343,9 +2349,110 @@ impl Tool for ListTeammates {
                 })
             })
             .collect();
-        let text = serde_json::to_string_pretty(&json!({ "teammates": rows })).unwrap_or_default();
+        let text = serde_json::to_string_pretty(&json!({ "teammates": rows, "runners": runners_out(&self.app) })).unwrap_or_default();
         Ok(ToolResult::text(text).with_details(json!({ "summary": format!("Listed {} teammates", rows.len()) })))
     }
+}
+
+/// The account's Runners as a bot sees them, this one first: the Devices `Device::is_runner`
+/// takes, which are the ones the apps' Runner pop-ups offer.
+fn runners_out(app: &App) -> Vec<Value> {
+    let here = app.this_device_id();
+    let mut runners: Vec<Device> = runner_devices(app);
+    runners.sort_by_key(|d| (Some(&d.id) != here.as_ref(), d.name.to_lowercase()));
+    runners
+        .iter()
+        .map(|d| json!({ "id": d.id, "name": d.name, "os": d.os, "online": app.device_is_online(&d.id), "this_runner": Some(&d.id) == here.as_ref() }))
+        .collect()
+}
+
+/// Every Runner of the account, by the name the apps show.
+fn runner_devices(app: &App) -> Vec<Device> {
+    let ids: Vec<String> = app.state.lock().unwrap().devices.iter().filter(|d| d.is_runner()).map(|d| d.id.clone()).collect();
+    ids.iter().filter_map(|id| app.device(id)).collect()
+}
+
+/// Whether a job can reach `device` now: online, and this Device or one with a box key to seal to.
+fn takes_bots_now(app: &App, device: &Device) -> bool {
+    device.is_runner() && app.device_is_online(&device.id) && (app.this_device_id().as_deref() == Some(&device.id) || !device.box_pubkey.is_empty())
+}
+
+/// The Runner `wanted` names, by its id or the name list_teammates shows. A Device that is not
+/// a Runner, or one that is offline, is refused with the Runners that would work.
+fn pick_runner(app: &App, wanted: &str) -> Result<Device, ToolError> {
+    let wanted = wanted.trim();
+    let available = || {
+        let names: Vec<String> = runner_devices(app)
+            .into_iter()
+            .filter(|d| takes_bots_now(app, d))
+            .map(|d| format!("{} (id {}, {})", d.name, d.id, d.os))
+            .collect();
+        if names.is_empty() { "No Runner is online now.".to_string() } else { format!("Runners online: {}.", names.join(", ")) }
+    };
+    let devices: Vec<Device> = {
+        let ids: Vec<String> = app.state.lock().unwrap().devices.iter().map(|d| d.id.clone()).collect();
+        ids.iter().filter_map(|id| app.device(id)).collect()
+    };
+    let device = match devices.iter().find(|d| d.id == wanted) {
+        Some(device) => device.clone(),
+        None => {
+            let named: Vec<&Device> = devices.iter().filter(|d| d.name.eq_ignore_ascii_case(wanted)).collect();
+            match named.as_slice() {
+                [] => return Err(ToolError(format!("No Device named {wanted}. {}", available()))),
+                [device] => (*device).clone(),
+                _ => return Err(ToolError(format!("{} Devices are named {wanted}; pass the id. {}", named.len(), available()))),
+            }
+        }
+    };
+    if !device.is_runner() {
+        let os = if device.os.is_empty() { "an unknown system".to_string() } else { device.os.clone() };
+        return Err(ToolError(format!(
+            "{} runs {os}, so it is a Device, not a Runner: only a Mac, Linux, or Windows computer runs bots. {}",
+            device.name,
+            available()
+        )));
+    }
+    if !takes_bots_now(app, &device) {
+        return Err(ToolError(format!("{} is offline, so its CLI can't take a bot now. {}", device.name, available())));
+    }
+    Ok(device)
+}
+
+/// A bot's Access as it reaches another Runner: shell and files as they were, but plugins are
+/// that machine's own connections, so an allowlist starts empty and the user grants them there.
+/// No list (every plugin) stays every plugin, which is what any new bot has.
+fn access_on_another_runner(permissions: Option<crate::permissions::BotPermissions>) -> (Option<crate::permissions::BotPermissions>, bool) {
+    match permissions {
+        Some(mut permissions) if permissions.connections.as_ref().is_some_and(|c| !c.is_empty()) => {
+            permissions.connections = Some(Default::default());
+            (Some(permissions), true)
+        }
+        other => (other, false),
+    }
+}
+
+/// The `runner` parameter's description, naming the account's Runners so a bot picks one
+/// without guessing; whether each is online is list_teammates', which is read when it matters.
+fn runner_parameter(app: &App, default: &str) -> String {
+    let runners: Vec<String> = runners_out(app).iter().map(|r| format!("{} ({})", r["name"].as_str().unwrap_or(""), r["os"].as_str().unwrap_or(""))).collect();
+    format!(
+        "The Runner it runs on: a Runner's id or name from list_teammates; it must be online. {default}. The account's Runners: {}",
+        if runners.is_empty() { "none".to_string() } else { runners.join(", ") }
+    )
+}
+
+/// What a bot on another Runner has there, for create_bot's and edit_bot's answers.
+fn another_runner_note(runner: &str, device: Option<&Device>, plugins_cleared: bool) -> String {
+    let system = device.map(|d| if d.os_version.is_empty() { d.os.clone() } else { d.os_version.clone() }).unwrap_or_default();
+    let mut note = format!(
+        " Its turns run on {runner}{}, with the account's providers: its working directory, plugins, coding agents, browser, \
+         and secrets are that machine's, not yours.",
+        if system.is_empty() { String::new() } else { format!(" ({system})") }
+    );
+    if plugins_cleared {
+        note.push_str(&format!(" Its Access lists no plugins on {runner} yet; the user grants them in its profile."));
+    }
+    note
 }
 
 /// The bot with this id, for the tools that name a teammate: by id, since two bots can share a
@@ -2810,9 +2917,10 @@ impl Tool for CreateBot {
         "create_bot"
     }
     fn description(&self) -> &str {
-        "Create a new teammate bot on your Runner with one clear job. In a group chat the new bot joins it right away; \
-         in a direct chat it gets its own direct chat and can be added to a group later. Propose the team first and create \
-         bots only once the user agrees."
+        "Create a new teammate bot with one clear job, on your Runner or on another Runner of the account (an online Mac, \
+         Linux, or Windows computer; list_teammates lists them) when the work needs that machine. In a group chat the new \
+         bot joins it right away; in a direct chat it gets its own direct chat and can be added to a group later. Propose \
+         the team first, with the Runner, and create bots only once the user agrees."
     }
     fn parameters(&self) -> Value {
         json!({
@@ -2823,7 +2931,8 @@ impl Tool for CreateBot {
                 "provider": { "type": "string", "enum": self.app.credentials.lock().unwrap().kinds(), "description": "Defaults to your own provider" },
                 "model": { "type": "string", "description": "A model id the provider offers. Defaults to the provider's default model" },
                 "thinking": { "type": "string", "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"], "description": "How much the model thinks, a level the model takes. Defaults to the model's default" },
-                "workdir": { "type": "string", "description": "Working directory for its tools. Defaults to a private workspace under the CLI home; give it your own path to share files" }
+                "runner": { "type": "string", "description": runner_parameter(&self.app, "Defaults to yours") },
+                "workdir": { "type": "string", "description": "Working directory for its tools, a path on its Runner. Defaults to a private workspace under the CLI home there; on your Runner, give it your own path to share files" }
             },
             "required": ["name", "description"],
             "additionalProperties": false
@@ -2851,6 +2960,13 @@ impl Tool for CreateBot {
         let (model, thinking) = (field("model"), field("thinking"));
         let runs = Runs { provider, model: None, thinking: None }.change(&self.app, None, model, thinking)?;
         let runs_with = (args["provider"].is_string() || model.is_some() || thinking.is_some()).then(|| runs.describe(&self.app));
+        let runner_id = match field("runner") {
+            Some(wanted) => pick_runner(&self.app, wanted)?.id,
+            None => self.bot.runner_id.clone(),
+        };
+        let elsewhere = runner_id != self.bot.runner_id;
+        let caller = self.app.bot(&self.bot.id).ok_or("The calling bot is gone")?.permissions;
+        let (permissions, plugins_cleared) = if elsewhere { access_on_another_runner(caller) } else { (caller, false) };
         let (symbol_name, accent) = look_for(&name);
         let bot = Bot {
             id: String::new(),
@@ -2859,13 +2975,13 @@ impl Tool for CreateBot {
             symbol_name,
             accent,
             avatar: None,
-            runner_id: self.bot.runner_id.clone(),
+            runner_id,
             provider: runs.provider,
             model: runs.model,
             thinking: runs.thinking,
             legacy_instructions: String::new(),
             workdir: args["workdir"].as_str().map(|w| w.trim().to_string()).filter(|w| !w.is_empty()),
-            permissions: self.app.bot(&self.bot.id).ok_or("The calling bot is gone")?.permissions,
+            permissions,
             created_at: 0.0,
         };
         let (created, _dm) = self.app.create_bot_with_dm(bot, None).map_err(|e| ToolError(e.to_string()))?;
@@ -2886,7 +3002,8 @@ impl Tool for CreateBot {
             }
         }
 
-        let runner = self.app.device(&created.runner_id).map(|d| d.name).unwrap_or_else(|| "this Runner".into());
+        let device = self.app.device(&created.runner_id);
+        let runner = device.as_ref().map(|d| d.name.clone()).unwrap_or_else(|| "this Runner".into());
         let mut text = if joined_here {
             format!("Created {} (id {}) on {runner}. They are in this chat now and take turns after you.", created.name, created.id)
         } else {
@@ -2897,6 +3014,9 @@ impl Tool for CreateBot {
         };
         if let Some(runs) = runs_with {
             text.push_str(&format!(" They run {runs}."));
+        }
+        if elsewhere {
+            text.push_str(&another_runner_note(&runner, device.as_ref(), plugins_cleared));
         }
         Ok(ToolResult::text(text).with_details(json!({ "summary": format!("Created {}", created.name), "bot_id": created.id })))
     }
@@ -2914,9 +3034,11 @@ impl Tool for EditBot {
         "edit_bot"
     }
     fn description(&self) -> &str {
-        "Change a teammate's profile: name, description, provider, model, thinking, or working directory. Only the \
-         fields you pass change. Description is the complete account of what the bot does and how it works. You can \
-         edit yourself. Changes apply from that bot's next turn. Edit only when the user asks or agrees."
+        "Change a teammate's profile: name, description, provider, model, thinking, working directory, or the Runner it \
+         runs on. Only the fields you pass change. Description is the complete account of what the bot does and how it \
+         works. You can edit yourself. Changes apply from that bot's next turn; a turn it has running finishes where it \
+         started. Moved to another Runner, a bot works with that machine's files, plugins, and coding agents, and its \
+         memory stays on the old one. Edit only when the user asks or agrees."
     }
     fn parameters(&self) -> Value {
         json!({
@@ -2928,7 +3050,8 @@ impl Tool for EditBot {
                 "provider": { "type": "string", "enum": self.app.credentials.lock().unwrap().kinds(), "description": "Another provider starts on its default model and thinking, unless you pass them too" },
                 "model": { "type": "string", "description": "A model id the provider offers, or default for the provider's default model" },
                 "thinking": { "type": "string", "enum": ["default", "off", "minimal", "low", "medium", "high", "xhigh", "max"], "description": "How much the model thinks: a level the model takes, or default" },
-                "workdir": { "type": "string", "description": "New working directory for its tools" }
+                "workdir": { "type": "string", "description": "New working directory for its tools, a path on its Runner" },
+                "runner": { "type": "string", "description": runner_parameter(&self.app, "Moving it clears its working directory unless you pass workdir") }
             },
             "required": ["bot_id"],
             "additionalProperties": false
@@ -2962,6 +3085,24 @@ impl Tool for EditBot {
             }
         }
         let runs = Runs::of(&target).change(&self.app, provider.as_deref(), model.as_deref(), thinking.as_deref())?;
+        // The same Runner again is no move.
+        let moved_to = match field("runner") {
+            Some(wanted) => Some(pick_runner(&self.app, &wanted)?).filter(|device| device.id != target.runner_id),
+            None => None,
+        };
+        if moved_to.is_some() {
+            // A service's events reach the Runner that subscribed, so such a routine would stop
+            // hearing them.
+            let listening: Vec<String> = self.app.routines_of(&target.id).into_iter().filter(|r| r.events.is_some()).map(|r| r.name).collect();
+            if !listening.is_empty() {
+                return Err(ToolError(format!(
+                    "{} has routines that run on a service's events, which reach the Runner it is on: {}. Delete them first and \
+                     set them up again after the move.",
+                    target.name,
+                    listening.join(", ")
+                )));
+            }
+        }
         let changed: Vec<&str> = [
             ("name", new_name.is_some()),
             ("description", description.is_some()),
@@ -2969,13 +3110,21 @@ impl Tool for EditBot {
             ("model", model.is_some()),
             ("thinking", thinking.is_some()),
             ("working directory", workdir.is_some()),
+            ("Runner", moved_to.is_some()),
         ]
         .into_iter()
         .filter_map(|(label, set)| set.then_some(label))
         .collect();
         if changed.is_empty() {
-            return Err("Pass at least one field to change: name, description, provider, model, thinking, or workdir".into());
+            if field("runner").is_some() {
+                return Err(ToolError(format!("{} already runs there.", target.name)));
+            }
+            return Err("Pass at least one field to change: name, description, provider, model, thinking, workdir, or runner".into());
         }
+        let (permissions, plugins_cleared) = match &moved_to {
+            Some(_) => access_on_another_runner(target.permissions.clone()),
+            None => (target.permissions.clone(), false),
+        };
         let runtime = provider.is_some() || model.is_some() || thinking.is_some();
         let runs_with = runtime.then(|| runs.describe(&self.app));
 
@@ -2993,6 +3142,12 @@ impl Tool for EditBot {
                     bot.model = runs.model;
                     bot.thinking = runs.thinking;
                 }
+                if let Some(device) = &moved_to {
+                    // A path names a place on the old machine.
+                    bot.runner_id = device.id.clone();
+                    bot.workdir = None;
+                    bot.permissions = permissions;
+                }
                 if let Some(v) = workdir {
                     bot.workdir = Some(v);
                 }
@@ -3000,12 +3155,17 @@ impl Tool for EditBot {
             .map_err(|e| ToolError(e.to_string()))?;
 
         let what = changed.join(", ");
-        let text = match (target.id == self.bot.id, runs_with) {
+        let mut text = match (target.id == self.bot.id, runs_with) {
             (true, Some(runs)) => format!("Updated your own profile ({what}). From your next turn you run {runs}; finish this one as you are."),
             (true, None) => format!("Updated your own profile ({what}). The new profile applies from your next turn; finish this one as you are."),
             (false, Some(runs)) => format!("Updated {} ({what}). From their next turn they run {runs}.", updated.name),
             (false, None) => format!("Updated {} ({what}). The new profile applies from their next turn.", updated.name),
         };
+        if let Some(device) = &moved_to {
+            let old = self.app.device(&target.runner_id).map(|d| d.name).unwrap_or_else(|| "the old Runner".into());
+            text.push_str(&format!(" A turn running on {old} finishes there.{}", another_runner_note(&device.name, Some(device), plugins_cleared)));
+            text.push_str(&format!(" Its memory stays on {old}; its routines run on {} from their next time.", device.name));
+        }
         Ok(ToolResult::text(text).with_details(json!({ "summary": format!("Updated {}", updated.name), "bot_id": updated.id, "changed": changed })))
     }
 }
@@ -5423,5 +5583,212 @@ mod tests {
         assert!(cue.contains("does not have yet: Linear (Issues in Linear). After your hello, call install_plugin"), "{cue}");
         let bare = setup_cue(app, &TemplateSetup { template: "Prototyper".into(), ..Default::default() });
         assert!(!bare.contains("memory_update") && !bare.contains("routines") && !bare.contains("install_plugin"), "{bare}");
+    }
+
+    /// A Mac Runner and a Windows Runner of one account, and the Mac's Chef. The Mac also knows
+    /// an Android phone, which is online, and a Linux Runner that is offline.
+    fn mac_and_windows() -> (ScratchApp, ScratchApp, Bot, Device) {
+        use crate::keys::{b64, Machine};
+        let mac = scratch_app();
+        crate::identity::create(&mac.0, Some("Mac".into())).unwrap();
+        mac.0.settings.lock().unwrap().relay_url = Some("https://relay.invalid".into());
+        let windows = scratch_app();
+        let mut paired = mac.0.machine_file().unwrap();
+        paired.machine_secret = b64(&Machine::generate().secret);
+        paired.name = "DESKTOP-34HK9JT".into();
+        *windows.0.machine.lock().unwrap() = Some(paired);
+        windows.0.save_machine().unwrap();
+        let pc = Device { name: "DESKTOP-34HK9JT".into(), os: "windows".into(), os_version: "Windows 11 Pro 24H2".into(), ..windows.0.local_device().unwrap() };
+        {
+            let mut state = mac.0.state.lock().unwrap();
+            state.devices.push(pc.clone());
+            state.devices.push(Device { id: "pixel".into(), name: "Pixel 9".into(), os: "android".into(), box_pubkey: "key".into(), ..Default::default() });
+            state.devices.push(Device { id: "buildbox".into(), name: "buildbox".into(), os: "linux".into(), box_pubkey: "key".into(), ..Default::default() });
+            state.device_online.extend(["pixel".to_string(), pc.id.clone()]);
+        }
+        let chef = mac.0.state.lock().unwrap().bots[0].clone();
+        (mac, windows, chef, pc)
+    }
+
+    /// What a tool answered, as text.
+    fn answer(result: ToolResult) -> String {
+        result.content[0].as_text().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn create_bot_puts_a_teammate_on_another_runner_whose_turns_run_there() {
+        let (mac, windows, chef, pc) = mac_and_windows();
+        let app = &mac.0;
+        let chat_id = app.dm_with(&chef.id, None).unwrap().meta.id;
+        let no_updates: ToolUpdateFn = Arc::new(|_| {});
+        let create = CreateBot { app: app.clone(), chat_id: chat_id.clone(), bot: chef.clone() };
+
+        // The parameter names every Runner, and only Runners.
+        let described = create.parameters()["properties"]["runner"]["description"].as_str().unwrap().to_string();
+        assert!(described.contains("DESKTOP-34HK9JT (windows)") && described.contains("buildbox (linux)"), "{described}");
+        assert!(!described.contains("Pixel"), "{described}");
+
+        let args = json!({ "name": "Gamer", "description": "Measures frame latency on a real GPU", "runner": "desktop-34hk9jt" });
+        let text = answer(create.execute("call", args, CancellationToken::new(), no_updates.clone()).await.unwrap());
+        assert!(text.starts_with("Created Gamer (id bot-") && text.contains(" on DESKTOP-34HK9JT with their own direct chat."), "{text}");
+        assert!(text.contains("Its turns run on DESKTOP-34HK9JT (Windows 11 Pro 24H2), with the account's providers"), "{text}");
+        let gamer = app.state.lock().unwrap().bots.iter().find(|b| b.name == "Gamer").cloned().unwrap();
+        assert_eq!(gamer.runner_id, pc.id);
+
+        // list_teammates says where it runs, and lists the Runners to pick from: this one first,
+        // the phone left out.
+        let listed = ListTeammates { app: app.clone(), chat_id: chat_id.clone() }.execute("call", json!({}), CancellationToken::new(), no_updates).await.unwrap();
+        let listed: Value = serde_json::from_str(&answer(listed)).unwrap();
+        let row = listed["teammates"].as_array().unwrap().iter().find(|t| t["name"] == "Gamer").unwrap();
+        assert_eq!((&row["runner"], &row["runner_id"], &row["online"]), (&json!("DESKTOP-34HK9JT"), &json!(pc.id), &json!(true)));
+        let runners: Vec<(String, String, bool, bool)> = listed["runners"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| (r["name"].as_str().unwrap().into(), r["os"].as_str().unwrap().into(), r["online"].as_bool().unwrap(), r["this_runner"].as_bool().unwrap()))
+            .collect();
+        let os = app.local_device().unwrap().os;
+        assert_eq!(
+            runners,
+            [("Mac".into(), os, true, true), ("buildbox".into(), "linux".into(), false, false), ("DESKTOP-34HK9JT".into(), "windows".into(), true, false)]
+        );
+
+        // Its first turn goes to the Windows Runner, which runs it as its own bot.
+        let dm = app.dm_with(&gamer.id, None).unwrap().meta.id;
+        let job = Job { kind: "turn".into(), ..crate::runtime::command_job(app, &dm, &gamer.id, "message") };
+        assert!(matches!(crate::runtime::dispatch_job(app, job.clone()), crate::runtime::Dispatch::Sent));
+        let outbox = app.store.outbox().unwrap();
+        let sealed = outbox.iter().find(|item| item.kind == "job").unwrap();
+        assert_eq!(sealed.recipient.as_deref(), Some(pc.id.as_str()));
+        *windows.0.state.lock().unwrap() = app.state.lock().unwrap().clone();
+        let opened = crate::envelope::open::<Job>(&windows.0, &windows.0.machine_file().unwrap(), "job", &sealed.ciphertext).unwrap();
+        assert_eq!(opened.body.id, job.id);
+        let there = windows.0.bot(&opened.body.bot_id).unwrap();
+        assert_eq!(windows.0.this_device_id(), Some(there.runner_id.clone()));
+        assert!(there.working_directory(&windows.0.config.home).starts_with(&windows.0.config.home));
+        let chat = windows.0.chat(&dm).unwrap();
+        let store = MemoryStore::for_bot(&windows.0.config.home, &there);
+        let prompt = system_prompt(&windows.0, &chat, &there, &opened.body, &store, None, &[]);
+        assert!(
+            prompt.contains("You run on the Runner \"DESKTOP-34HK9JT\" (windows, Windows 11 Pro 24H2). Your working directory, plugins, coding agents, browser, and secrets are that machine's"),
+            "{prompt}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_bot_refuses_a_phone_or_an_offline_runner_and_names_the_ones_that_work() {
+        let (mac, _windows, chef, pc) = mac_and_windows();
+        let app = &mac.0;
+        let no_updates: ToolUpdateFn = Arc::new(|_| {});
+        let create = CreateBot { app: app.clone(), chat_id: "chat".into(), bot: chef.clone() };
+        let refused = |runner: &str| {
+            let args = json!({ "name": "Builder", "description": "Builds the Linux packages", "runner": runner });
+            let run = create.execute("call", args, CancellationToken::new(), no_updates.clone());
+            async move { run.await.unwrap_err().0 }
+        };
+        let mac_id = app.this_device_id().unwrap();
+        let works = format!("Runners online: Mac (id {mac_id}, {}), DESKTOP-34HK9JT (id {}, windows).", app.local_device().unwrap().os, pc.id);
+
+        assert_eq!(refused("Pixel 9").await, format!("Pixel 9 runs android, so it is a Device, not a Runner: only a Mac, Linux, or Windows computer runs bots. {works}"));
+        assert_eq!(refused("pixel").await, format!("Pixel 9 runs android, so it is a Device, not a Runner: only a Mac, Linux, or Windows computer runs bots. {works}"));
+        assert_eq!(refused("buildbox").await, format!("buildbox is offline, so its CLI can't take a bot now. {works}"));
+        assert_eq!(refused("Studio").await, format!("No Device named Studio. {works}"));
+        assert!(app.state.lock().unwrap().bots.iter().all(|b| b.name != "Builder"));
+
+        // Back online, the Linux Runner takes it.
+        app.state.lock().unwrap().device_online.insert("buildbox".into());
+        let args = json!({ "name": "Builder", "description": "Builds the Linux packages", "runner": "buildbox" });
+        create.execute("call", args, CancellationToken::new(), no_updates).await.unwrap();
+        assert_eq!(app.state.lock().unwrap().bots.iter().find(|b| b.name == "Builder").unwrap().runner_id, "buildbox");
+    }
+
+    #[tokio::test]
+    async fn a_teammate_on_another_runner_starts_with_none_of_the_callers_plugins() {
+        let (mac, _windows, chef, pc) = mac_and_windows();
+        let app = &mac.0;
+        let policy = serde_json::from_value(json!({ "connections": { "github": { "capabilities": ["read"] } }, "shell": false, "filesystem": "read" })).unwrap();
+        app.update_bot(&chef.id, |bot| bot.permissions = Some(policy)).unwrap();
+        let no_updates: ToolUpdateFn = Arc::new(|_| {});
+        let create = CreateBot { app: app.clone(), chat_id: "chat".into(), bot: chef.clone() };
+        let made = |name: &str| app.state.lock().unwrap().bots.iter().find(|b| b.name == name).cloned().unwrap();
+
+        create.execute("call", json!({ "name": "Here", "description": "Reads issues" }), CancellationToken::new(), no_updates.clone()).await.unwrap();
+        assert_eq!(made("Here").permissions, app.bot(&chef.id).unwrap().permissions);
+
+        let text = answer(create.execute("call", json!({ "name": "There", "description": "Reads issues", "runner": pc.id }), CancellationToken::new(), no_updates).await.unwrap());
+        assert!(text.ends_with(" Its Access lists no plugins on DESKTOP-34HK9JT yet; the user grants them in its profile."), "{text}");
+        let there = made("There").permissions.unwrap();
+        assert_eq!(there.connections, Some(Default::default()));
+        assert_eq!((there.shell, there.filesystem), (false, crate::permissions::FilesystemAccess::Read));
+    }
+
+    #[tokio::test]
+    async fn edit_bot_moves_a_bot_between_runners_with_its_routines() {
+        let (mac, windows, chef, pc) = mac_and_windows();
+        let app = &mac.0;
+        let mac_id = app.this_device_id().unwrap();
+        let scout = Bot { id: "scout".into(), name: "Scout".into(), runner_id: mac_id.clone(), workdir: Some("/Users/me/src".into()), ..chef.clone() };
+        app.create_bot_with_dm(scout, None).unwrap();
+        crate::turns::call_routines_tool(app, "scout", json!({ "action": "create", "name": "Nightly", "schedule": "every 1d", "prompt": "Build and report" }))
+            .await
+            .unwrap();
+        let no_updates: ToolUpdateFn = Arc::new(|_| {});
+        let edit = EditBot { app: app.clone(), bot: chef.clone() };
+        let run = |args: Value| edit.execute("call", args, CancellationToken::new(), no_updates.clone());
+
+        let refused = run(json!({ "bot_id": "scout", "runner": "Pixel 9" })).await.unwrap_err().0;
+        assert!(refused.starts_with("Pixel 9 runs android, so it is a Device, not a Runner") && refused.contains("DESKTOP-34HK9JT (id"), "{refused}");
+        assert_eq!(app.bot("scout").unwrap().runner_id, mac_id);
+        assert_eq!(run(json!({ "bot_id": "scout", "runner": "Mac" })).await.unwrap_err().0, "Scout already runs there.");
+
+        let text = answer(run(json!({ "bot_id": "scout", "runner": "DESKTOP-34HK9JT" })).await.unwrap());
+        assert!(text.starts_with("Updated Scout (Runner). The new profile applies from their next turn. A turn running on Mac finishes there."), "{text}");
+        assert!(text.ends_with("Its memory stays on Mac; its routines run on DESKTOP-34HK9JT from their next time."), "{text}");
+        let moved = app.bot("scout").unwrap();
+        // The Mac path means nothing on Windows: the bot works in its own workspace there.
+        assert_eq!((moved.runner_id.as_str(), moved.workdir.as_deref()), (pc.id.as_str(), None));
+
+        // On the Windows Runner the bot and its routine are its own.
+        *windows.0.state.lock().unwrap() = app.state.lock().unwrap().clone();
+        let there = windows.0.bot("scout").unwrap();
+        assert_eq!(windows.0.this_device_id(), Some(there.runner_id.clone()));
+        assert!(there.working_directory(&windows.0.config.home).starts_with(&windows.0.config.home));
+        let routines = windows.0.routines_of("scout");
+        assert_eq!(routines.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["Nightly"]);
+        assert!(routines[0].next_run_at().is_some());
+
+        // And back by id, with a path on the Mac.
+        run(json!({ "bot_id": "scout", "runner": mac_id, "workdir": "/Users/me/src" })).await.unwrap();
+        let back = app.bot("scout").unwrap();
+        assert_eq!((back.runner_id.as_str(), back.workdir.as_deref()), (mac_id.as_str(), Some("/Users/me/src")));
+
+        // A routine on a service's events keeps the bot where its subscription is.
+        app.state.lock().unwrap().routines[0].events = Some(serde_json::from_value(json!({ "receiver": "github", "subject": "egoist/mygo#517" })).unwrap());
+        let refused = run(json!({ "bot_id": "scout", "runner": pc.id })).await.unwrap_err().0;
+        assert!(refused.starts_with("Scout has routines that run on a service's events, which reach the Runner it is on: Nightly."), "{refused}");
+        assert_eq!(app.bot("scout").unwrap().runner_id, mac_id);
+    }
+
+    #[test]
+    fn the_snapshot_marks_the_runners_the_bot_tools_take() {
+        let (mac, _windows, _chef, _pc) = mac_and_windows();
+        let app = &mac.0;
+        app.state.lock().unwrap().devices.push(Device { id: "beos".into(), name: "Haiku box".into(), os: "haiku".into(), box_pubkey: "key".into(), ..Default::default() });
+        app.state.lock().unwrap().device_online.insert("beos".into());
+        let snapshot = app.snapshot();
+        for device in snapshot["devices"].as_array().unwrap() {
+            let id = device["id"].as_str().unwrap();
+            let takes = pick_runner(app, id).is_ok() || app.device(id).is_some_and(|d| d.is_runner() && !app.device_is_online(id));
+            assert_eq!(device["runner"].as_bool().unwrap(), takes, "{device}");
+        }
+        let runners: Vec<&str> = snapshot["devices"].as_array().unwrap().iter().filter(|d| d["runner"] == true).map(|d| d["name"].as_str().unwrap()).collect();
+        assert_eq!(runners, ["Mac", "buildbox", "DESKTOP-34HK9JT"]);
+
+        // The table the desktop app's Runners() is held to (`TestRunnersAreTheDevicesTheCLIMarks`).
+        let table: Vec<Value> = serde_json::from_str(include_str!("../../../desktop/model/testdata/runner_devices.json")).unwrap();
+        for row in &table {
+            let device = Device { id: row["id"].as_str().unwrap().into(), os: row["os"].as_str().unwrap().into(), ..Default::default() };
+            assert_eq!(device.is_runner(), row["runner"].as_bool().unwrap(), "{row}");
+        }
     }
 }

@@ -716,6 +716,9 @@ type Device struct {
 	// MachineName is the name the machine goes by, which a name the account gives the Device
 	// stands in for. Empty when it is Name.
 	MachineName string
+	// Runner is whether it runs bots, as its CLI says: an `os` this app does not know still
+	// shows as Linux, but only the CLI's Runners are offered for a bot.
+	Runner bool
 }
 
 // DeviceUpdate is a self-updating CLI's updates, as its `machine` blob tells every Device.
@@ -730,8 +733,8 @@ type DeviceUpdate struct {
 	Error string
 }
 
-// IsRunner is derived from the OS alone: a desktop Device is a Runner and can be assigned bots.
-func (d *Device) IsRunner() bool { return d.OS.IsDesktop() }
+// IsRunner is whether the Device can be assigned bots: a desktop Device, as the CLI decides it.
+func (d *Device) IsRunner() bool { return d.Runner }
 
 // IsStandaloneRunner identifies released standalone CLIs by their advertised updates.
 // Bundled and development CLIs show no `lorca service` status or installation advice.

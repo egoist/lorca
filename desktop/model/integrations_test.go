@@ -52,7 +52,7 @@ func TestAccountRequestsSelectRunnerAndInstanceAndPublishOnReplyQueue(t *testing
 	posts := make(chan func(), 8)
 	rpc := &integrationTransport{calls: make(chan integrationRequest, 8), reply: `{"status":{"id":"gmail-instance","name":"Gmail · Work","service_id":"gmail","account_name":"Work","state":"ready"}}`}
 	s := NewStore(rpc, func(fn func()) { posts <- fn }, false)
-	s.Devices = []*Device{{ID: "runner", OS: OSLinux}}
+	s.Devices = []*Device{{ID: "runner", OS: OSLinux, Runner: true}}
 	called := false
 	s.InstallPluginAccount("gmail", "runner", "Work", func(account InstalledPlugin, err error) {
 		called = true

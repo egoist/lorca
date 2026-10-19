@@ -48,7 +48,7 @@ Every Device writes its `os` into its machine metadata blob. Values: `macos`, `l
 | `macos`, `linux`, `windows` | **Runner** | Everything a Device can, plus be assigned bots and run Jobs with the account’s credentials. |
 | `ios`, `ipados`, `android`  | Device     | Hold keys, configure account providers, read and write chats, create bots for Runners. |
 
-Runner status is derived from `os` alone. There is no flag to opt a phone in or a desktop out. Peers read `os` from the decrypted metadata blob, so the relay never learns which Devices are Runners.
+Runner status is derived from `os` alone (`Device::is_runner`). There is no flag to opt a phone in or a desktop out. Peers read `os` from the decrypted metadata blob, so the relay never learns which Devices are Runners. The snapshot and `roster.changed` give each Device's `runner` as `is_runner` decides it, and the desktop app's Runner pop-ups offer those Devices, the ones bot create and a bot's `create_bot` take; it shows an `os` it does not know as Linux, but not as a Runner. Both are held to `desktop/model/testdata/runner_devices.json`. The phone's `isRunner` takes the same three `os` values.
 
 ## Relay surface
 
