@@ -228,7 +228,7 @@ func TestRenderCodingAgents(t *testing.T) {
 	if !m.hasSheet() {
 		t.Fatal("no agent page")
 	}
-	for _, text := range []string{"Claude Code · Working · fix-docs-link · Studio", "Prompt", "Show more", "Working in ~/Projects/site on main",
+	for _, text := range []string{"Claude Code · Working · fix-docs-link · Studio", "Developer", "Show more", "Working in ~/Projects/site on main",
 		"Thought for 3s", "Explored 3 files 2 searches", "Point the link at /docs/cli/install", "Not allowed: git push origin fix-docs-link",
 		"The link test failed: the Chinese page still links to /docs/install.", "Running bun test links", "Stop", "fix-docs-link"} {
 		if !tt.HasText(text) {
@@ -256,6 +256,23 @@ func TestRenderCodingAgents(t *testing.T) {
 	}
 	settle(tt)
 	renderBoth(t, tt, "coding-page-open")
+	// The user writes to the agent itself: Return sends, and the page shows the message as theirs.
+	if !tt.HasText(L("%@ takes it up once it is done with what it is doing.", "Claude Code")) {
+		t.Errorf("no line under the composer: %q", tt.Texts())
+	}
+	if err := tt.Click(L("Message %@", "Claude Code")); err != nil {
+		t.Fatal(err)
+	}
+	tt.Type("Also check the Chinese page")
+	tt.Key(0, ui.KeyEnter)
+	settle(tt)
+	if !m.hasSheet() {
+		t.Fatal("Return closed the page instead of sending")
+	}
+	if !tt.HasText("Also check the Chinese page") || !tt.HasText(L("You")) {
+		t.Errorf("the message is not on the page: %q", tt.Texts())
+	}
+	renderBoth(t, tt, "coding-page-sent")
 	if err := tt.Click(L("Stop")); err != nil {
 		t.Fatal(err)
 	}
@@ -308,6 +325,12 @@ func TestAnAgentNotifiesWhenItAsksAndWhenItReports(t *testing.T) {
 	if notificationFor(report) != nil {
 		t.Error("an agent that ended on its own notifies")
 	}
+	// What the user wrote to an agent on its page is their own.
+	mine := &model.Message{Author: model.You, Body: model.Body{Kind: model.BodyAgentMessage,
+		AgentMessage: &model.AgentMessage{AgentKind: "claude", Title: "Login", Text: "Use the staging key"}}}
+	if notificationFor(mine) != nil {
+		t.Error("the user's own message to an agent notifies")
+	}
 }
 
 func TestTheChatPreviewNamesTheAgent(t *testing.T) {
@@ -329,6 +352,42 @@ func TestTheChatPreviewNamesTheAgent(t *testing.T) {
 		AgentMessage: &model.AgentMessage{AgentKind: "pi", Title: "Fix it", Text: "Fixed it."}}})
 	if got := store.Preview(chat); got != L("Message from %@: %@", "Fix it", "Fixed it.") {
 		t.Errorf("preview %q", got)
+	}
+	chat.Messages = append(chat.Messages, &model.Message{Author: model.You, Body: model.Body{Kind: model.BodyAgentMessage,
+		AgentMessage: &model.AgentMessage{AgentKind: "pi", Title: "Fix it", Text: "Now the docs."}}})
+	if got := store.Preview(chat); got != L("You messaged %@: %@", "Fix it", "Now the docs.") {
+		t.Errorf("preview %q", got)
+	}
+}
+
+// The page's composer takes a message as the agent stands: at work or done, and once its process
+// is gone, to start it again on its session; never while it starts, nor once it ended before its
+// session began.
+func TestTheAgentPagesComposer(t *testing.T) {
+	demoWindow(t)
+	page := &agentPage{loaded: true, reachable: true}
+	working := L("%@ takes it up once it is done with what it is doing.", "Codex")
+	again := L("Sending starts %@ again on its session.", "Codex")
+	cases := []struct {
+		state   model.AgentState
+		hint    string
+		enabled bool
+	}{
+		{model.AgentStarting, "", false},
+		{model.AgentWorking, working, true},
+		{model.AgentAsking, working, true},
+		{model.AgentIdle, "", true},
+		{model.AgentStopped, again, true},
+		{model.AgentFailed, again, true},
+	}
+	for _, each := range cases {
+		if _, hint, enabled := page.composerState(&model.AgentRun{Kind: "codex", State: each.state}); hint != each.hint || enabled != each.enabled {
+			t.Errorf("%s: %q %v", each.state, hint, enabled)
+		}
+	}
+	page.reachable = false
+	if _, hint, enabled := page.composerState(&model.AgentRun{Kind: "codex", State: model.AgentFailed}); enabled || hint == "" {
+		t.Errorf("an agent with no session takes a message: %q", hint)
 	}
 }
 

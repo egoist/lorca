@@ -6,6 +6,7 @@ import (
 	"log"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -132,6 +133,8 @@ type Store struct {
 	// IsMock is the seeded demo (`LORCA_MOCK=1`), which runs without a CLI.
 	IsMock    bool
 	transport Transport
+	// mockAgentSent are the demo's messages to a coding agent, by its start's row.
+	mockAgentSent map[string][]AgentItem
 	// post runs a function on the main thread, after the current one returns.
 	post func(func())
 
@@ -1017,6 +1020,10 @@ func (s *Store) Preview(chat *Chat) string {
 		body = L("Messaged %@: %@", target, content.Tool.Detail)
 	case BodyAgentMessage:
 		said := content.AgentMessage
+		if last.Author.Kind == AuthorYou {
+			body = L("You messaged %@: %@", firstNonEmpty(said.Title, CodingAgentName(said.AgentKind)), said.Text)
+			break
+		}
 		body = L("Message from %@: %@", firstNonEmpty(said.Title, CodingAgentName(said.AgentKind)), said.Text)
 	case BodyHandoff:
 		if slices.Contains(chat.BotIDs, content.Handoff.To) && !slices.Contains(chat.BotIDs, content.Handoff.From) {
@@ -1829,11 +1836,28 @@ func (s *Store) StopAgent(chatID, messageID string, done func(error)) {
 	s.simple(done, "coding.stop", map[string]any{"chat_id": chatID, "message_id": messageID})
 }
 
+// SendToAgent gives a coding agent the user's message, here or on its bot's Runner, down the
+// path the bot's own messages take: it takes it up once it is done with what it does now, and an
+// agent whose process is gone starts again on its session. The chat shows it as the user's
+// message to the agent.
+func (s *Store) SendToAgent(chatID, messageID, text string, done func(error)) {
+	if s.IsMock {
+		if s.mockAgentSent == nil {
+			s.mockAgentSent = map[string][]AgentItem{}
+		}
+		sent := s.mockAgentSent[messageID]
+		s.mockAgentSent[messageID] = append(sent, AgentItem{ID: "sent-" + strconv.Itoa(len(sent)), Kind: "prompt", Text: text, From: "user"})
+		s.post(func() { done(nil) })
+		return
+	}
+	s.simple(done, "coding.send", map[string]any{"chat_id": chatID, "message_id": messageID, "text": text})
+}
+
 // AgentTranscript is a coding agent's transcript, from its Runner: what it was sent, thought,
 // said, and did, step by step, and its row's agent as it stands.
 func (s *Store) AgentTranscript(chatID, messageID string, done func(AgentTranscript, error)) {
 	if s.IsMock {
-		transcript := AgentTranscript{Items: MockAgentTranscript()}
+		transcript := AgentTranscript{Items: append(MockAgentTranscript(), s.mockAgentSent[messageID]...), Open: true}
 		if chat := s.Chat(chatID); chat != nil {
 			transcript.Card = AgentOf(chat.Message(messageID))
 		}
@@ -1850,11 +1874,13 @@ func (s *Store) AgentTranscript(chatID, messageID string, done func(AgentTranscr
 	}
 	Async(s, func() (AgentTranscript, error) {
 		var answer struct {
-			Items []AgentItem `json:"items"`
-			Card  *WireAgent  `json:"card"`
+			Items  []AgentItem   `json:"items"`
+			Card   *WireAgent    `json:"card"`
+			Queued []AgentQueued `json:"queued"`
+			Open   bool          `json:"open"`
 		}
 		err := s.request("coding.transcript", map[string]any{"chat_id": chatID, "message_id": messageID}, &answer)
-		transcript := AgentTranscript{Items: answer.Items}
+		transcript := AgentTranscript{Items: answer.Items, Queued: answer.Queued, Open: answer.Open}
 		if answer.Card != nil {
 			transcript.Card = ToAgentRun(answer.Card)
 		}

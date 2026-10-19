@@ -44,7 +44,9 @@ report for the user: what it did, the commands it ran with their output, and the
 id at once: tell the user you started it and end your turn. Do not check on it or review its work. When it is done, its report \
 lands in the chat as its message to the user, and you get no turn for it; when it ends on its own, you get a turn to tell the \
 user. `send` gives it `message`, which is what the user tells it, in their words, taken up once it is done with what it does now, \
-or at once with `interrupt: true`, which stops that first; an agent whose process stopped starts again on its session. `read` \
+or at once with `interrupt: true`, which stops that first; an agent whose process stopped starts again on its session. The user \
+may also write to an agent on its page; you read that in the chat as \"[The user wrote to … directly]\", and the agent has it already, \
+so do not pass it on again. `read` \
 shows its transcript since you last read it (or its last `lines`), for when the user asks how it stands. `stop` ends it, `list` \
 shows your agents in this chat. Every command it runs goes through Auto-review as yours do. Saved secrets never go in a prompt or \
 a message: for a job that needs one, such as publishing a package, name your command secrets in `secrets`, and the agent has each \
@@ -102,7 +104,7 @@ impl Tool for CodingAgentTool {
             Some("send") => {
                 let agent = agent()?;
                 let message = args["message"].as_str().or(args["prompt"].as_str()).map(str::trim).filter(|text| !text.is_empty()).ok_or_else(|| ToolError("send needs a message".into()))?;
-                super::send(app, &agent, message, args["interrupt"].as_bool().unwrap_or(false)).await.map_err(ToolError)?
+                super::send(app, &agent, message, args["interrupt"].as_bool().unwrap_or(false), super::Sender::Bot).await.map_err(ToolError)?
             }
             Some("stop") => {
                 let agent = agent()?;

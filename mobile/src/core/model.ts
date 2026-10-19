@@ -319,7 +319,8 @@ export type Body =
       target_agent_id?: string;
     }
   /// What a coding agent said when it was done with what it was asked, or why it ended on its own
-  /// (`failed`): "Message from ⬢ Title". Its author is the bot that runs the agent.
+  /// (`failed`): "Message from ⬢ Title". Its author is the bot that runs the agent. Authored by
+  /// the user, it is what they wrote the agent from its page (`coding.send`): "You messaged ⬢ Title".
   | { kind: "agent_message"; agent_id: string; agent_kind: string; title: string; text: string; failed?: boolean }
   | { kind: "handoff"; from: string; to: string; reason: string }
   | { kind: "notice"; text: string; routine_id?: string }
@@ -406,7 +407,8 @@ export interface CommandRun {
 /// carries it: what the bot titled the job and where it works, how it stands, and what came of it.
 /// The transcript shows the row as "Messaged ⬢ Title", Details lists it under Coding, and its page
 /// reads `coding.transcript`. While it asks, its question is a pending `permission` message at the
-/// end of the chat, a shell command's card; Stop is `coding.stop`.
+/// end of the chat, a shell command's card; Stop is `coding.stop`, and the user writes it with
+/// `coding.send`.
 export interface AgentRun {
   /** The bot's handle for it, `agent-3f9a2c1d`; empty until it started, and for good when the start failed. */
   id: string;
@@ -517,6 +519,8 @@ export interface AgentItem {
   kind: "prompt" | "status" | "thought" | "text" | "tool" | "plan" | "error";
   at: number;
   text?: string;
+  /** Who wrote a `prompt`: `user` from the agent's page, absent for the bot that runs it. */
+  from?: "user";
   /** How long it thought, for a `thought`. */
   seconds?: number;
   tool?: AgentToolStep;
@@ -533,6 +537,30 @@ export interface AgentToolStep {
   status: "running" | "done" | "failed" | "denied";
   /** The first lines of what came back. */
   output?: string;
+}
+
+/// A message sent to a coding agent that it has not taken up yet: it does when it is done with
+/// what it does now. `from` is `user` for one written on its page, absent for the bot's.
+export interface AgentQueued {
+  text: string;
+  from?: "user";
+  at: number;
+}
+
+/// `coding.transcript`'s answer: the agent's last steps, the row's card, the messages waiting for
+/// it (oldest first), and whether a message can reach it now (`open`: it runs, or it has a
+/// session to resume and is not starting).
+export interface AgentTranscript {
+  items: AgentItem[];
+  card: AgentRun;
+  queued: AgentQueued[];
+  open: boolean;
+}
+
+/// An `agent_message` the user wrote the agent from its page ("You messaged ⬢ Title"), not the
+/// agent's own ("Message from ⬢ Title").
+export function agentMessageFromUser(message: Message): boolean {
+  return message.body.kind === "agent_message" && message.author.kind === "you";
 }
 
 export function isLive(run: CommandRun): boolean {

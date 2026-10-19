@@ -166,7 +166,10 @@ export function preview(chat: Chat, bots: Map<string, Bot>): string {
       break;
     }
     case "agent_message":
-      body = t("Message from {name}: {reason}", { name: shown.body.title || t("a coding agent"), reason: shown.body.text });
+      body =
+        shown.author.kind === "you"
+          ? t("You messaged {name}: {detail}", { name: shown.body.title || t("a coding agent"), detail: shown.body.text })
+          : t("Message from {name}: {reason}", { name: shown.body.title || t("a coding agent"), reason: shown.body.text });
       break;
     case "handoff":
       body =

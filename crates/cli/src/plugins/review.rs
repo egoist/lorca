@@ -760,6 +760,12 @@ fn transcript_lines(app: &App, messages: &[Message]) -> Vec<String> {
                 proposal = None;
                 lines.push(format!("[coding agent] {}'s {} on “{title}”: {}", name(bot_id), crate::model::coding_agent_name(agent_kind), clipped(text, REQUEST_CHARS)));
             }
+            // The user's own words to a coding agent, written on its page: they count as the
+            // user's request, as what they write to the bot does.
+            (Author::You, Body::AgentMessage { agent_kind, title, text, .. }) => {
+                proposal = None;
+                lines.push(format!("User, to the {} on “{title}”: {}", crate::model::coding_agent_name(agent_kind), clipped(text, REQUEST_CHARS)));
+            }
             (Author::System, Body::Notice { routine_id: Some(_), text }) => {
                 proposal = None;
                 lines.push(format!("({}: a scheduled run started, with nobody watching)", one_line(text)));
@@ -1211,6 +1217,10 @@ mod tests {
         let heard = request(&app, chat_id, &at(&handoff)).unwrap();
         assert!(heard.text.ends_with("User: leave Postgres alone\n</transcript>\n\nThe user's latest message to the bot:\nleave Postgres alone\n\n"), "{}", heard.text);
         assert_eq!(heard.language.as_deref(), Some("of the user's latest message"));
+        // So is what they write to a coding agent on its page: their own words, too.
+        say(4.5, Author::You, Body::AgentMessage { agent_id: "agent-1".into(), agent_kind: "claude".into(), title: "Fix the relay's memory leak".into(), text: "deploy it to staging".into(), failed: false });
+        let heard = request(&app, chat_id, &at(&handoff)).unwrap();
+        assert!(heard.text.contains("User: leave Postgres alone\nUser, to the Claude Code on “Fix the relay's memory leak”: deploy it to staging\n</transcript>"), "{}", heard.text);
 
         // A user's turn reads the whole chat, so "yes" reads as the answer to the bot's proposal,
         // and what the bot made earlier is its own.
@@ -1221,6 +1231,7 @@ mod tests {
             heard.text,
             format!(
                 "<transcript>\nUser: actually stop that\n[teammate] Chef to DevOps: You own Railway monitoring from now on.\n{steps}User: leave Postgres alone\n\
+                 User, to the Claude Code on “Fix the relay's memory leak”: deploy it to staging\n\
                  DevOps: Memory is flat at 180 MB. Should I post this on the tracking issue?\nUser: yes\n</transcript>\n\n\
                  The user's latest message to the bot:\nyes\n\n"
             )

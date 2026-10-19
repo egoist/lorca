@@ -2242,6 +2242,14 @@ fn transcript_bounded(app: &App, chat: &Chat, bot: &Bot, workdir: &std::path::Pa
                 let what = if *failed { "ended" } else { "says" };
                 out.push(user(&format!("[{} ({agent_id}), {whose} coding agent on “{title}”, {what}]: {text}", crate::model::coding_agent_name(agent_kind)), timestamp));
             }
+            // What the user wrote to a coding agent on its page, which reached it without the bot.
+            (Author::You, Body::AgentMessage { agent_id, agent_kind, title, text, .. }) => {
+                let whose = match app.coding_agents.started_by(agent_id) {
+                    Some(owner) if owner != bot.id => format!("{}'s", name_of(app, &owner)),
+                    _ => "your".to_string(),
+                };
+                out.push(user(&format!("[The user wrote to {} ({agent_id}), {whose} coding agent on “{title}”, directly; it has the message]: {text}", crate::model::coding_agent_name(agent_kind)), timestamp));
+            }
             (Author::Bot { bot_id }, Body::Handoff { to, reason, .. }) if bot_id != &bot.id => {
                 let from = name_of(app, bot_id);
                 if to == &bot.id {

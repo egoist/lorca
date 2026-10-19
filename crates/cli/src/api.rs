@@ -941,15 +941,15 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             requests::ask(app, &bot.runner_id, method, body).await
         }
 
-        // A coding agent's transcript and Stop: here when the bot runs here, else sealed to its
-        // Runner.
-        "coding.transcript" | "coding.stop" => {
+        // A coding agent's transcript, the user's message to it, and Stop: here when the bot
+        // runs here, else sealed to its Runner.
+        "coding.transcript" | "coding.send" | "coding.stop" => {
             let chat_id = string(&params, "chat_id")?;
             let message_id = string(&params, "message_id")?;
             let message = app.message(&chat_id, &message_id).ok_or("Unknown message")?;
             let Author::Bot { bot_id } = &message.author else { return Err("That row has no coding agent".into()) };
             let bot = app.bot(bot_id).ok_or("Unknown bot")?;
-            let body = json!({ "chat_id": chat_id, "message_id": message_id });
+            let body = json!({ "chat_id": chat_id, "message_id": message_id, "text": params["text"] });
             if app.this_device_id().as_deref() == Some(bot.runner_id.as_str()) {
                 #[cfg(feature = "runner")]
                 return crate::coding::serve(app, method, &body).await;

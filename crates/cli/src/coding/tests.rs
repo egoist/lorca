@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 /// Claude Code's stream-json, scripted: a job asks to run `git push` through the Bash hook,
 /// edits a file, names a pull request, and is done; a "(follow-up)" is answered at once; a
-/// "(crash)" job exits mid-turn. A "(secret)" job keeps what it was sent and writes out, runs,
+/// "(crash)" job exits mid-turn; a message that arrives while it waits on Lorca is taken up after. A "(secret)" job keeps what it was sent and writes out, runs,
 /// and says `$NPM_TOKEN`. Every run appends its arguments to `args.log` beside it.
 const FAKE_CLAUDE: &str = r#"#!/usr/bin/env python3
 import json, os, sys
@@ -24,6 +24,7 @@ def out(value):
 def read():
     line = sys.stdin.readline()
     return json.loads(line) if line else None
+backlog = []
 def wait_for(request_id):
     while True:
         answer = read()
@@ -31,8 +32,10 @@ def wait_for(request_id):
             sys.exit(0)
         if answer.get("type") == "control_response" and answer["response"]["request_id"] == request_id:
             return answer
+        if answer.get("type") == "user":
+            backlog.append(answer)
 while True:
-    message = read()
+    message = backlog.pop(0) if backlog else read()
     if message is None:
         break
     if message.get("type") == "control_request":
@@ -625,6 +628,64 @@ async fn a_restart_keeps_the_handle_and_a_follow_up_resumes_the_session() {
     app.coding_agents.agents.lock().unwrap().clear();
     load(app);
     assert_eq!(card(app, &row).outcome.as_deref(), Some("Stopped when Lorca quit"));
+}
+
+/// The user writes to the agent on its page (`coding.send`), down the bot's own path: the
+/// message waits in its queue until it takes it up, its step says the user wrote it, and the
+/// chat shows it as the user's; once stopped, a message resumes its session.
+#[tokio::test]
+async fn the_user_writes_to_an_agent_on_its_page() {
+    let scratch = setup().await;
+    let app = &scratch.app;
+    auto_review_off(app);
+    let tool = tool(&scratch);
+    let row = start_row(app, "call-1");
+    let chat_lock = app.chat_lock("chat");
+    let _held = chat_lock.lock().await;
+    call(&tool, "call-1", json!({ "action": "start", "agent": "claude", "title": "Login", "folder": "shop", "prompt": "Fix the login bug" })).await.unwrap();
+    let agent = app.coding_agents.of("chat", "b1").pop().unwrap();
+    let send = |text: &str| {
+        let body = json!({ "chat_id": "chat", "message_id": row, "text": text });
+        async move { serve(app, "coding.send", &body).await }
+    };
+    let transcript = || async { serve(app, "coding.transcript", &json!({ "chat_id": "chat", "message_id": row })).await };
+    assert_eq!(send("  ").await.unwrap_err(), "Write a message first");
+
+    // While its question waits, a message waits in its queue, the user's.
+    let (asked, ..) = question(app).await;
+    let sent = send("Use the staging branch (follow-up)").await.unwrap();
+    assert_eq!(sent["sent"], true);
+    let answer = transcript().await.unwrap();
+    assert_eq!(answer["queued"], json!([{ "text": "Use the staging branch (follow-up)", "from": "user", "at": answer["queued"][0]["at"] }]));
+    assert_eq!(answer["open"], true);
+    // The chat shows it as the user's message to the agent, which counts as nothing unread.
+    let (messages, _) = app.store.page("chat", None, 200).unwrap();
+    let mine = messages.iter().find(|message| message.author == Author::You && matches!(&message.body, Body::AgentMessage { text, .. } if text == "Use the staging branch (follow-up)")).expect("the user's message in the chat");
+    assert!(!mine.counts_unread());
+    // Auto-review reads it as the user's request; the bot reads it in its history.
+    assert!(crate::plugins::mcp::answer(app, &asked, Decision::Allowed), "{:?}", last_card(app));
+    // It takes it up once it is done with what it was doing, and its step says who wrote it.
+    let taken = eventually("the queued message", || steps_now(&agent).into_iter().find(|item| item.kind == "prompt" && item.text == "Use the staging branch (follow-up)")).await;
+    assert_eq!(taken.from.as_deref(), Some("user"));
+    card_when(app, &row, |card| card.state == "idle").await;
+    assert_eq!(transcript().await.unwrap()["queued"], json!([]));
+    let (chat, bot) = (app.chat("chat").unwrap(), app.bot("b1").unwrap());
+    let history = format!("{:?}", crate::turns::transcript_for(app, &chat, &bot, &scratch.home));
+    assert!(history.contains(&format!("[The user wrote to Claude Code ({}), your coding agent on “Login”, directly; it has the message]: Use the staging branch (follow-up)", agent.id())), "{history}");
+
+    // Stopped, it still takes a message: its session starts again on it.
+    serve(app, "coding.stop", &json!({ "chat_id": "chat", "message_id": row })).await.unwrap();
+    assert_eq!(transcript().await.unwrap()["queued"], json!([]), "what waited goes with it");
+    send("Now the docs (follow-up)").await.unwrap();
+    let prompt = eventually("its prompt", || steps_now(&agent).into_iter().find(|item| item.kind == "prompt" && item.text == "Now the docs (follow-up)")).await;
+    assert_eq!(prompt.from.as_deref(), Some("user"));
+    eventually("its answer", || steps_now(&agent).into_iter().find(|item| item.text == "Followed up.")).await;
+    card_when(app, &row, |card| card.state == "idle").await;
+    let args = std::fs::read_to_string(programs().join("args.log")).unwrap();
+    assert!(args.lines().any(|line| line.contains("--resume sess-1")), "{args}");
+    // The first prompt is the bot's, and the bot reads which one the user wrote.
+    assert_eq!(steps_now(&agent).into_iter().find(|item| item.kind == "prompt").unwrap().from, None);
+    assert!(agent.read(Some(50)).0.contains("> (from the user) Now the docs (follow-up)"));
 }
 
 #[tokio::test]

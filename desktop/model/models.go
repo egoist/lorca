@@ -1804,6 +1804,18 @@ type AgentMessage struct {
 type AgentTranscript struct {
 	Items []AgentItem
 	Card  *AgentRun
+	// Queued are the messages it was sent and has yet to take up, oldest first.
+	Queued []AgentQueued
+	// Open is whether a message can reach it: it runs, or its session waits to be resumed.
+	Open bool
+}
+
+// AgentQueued is a message a coding agent was sent and has yet to take up.
+type AgentQueued struct {
+	Text string `json:"text"`
+	// From is `user` when the user wrote it on the agent's page; empty when the bot passed it on.
+	From string  `json:"from"`
+	At   float64 `json:"at"`
 }
 
 // AgentItem is one step of a coding agent's transcript: what it was sent (`prompt`), Lorca's own
@@ -1819,6 +1831,9 @@ type AgentItem struct {
 	Seconds *float64         `json:"seconds"`
 	Tool    *AgentToolStep   `json:"tool"`
 	Plan    []AgentPlanEntry `json:"plan"`
+	// From, on a `prompt`, is `user` when the user wrote it on the agent's page; empty when the
+	// bot passed it on.
+	From string `json:"from"`
 }
 
 // AgentToolStep is a tool the agent used: what it did in a line, and how it went.
