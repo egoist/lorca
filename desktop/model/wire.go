@@ -169,7 +169,7 @@ func ToAgentRun(wire *WireAgent) *AgentRun {
 		ID: wire.ID, Kind: wire.Kind, Title: str(wire.Title), Task: str(wire.Task), Folder: str(wire.Folder), Branch: str(wire.Branch),
 		State: state, Outcome: str(wire.Outcome), PullRequest: str(wire.PullRequest), Device: str(wire.Device),
 		PullState: PullState(str(wire.PullState)),
-		DeviceID: str(wire.DeviceID), Repository: str(wire.Repository),
+		DeviceID:  str(wire.DeviceID), Repository: str(wire.Repository),
 	}
 	if wire.Changes != nil {
 		changes := *wire.Changes

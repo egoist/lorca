@@ -17,4 +17,4 @@ A Device asks a Runner for work on that Runner through the relay: a question goe
 - The `events.*` methods but `events.forward`, so a Runner's event subscriptions are managed from any Device.
 - `service.status`, so the Devices pane shows whether `lorca service` runs on a Runner.
 - `update.install` and `update.auto`, so a self-updating Runner's CLI installs its latest release, or turns its automatic updates on or off, from any Device ([Updates and the service](runtime.md#updates-and-the-service)).
-- `app.update.install`, so the desktop app on a Runner installs its latest version and relaunches into it once no bot is at work there ([Updates from another Device](desktop-app.md#updates-from-another-device)).
+- `app.update.install`, so the desktop app on a Runner installs its latest version and relaunches into it once no bot is at work there ([Updates from another Device](desktop-updates.md#updates-from-another-device)).

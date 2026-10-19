@@ -114,7 +114,8 @@ One doc per subject under `docs/architecture/`, each short enough to read in one
 | [Sidebar sections and alerts](docs/architecture/sidebar.md) | Sections, hidden and muted chats in every app, and the chat a computer shows in front, which no phone is alerted about |
 | [macOS app](docs/architecture/macos-app.md) | The AppKit app: launching the CLI, windows and onboarding, settings, updates, the command palette, sidebar and inspector |
 | [macOS chat](docs/architecture/macos-chat.md) | Transcript, composer, output previews, working and read state in AppKit |
-| [Windows and Linux app](docs/architecture/desktop-app.md) | The MyGo app: its model, host, and native views, title bar, commands, updates, development and builds |
+| [Windows and Linux app](docs/architecture/desktop-app.md) | The MyGo app: its model, host, and native views, title bar, commands, development and builds |
+| [Desktop app updates](docs/architecture/desktop-updates.md) | The Windows and Linux app's updater and releases, and an update another Device starts |
 | [Phone app](docs/architecture/phone-app.md) | The Expo app over the Rust core: the native module, pairing, relay status, attachments, dictation, notifications, turns |
 | [Phone layout](docs/architecture/phone-layout.md) | The phone's home tabs (Bots, Devices, Search) and a tablet's sidebar and pane |
 | [Phone releases and updates](docs/architecture/phone-updates.md) | TestFlight builds, Android APK releases, and the Android app's self-update: the daily check and offer, the progress dialog, the package installer |

@@ -1670,7 +1670,7 @@ type AgentRun struct {
 	// before a read.
 	PullState PullState
 	Changes   *AgentChanges
-	Device      string
+	Device    string
 	// DeviceID is the Runner it runs on, by Device id.
 	DeviceID string
 	// Repository is its folder's git origin, as "github.com/owner/repo".
