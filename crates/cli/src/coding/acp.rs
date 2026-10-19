@@ -157,7 +157,10 @@ async fn prompts(shared: Arc<Shared>, mut text: String) {
         match next {
             Some(next) => text = next,
             None => {
-                let _ = shared.events.send(Event::Idle(failed.or(said)));
+                let _ = shared.events.send(match failed {
+                    Some(error) => Event::Failed(error),
+                    None => Event::Idle(said),
+                });
                 return;
             }
         }

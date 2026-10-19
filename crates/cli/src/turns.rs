@@ -1881,7 +1881,9 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
              Give it a short title and the user's request in their words, with only facts it cannot find, such as where the \
              repository is; it decides how to do the job, where and on which branch, and how to check it. Tell the user you \
              started it and end your turn. It pushes its work, opens a pull request, and reports to the user in the chat with the \
-             commands it ran and their output; the user reviews it, so do not check its work or follow up on your own. What the \
+             commands it ran and their output; then you get a turn to relay that report to the user: its conclusion, its pull \
+             request's link, and the commands and their output. The user reviews the work, so in that turn and after, do not check \
+             its code, build or test it, judge it, or send it instructions of your own. What the \
              user then says about the job, pass on to it with coding_agent send, in their words. Its commands go through \
              Auto-review as yours do.\n",
         );

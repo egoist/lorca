@@ -33,7 +33,7 @@ pub struct CodingAgentTool {
 }
 
 const DESCRIPTION: &str = "Hand a coding job to a coding agent on your Runner (Claude Code, Codex, OpenCode, pi, or fx, as the user set up \
-in Settings → Coding Agents). You pass the user's request on; the agent decides how to do the job and reports to the user itself. \
+in Settings → Coding Agents). You pass the user's request on; the agent decides how to do the job and reports to the user. \
 `start` runs one on `prompt`, under a short `title` that names the job for the user (\"Docs: use mygo.json in the launcher \
 examples\"), in `folder` (default: your working directory), the repository or folder the job is in. `prompt` is what the user asked \
 for, in their words, plus only facts you know and the agent cannot find: where the repository is, and what the user already said \
@@ -42,9 +42,10 @@ the fix, scope, way to build or check it, commands to run, or branch or worktree
 the folder it works and whether on a branch of its own included, and it pushes its work, opens a pull request, and ends with a \
 report for the user: what it did, the commands it ran with their output, and the pull request's link. `start` returns the agent's \
 id at once: tell the user you started it and end your turn. Do not check on it or review its work. When it is done, its report \
-lands in the chat as its message to the user, and you get no turn for it; when it ends on its own, you get a turn to tell the \
-user. `send` gives it `message`, which is what the user tells it, in their words, taken up once it is done with what it does now, \
-or at once with `interrupt: true`, which stops that first; an agent whose process stopped starts again on its session. The user \
+lands in the chat as its message to the user and you get a turn to relay it: its conclusion, its pull request, and the commands it \
+ran with their output, without checking its code, building, testing, judging its work, or sending it anything. When it ends on its \
+own, you get a turn to tell the user. `send` gives it `message`, which is what the user tells it, in their words, taken up once it \
+is done with what it does now, or at once with `interrupt: true`, which stops that first; an agent whose process stopped starts again on its session. The user \
 may also write to an agent on its page; you read that in the chat as \"[The user wrote to … directly]\", and the agent has it already, \
 so do not pass it on again. `read` \
 shows its transcript since you last read it (or its last `lines`), for when the user asks how it stands. `stop` ends it, `list` \
@@ -210,7 +211,7 @@ impl CodingAgentTool {
             None => super::home_relative(&place.folder),
         };
         Ok(format!(
-            "Started {} ({id}) on “{title}” in {place}. It works on its own and reports to the user in the chat when it is done, with its pull request; you get a turn only if it ends on its own. Tell the user you started it and end your turn. When the user asks, coding_agent read {id} shows its transcript, send passes it what they say, and stop ends it.",
+            "Started {} ({id}) on “{title}” in {place}. It works on its own and reports to the user in the chat when it is done, with its pull request; then you get a turn to relay its report, or to say why if it ends on its own. Tell the user you started it and end your turn. When the user asks, coding_agent read {id} shows its transcript, send passes it what they say, and stop ends it.",
             name(&kind)
         ))
     }

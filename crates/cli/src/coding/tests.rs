@@ -12,7 +12,9 @@ use tokio_util::sync::CancellationToken;
 
 /// Claude Code's stream-json, scripted: a job asks to run `git push` through the Bash hook,
 /// edits a file, names a pull request, and is done; a "(follow-up)" is answered at once; a
-/// "(crash)" job exits mid-turn; a message that arrives while it waits on Lorca is taken up after. A "(secret)" job keeps what it was sent and writes out, runs,
+/// "(crash)" job exits mid-turn, and an "(auth)" job ends its turn in an error, as a signed-out
+/// Claude Code does, and exits; a message that arrives while it waits on Lorca is taken up after.
+/// A "(secret)" job keeps what it was sent and writes out, runs,
 /// and says `$NPM_TOKEN`. Every run appends its arguments to `args.log` beside it.
 const FAKE_CLAUDE: &str = r#"#!/usr/bin/env python3
 import json, os, sys
@@ -48,6 +50,11 @@ while True:
     content = str(message["message"]["content"])
     if "(crash)" in content:
         sys.stderr.write("out of credits\n"); sys.exit(3)
+    if "(auth)" in content:
+        reason = "Failed to authenticate: OAuth session expired and could not be refreshed"
+        out({"type": "assistant", "message": {"id": "a0", "content": [{"type": "text", "text": reason}]}, "parent_tool_use_id": None})
+        out({"type": "result", "subtype": "success", "is_error": True, "result": reason})
+        sys.exit(1)
     if "(secret)" in content:
         token = os.environ.get("NPM_TOKEN", "missing")
         with open("received.txt", "w") as received:
@@ -407,9 +414,13 @@ async fn claude_code_works_in_the_folder_asks_in_the_chat_and_reports_to_the_use
     auto_review_off(app);
     let tool = tool(&scratch);
     let row = start_row(app, "call-1");
+    // Held, so the turn that relays its report waits, and the test reads what it would.
+    let chat_lock = app.chat_lock("chat");
+    let held = chat_lock.lock().await;
 
     let started = call(&tool, "call-1", json!({ "action": "start", "agent": "claude", "title": "Login: fix the Safari bug", "folder": "shop", "prompt": "Fix the login bug\nwith a test" })).await.unwrap();
     assert!(started.starts_with("Started Claude Code (agent-") && started.contains("(on branch main)") && started.contains("“Login: fix the Safari bug”"), "{started}");
+    assert!(started.contains("a turn to relay its report"), "{started}");
     let agent = app.coding_agents.of("chat", "b1").pop().unwrap();
     let record = agent.record();
     assert_eq!((record.kind.as_str(), record.branch.as_deref(), record.task.as_str(), record.title.as_str()), ("claude", Some("main"), "Fix the login bug", "Login: fix the Safari bug"));
@@ -445,12 +456,19 @@ async fn claude_code_works_in_the_folder_asks_in_the_chat_and_reports_to_the_use
     assert_eq!((edit.kind.as_str(), edit.title.as_str(), edit.added), ("edit", "README.md", Some(1)));
 
     // What it said lands in the chat as its report to the user, unread like a reply, and the
-    // bot gets no turn to check it.
+    // bot wakes, once, to relay it, and only that: no checking, building, judging, or follow-up.
     let (message_id, agent_id, text, failed) = eventually("its message", || agent_messages(app).pop()).await;
     assert_eq!((agent_id.as_str(), text.as_str(), failed), (agent.id().as_str(), "Fixed it and opened https://github.com/acme/shop/pull/7", false));
     assert!(app.message("chat", &message_id).unwrap().counts_unread());
-    assert!(agent.record().unheard.is_none());
-    assert!(wake_cue(app, &crate::runtime::agent_job(app, "chat", "b1", &message_id)).is_none(), "the bot does not wake for it");
+    assert_eq!(agent.record().unheard.as_deref(), Some(message_id.as_str()));
+    let job = crate::runtime::agent_job(app, "chat", "b1", &message_id);
+    let cue = wake_cue(app, &job).expect("the bot wakes to relay it");
+    assert!(cue.contains("is done") && cue.contains("its report to the user") && cue.contains("pull/7"), "{cue}");
+    assert!(cue.contains("Relay it to the user") && cue.contains("the commands it ran and what they printed") && cue.contains("This turn only relays"), "{cue}");
+    for asks in ["Check its work", "check its work against", "follow-up", "coding_agent read", "coding_agent send", "tell the user how it went", "changed 1 file"] {
+        assert!(!cue.contains(asks), "the relay turn asks for {asks:?}: {cue}");
+    }
+    assert!(wake_cue(app, &job).is_none(), "heard once");
 
     // A follow-up while it waits; the bot reads what is new since it last read.
     let id = agent.id();
@@ -466,6 +484,7 @@ async fn claude_code_works_in_the_folder_asks_in_the_chat_and_reports_to_the_use
     let stopped = card_when(app, &row, |card| card.state == "stopped").await;
     assert_eq!(stopped.outcome.as_deref(), Some("Stopped"));
     assert!(agent.record().unheard.is_none());
+    drop(held);
 }
 
 /// An agent's question is a card at the end of the chat, where the user reads, however far up
@@ -590,6 +609,41 @@ async fn an_agent_that_ends_on_its_own_says_why_in_the_chat() {
     assert!(cue.contains("has ended on its own: Claude Code exited with code 3") && cue.contains("Tell the user"), "{cue}");
 }
 
+/// An agent whose first turn fails, as a signed-out Claude Code's does in milliseconds, fails
+/// while the turn that started it still runs: the failure waits for that turn, then the bot gets
+/// a turn of its own that is told why.
+#[tokio::test]
+async fn an_agent_that_fails_during_the_bots_turn_wakes_it_once_the_turn_ends() {
+    let scratch = setup().await;
+    let app = &scratch.app;
+    let tool = tool(&scratch);
+    let row = start_row(app, "call-1");
+    let chat_lock = app.chat_lock("chat");
+    let turn = chat_lock.lock().await;
+    call(&tool, "call-1", json!({ "action": "start", "agent": "claude", "title": "Login", "folder": "shop", "prompt": "Fix the login bug (auth)" })).await.unwrap();
+
+    let reason = "Failed to authenticate: OAuth session expired and could not be refreshed";
+    let failed = card_when(app, &row, |card| card.state == "failed").await;
+    assert_eq!(failed.outcome.as_deref(), Some(reason));
+    let (message_id, _, text, failed) = eventually("its message", || agent_messages(app).pop()).await;
+    assert_eq!((text.as_str(), failed), (reason, true));
+    let agent = app.coding_agents.of("chat", "b1").pop().unwrap();
+    // Its process exits after the failed turn; that changes nothing, and nothing has heard it.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(agent.record().state, "failed");
+    assert_eq!(agent.record().unheard.as_deref(), Some(message_id.as_str()));
+    let cue = heard_cue(app, &agent.record(), &agent, true);
+    assert!(cue.contains(&format!("has ended on its own: {reason}")) && cue.contains("Tell the user"), "{cue}");
+    let ran = |app: &App| app.store.page("chat", None, 200).unwrap().0.into_iter().any(|message| matches!(&message.body, Body::Notice { text, .. } if text.starts_with("Chef cannot run yet")));
+    assert!(!ran(app), "no turn runs while the bot's turn does");
+
+    // The bot's turn ends: the agent's turn follows, reads the failure, and runs (here it finds
+    // no provider, which it says).
+    drop(turn);
+    eventually("the bot's turn about it", || ran(app).then_some(())).await;
+    assert!(agent.record().unheard.is_none());
+}
+
 #[tokio::test]
 async fn a_restart_keeps_the_handle_and_a_follow_up_resumes_the_session() {
     let scratch = setup().await;
@@ -673,10 +727,14 @@ async fn the_user_writes_to_an_agent_on_its_page() {
     let history = format!("{:?}", crate::turns::transcript_for(app, &chat, &bot, &scratch.home));
     assert!(history.contains(&format!("[The user wrote to Claude Code ({}), your coding agent on “Login”, directly; it has the message]: Use the staging branch (follow-up)", agent.id())), "{history}");
 
-    // Stopped, it still takes a message: its session starts again on it.
+    // Stopped, it still takes a message: its session starts again on it. What it said last stays
+    // unheard until a turn reads it.
+    let unheard = agent.record().unheard;
+    assert!(unheard.is_some(), "its report waits for the bot");
     serve(app, "coding.stop", &json!({ "chat_id": "chat", "message_id": row })).await.unwrap();
     assert_eq!(transcript().await.unwrap()["queued"], json!([]), "what waited goes with it");
     send("Now the docs (follow-up)").await.unwrap();
+    assert_eq!(agent.record().unheard, unheard);
     let prompt = eventually("its prompt", || steps_now(&agent).into_iter().find(|item| item.kind == "prompt" && item.text == "Now the docs (follow-up)")).await;
     assert_eq!(prompt.from.as_deref(), Some("user"));
     eventually("its answer", || steps_now(&agent).into_iter().find(|item| item.text == "Followed up.")).await;

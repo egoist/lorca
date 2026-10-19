@@ -4,8 +4,9 @@
 //! The agent is a process of its own that outlives the turn that started it. The bot keeps its id
 //! across turns, and when the user asks, reads its transcript, passes it what they say (queued, or
 //! cutting in), and stops it. When the agent is done with what it was asked, what it said arrives
-//! in the chat as its report to the user, and the bot gets no turn for it; when it ends on its
-//! own, the bot gets a turn to tell the user. Every command it runs
+//! in the chat as its report to the user, and the bot gets a turn that only relays it: no checking,
+//! building, testing, or new instructions; when it ends on its own, the bot gets a turn to tell
+//! the user. Every command it runs
 //! goes through the bot's Access and Auto-review, as the bot's own commands do, and what the
 //! review asks the user shows on the row that started it.
 //!
@@ -395,8 +396,9 @@ impl Agents {
             let record = agent.record.lock().unwrap();
             (record.chat_id.clone(), record.message_id.clone())
         };
-        let card = self.card(app, agent);
+        // Read under the lock, so a sync that read the agent earlier cannot write over a later one.
         let _row = self.rows.lock().unwrap();
+        let card = self.card(app, agent);
         let Some(mut message) = app.message(&chat_id, &message_id) else { return };
         let Body::Tool { agent: Some(current), .. } = &mut message.body else { return };
         if *current == card {
@@ -624,14 +626,10 @@ pub(crate) async fn send(app: &Arc<App>, agent: &Arc<Agent>, text: &str, interru
     if driver.is_none() && record.session.is_none() {
         return Err(format!("{who} ended before its session began, so there is nothing to go on from. Start a new agent for the job."));
     }
-    {
-        let mut kept = agent.record.lock().unwrap();
-        // Whoever writes to it has heard how it stands.
-        kept.unheard = None;
-        // The user is at its page: what its review asks now has someone to answer it.
-        if sender == Sender::User {
-            kept.unattended = false;
-        }
+    // The user is at its page: what its review asks now has someone to answer it. What it said
+    // last stays unheard until a turn reads it.
+    if sender == Sender::User {
+        agent.record.lock().unwrap().unattended = false;
     }
     // A turn's message counts its work toward that turn's limits; the user's, written outside
     // any turn, leaves it counting toward the turn that last gave it work.
@@ -705,7 +703,6 @@ pub(crate) fn stop(app: &Arc<App>, agent: &Arc<Agent>, reason: &str) {
             record.set_state("stopped");
             record.outcome = Some(reason.to_string());
             record.ended_at = Some(crate::config::now_secs());
-            record.unheard = None;
         }
     }
     agent.hold.lock().unwrap().take();
@@ -823,6 +820,26 @@ async fn handle(app: &Arc<App>, agent: &Arc<Agent>, event: Event, generation: u6
             let said = said.or_else(|| agent.transcript.lock().unwrap().last_said()).unwrap_or_else(|| "Done.".into());
             tell(app, agent, &said, false);
         }
+        // A turn that ended in an error ends the agent as one that ended on its own: its process
+        // stops, a later message resumes its session, and its bot hears why.
+        Event::Failed(reason) => {
+            {
+                let mut record = agent.record.lock().unwrap();
+                if !matches!(record.state.as_str(), "working" | "starting") {
+                    return;
+                }
+                record.set_state("failed");
+                record.outcome = Some(reason.clone());
+                record.ended_at = Some(crate::config::now_secs());
+            }
+            agent.hold.lock().unwrap().take();
+            agent.asks.store(false, Ordering::SeqCst);
+            if let Some(driver) = agent.driver.lock().unwrap().take() {
+                agent.stopping.store(true, Ordering::SeqCst);
+                tokio::spawn(async move { driver.stop().await });
+            }
+            tell(app, agent, &reason, true);
+        }
         Event::Approve(approval, reply) => {
             let (app, agent) = (app.clone(), agent.clone());
             tokio::spawn(async move {
@@ -875,8 +892,9 @@ fn ended(app: &Arc<App>, agent: &Arc<Agent>, end: driver::Ended, generation: u64
     }
 }
 
-/// Puts what the agent said, or why it ended, in the chat as a message from it. What it said when
-/// done is its report to the user, which alerts as a reply does; why it ended wakes its bot.
+/// Puts what the agent said, or why it ended, in the chat as a message from it, and wakes its bot
+/// to hear it. What it said when done is its report to the user, which alerts as a reply does,
+/// and the bot's turn for it only relays it.
 fn tell(app: &Arc<App>, agent: &Arc<Agent>, text: &str, failed: bool) {
     let record = agent.record();
     let mut text = without_secrets(app, text.trim().to_string());
@@ -891,19 +909,15 @@ fn tell(app: &Arc<App>, agent: &Arc<Agent>, text: &str, failed: bool) {
     );
     let message_id = message.id.clone();
     app.upsert_message(message, true);
-    // Done: the user reviews the work from its report, and the bot gets no turn for it.
-    if !failed {
-        app.coding_agents.sync(app, agent);
-        save(app);
-        if let (Some(chat), Some(bot)) = (app.chat(&record.chat_id), app.bot(&record.bot_id)) {
-            crate::push::reply(app, &chat, &bot, &notice);
-        }
-        return;
-    }
-    // Ended on its own: the bot hears why, to tell the user or start it again.
     agent.record.lock().unwrap().unheard = Some(message_id.clone());
     app.coding_agents.sync(app, agent);
     save(app);
+    // Done: the user reviews the work from its report, which alerts on its own.
+    if !failed {
+        if let (Some(chat), Some(bot)) = (app.chat(&record.chat_id), app.bot(&record.bot_id)) {
+            crate::push::reply(app, &chat, &bot, &notice);
+        }
+    }
     let job = crate::runtime::agent_job(app, &record.chat_id, &record.bot_id, &message_id);
     let (app, agent) = (app.clone(), agent.clone());
     tokio::spawn(async move {
@@ -918,9 +932,9 @@ fn tell(app: &Arc<App>, agent: &Arc<Agent>, text: &str, failed: bool) {
     });
 }
 
-/// What an `agent` turn opens with, beside the message the bot reads in the chat: why the agent
-/// ended and what to do. None when a turn heard it already. Only an agent that ended on its own
-/// wakes its bot; one that is done reports to the user.
+/// What an `agent` turn opens with, beside the message the bot reads in the chat. For an agent
+/// that is done, to relay its report to the user and nothing more: the user reviews the work. For
+/// one that ended on its own, why, and what to do. None when a turn heard it already.
 pub fn wake_cue(app: &App, job: &crate::model::Job) -> Option<String> {
     let agent = app.coding_agents.all().into_iter().find(|agent| agent.record.lock().unwrap().unheard.as_deref() == Some(job.trigger_message_id.as_str()))?;
     let record = {
@@ -929,16 +943,51 @@ pub fn wake_cue(app: &App, job: &crate::model::Job) -> Option<String> {
         record.clone()
     };
     save(app);
+    // The message that woke it says whether the agent was done or ended on its own.
+    let failed = match app.message(&job.chat_id, &job.trigger_message_id).map(|message| message.body) {
+        Some(Body::AgentMessage { failed, .. }) => failed,
+        _ => record.state == "failed",
+    };
+    Some(heard_cue(app, &record, &agent, failed))
+}
+
+/// What the bot hears about the agent, from the message that woke it: its report when done,
+/// why it ended when `failed`.
+pub(crate) fn heard_cue(app: &App, record: &Record, agent: &Agent, failed: bool) -> String {
     let who = format!("{} ({}), the coding agent you started on “{}”", name(&record.kind), record.id, record.title);
-    let tail = agent.transcript.lock().unwrap().last_lines(12);
-    let tail = if tail.trim().is_empty() { String::new() } else { format!(" Its last lines:\n{tail}\n") };
-    let cue = format!(
-        "[{who}, has ended on its own: {}. Its last message in the chat says why.{tail} Tell the user why in a line or two. When it ended \
-         for a passing reason, such as a lost connection, you may start it again on its session with coding_agent send and a message \
-         that asks it to go on, adding nothing of your own; do not take the job over or change it.]",
-        record.outcome.as_deref().unwrap_or("it exited")
-    );
-    Some(without_secrets(app, cue))
+    // Why it ended, unless a message started it again before a turn heard it.
+    if failed && record.state != "failed" {
+        let cue = format!(
+            "[{who}, ended on its own; its message in the chat says why. It has been started again since and is {}. Tell the user why it \
+             ended in a line or two, unless you have already; do not start it again.]",
+            match record.state.as_str() {
+                "idle" => "done",
+                "stopped" => "stopped again",
+                state => state,
+            }
+        );
+        return without_secrets(app, cue);
+    }
+    let cue = if failed {
+        let tail = agent.transcript.lock().unwrap().last_lines(12);
+        let tail = if tail.trim().is_empty() { String::new() } else { format!(" Its last lines:\n{tail}\n") };
+        format!(
+            "[{who}, has ended on its own: {}. Its last message in the chat says why.{tail} Tell the user why in a line or two. When it ended \
+             for a passing reason, such as a lost connection, you may start it again on its session with coding_agent send and a message \
+             that asks it to go on, adding nothing of your own; do not take the job over or change it.]",
+            record.outcome.as_deref().unwrap_or("it exited")
+        )
+    } else {
+        let pull_request = record.pull_request.as_ref().map(|link| format!(" Its pull request: {link}.")).unwrap_or_default();
+        format!(
+            "[{who}, is done; its message in the chat is its report to the user.{pull_request} Relay it to the user in your reply: its \
+             conclusion, its pull request's link, and the evidence it brought back, the commands it ran and what they printed, as it \
+             reported them. Say where its report leaves something out, such as no pull request or no command output, without filling it \
+             in. This turn only relays: use no tools, and do not open its code, its diff, or its transcript, run a build or a test, judge \
+             its work against the request, or send it a message. The user reviews the work and decides what comes next.]"
+        )
+    };
+    without_secrets(app, cue)
 }
 
 /// What Auto-review hears about an agent's environment: the saved secrets in it.
