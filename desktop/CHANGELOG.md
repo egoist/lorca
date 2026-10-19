@@ -6,6 +6,10 @@ and the update window shows it.
 
 ## [Unreleased]
 
+- A bot's DM inspector has a Working Folder row: point the bot at the folder it mainly works in,
+  such as a project's repository. Above its profile, Changes lists what changed there since the
+  last commit, each file opening its diff, and Files shows the folder as a tree, for a bot on
+  another computer too.
 - When a coding agent reports back, the bot replies again to relay the report: the agent's
   conclusion, its pull request, and the commands it ran with their results. That reply only relays:
   the bot doesn't read the code, build, test, or judge the work, or send the agent instructions.

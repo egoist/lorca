@@ -75,6 +75,7 @@ One doc per subject under `docs/architecture/`, each short enough to read in one
 | [Relay](docs/architecture/relay.md) | `crates/relay`: storage on SQLite or Postgres, files, housekeeping, quotas, metrics, rate limits, auth, tables and migrations, the blob, sync socket, and push APIs, deploys |
 | [Relay trust](docs/architecture/relay-trust.md) | What a Device takes from the relay and how it checks it: Device records and unpaired keys, signed envelopes, the challenge nonce, the pairing reply key, the account key's generations and their rotation on unpair |
 | [Protocols](docs/architecture/protocols.md) | The app ↔ CLI websocket and the CLI ↔ relay requests and blobs |
+| [Requests to a Runner](docs/architecture/runner-requests.md) | Sealed questions a Device asks a Runner, verb by verb |
 | [CLI (runtime)](docs/architecture/runtime.md) | The `lorca` binary and its data directory, installing it, its signed self-updates and `lorca service`, the agent loop and a turn on a Runner |
 | [Notifications](docs/architecture/notifications.md) | Phone pushes for replies, failures, and questions, the macOS app's own notifications, reads on another Device, the chat on screen |
 | [Bot permissions](docs/architecture/bot-permissions.md) | A bot's Access to plugins, tools, files, and shell; where the CLI checks it; access requests |
@@ -95,7 +96,7 @@ One doc per subject under `docs/architecture/`, each short enough to read in one
 | [Workflow onboarding](docs/architecture/workflows.md) | Workflows from the marketplace: packs, a setup on a Runner and its accounts, the sample before the schedule, how setups sync, the workflow page in each app |
 | [Bot templates](docs/architecture/templates.md) | A bot shared as a link or a file and a new bot made from one: what a template holds, redaction and flags, encrypted links and their keys, the Runner's own connections, the apps' sheets |
 | [MCP servers](docs/architecture/mcp-servers.md) | The user's own MCP servers in a Runner's `mcp.json`: the file and other apps' spellings, sign-in when a server asks, the `mcp.*` methods and `lorca mcp`, the apps' MCP Servers section and server sheet |
-| [Bots and Memory](docs/architecture/bots.md) | The lead bot, DMs and groups, who answers, handoffs between bots, a bot's memory |
+| [Bots and Memory](docs/architecture/bots.md) | The lead bot, DMs and groups, who answers, handoffs between bots, a bot's memory and working folder |
 | [Routines](docs/architecture/routines.md) | A bot's scheduled tasks: schedules and their timezones, runs and read-only checks, missed runs, health and recovery, and the apps' routine sheet and service row |
 | [One-time routines, routines on events, and calendar events](docs/architecture/routine-triggers.md) | Routines that run once at a date and time, run for each event about one subject (a pull request until it merges or closes, a webhook's requests), or run around a Calendar account's events |
 | [Event triggers](docs/architecture/event-triggers.md) | Runner event subscriptions, the gateways users run to sign and seal a service's events, the encrypted inbox, ordering and recovery |

@@ -10,6 +10,17 @@ Creating a bot for Runner B from Device A: A writes an encrypted bot profile int
 
 If B is offline, the envelope waits on the relay until B fetches it. The UI infers that from decrypted roster state. A turn for a provider the account has not connected ends with a notice in the chat that says to connect it in Settings.
 
+## Working folder
+
+A bot's `workdir` is the folder on its Runner where it mainly works: a project the user points it at, absolute or `~/…`. Without one it works in its own workspace, `~/.lorca/workspaces/<bot id>`. Its system prompt names the folder and says to work there unless the user names another path; its file tools, shell, and coding agents start there ([Tools](tools.md)). `bots.create` and `bots.update` take it, an empty string goes back to the workspace, and a lead bot sets it with `create_bot` and `edit_bot`.
+
+On Windows, Linux, and macOS, the desktop app's DM inspector has a Working Folder row in the Profile card, which opens a sheet with the path: Choose… picks a folder when the bot runs on this computer, and an empty field is its own workspace. Above the profile, two sections read the folder on the bot's Runner (`crates/cli/src/workdir.rs`, `desktop/workdir.go`), when the pane opens on the chat and after each turn:
+
+- **Changes**, in a git repository with anything changed since the last commit (`bots.workdir.changes`): the branch in its title, the lines added and removed, and a row per file with git's letter (M, A, D, U for a file git does not track yet), its name and folder, and its counts; past eight, Show More. A row opens the file's diff (`bots.workdir.diff`, cut past 512 KiB) in a sheet: each hunk with its line numbers, removed lines on red and added on green. The folder may sit inside a repository; then the section is its part, named from the folder. Before the first commit everything counts as new.
+- **Files**, the folder as a tree (`bots.workdir.files`): the folder and a Show button, then its entries, folders first, without `.git`, at most 500 a folder. A folder lists its entries when it first opens, and the open ones are listed again on each refresh. A file opens with its app when the bot runs on this computer.
+
+A path the methods take is relative to the folder; an absolute one or one that climbs out with `..` is refused. For a bot on another Runner the CLI asks that Runner (`workdir.files`, `workdir.changes`, `workdir.diff`, see [Requests to a Runner](runner-requests.md)), so the same sections read it; only its files cannot be opened, and the Folder row says which Runner the folder is on. A folder that is not there, or a Runner that is offline, shows why with a Retry.
+
 ## The lead bot
 
 A new identity starts with one bot, **Chef**, a chief of staff on the first Runner: an ordinary bot whose description has it plan the work, delegate each task to the right teammate with `message_bot`, propose a new one for `create_bot` when none fits, and do hands-on work when necessary. Nothing about it is privileged; rename or delete it like any bot.

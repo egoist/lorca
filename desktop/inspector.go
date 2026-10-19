@@ -9,7 +9,8 @@ import (
 )
 
 // The pane beside a chat, after the macOS app's InspectorViewController: the bots in the chat, a
-// group's name, description, and project context, what the chat's bots published, and for a DM the bot's profile, what it runs with (provider,
+// group's name, description, and project context, what the chat's bots published, and for a DM what
+// changed in the bot's working folder and its files, the bot's profile, what it runs with (provider,
 // model, thinking, the credential, and what the turns used), its memory, its routines, the plugins
 // on its Runner, and where turns run.
 
@@ -35,6 +36,8 @@ type inspectorState struct {
 	project          projectInspectorState
 	// skillsShowingAll is the bot or group whose Skills section shows every skill.
 	skillsShowingAll model.PlaybookScope
+	// workdir is each bot's working folder as its Runner last listed it, refreshed with its memory.
+	workdir map[string]*workdirView
 }
 
 // refreshMemory asks the CLI for the bot's memory; the section redraws when it answers.
@@ -75,7 +78,8 @@ func (s *inspectorState) refreshFeedback(botID string) {
 	})
 }
 
-// refreshShownMemory asks for the memory and the feedback of the bot whose DM is showing.
+// refreshShownMemory asks for the memory, the feedback, and the working folder of the bot whose DM
+// is showing.
 func (s *inspectorState) refreshShownMemory(chatID string) {
 	chat := store.Chat(chatID)
 	if chat == nil || !chat.IsDM() {
@@ -84,10 +88,12 @@ func (s *inspectorState) refreshShownMemory(chatID string) {
 	if bots := store.BotsIn(chat); len(bots) > 0 {
 		s.refreshMemory(bots[0].ID)
 		s.refreshFeedback(bots[0].ID)
+		s.refreshWorkdir(bots[0].ID)
 	}
 }
 
-// inspectorStoreChanged follows the turns: one that ended may have moved what the bot remembers.
+// inspectorStoreChanged follows the turns: one that ended may have moved what the bot remembers
+// and changed the files in its working folder.
 // A bot's feedback is asked for again when its Runner says it changed, and a group's project
 // context is listed again when it changes.
 func (m *mainWindow) inspectorStoreChanged(event model.Event) {
@@ -150,6 +156,8 @@ func (m *mainWindow) inspectorView(c *ui.Context, chatID string) {
 			m.inspectorOutputs(c, chat)
 			m.inspectorCoding(c, chat)
 			if single != nil {
+				m.inspectorChanges(c, single)
+				m.inspectorFiles(c, single)
 				m.inspectorProfile(c, single)
 				m.inspectorRuntime(c, single, chat)
 				m.inspectorMemory(c, single)
@@ -299,6 +307,9 @@ func (m *mainWindow) inspectorProfile(c *ui.Context, bot *model.Bot) {
 		}
 		if disclosureRow(c.Key("bot-access"), k, L("Access"), bot.Permissions.Summary(), nil) {
 			m.presentBotAccess(bot.ID)
+		}
+		if disclosureRow(c.Key("bot-workdir"), k, L("Working Folder"), workdirLabel(bot), nil) {
+			m.presentWorkingFolder(bot.ID)
 		}
 	})
 }

@@ -115,6 +115,7 @@ type WireBot struct {
 	Thinking    *string         `json:"thinking"`
 	Avatar      *WireAttachment `json:"avatar"`
 	Permissions *BotPermissions `json:"permissions"`
+	Workdir     *string         `json:"workdir"`
 	CreatedAt   float64         `json:"created_at"`
 }
 
@@ -822,6 +823,7 @@ func ToBot(wire WireBot) *Bot {
 		Model:       str(wire.Model),
 		Thinking:    str(wire.Thinking),
 		Permissions: wire.Permissions.Clone(),
+		Workdir:     str(wire.Workdir),
 		CreatedAt:   seconds(wire.CreatedAt),
 	}
 	if IsAccent(wire.Accent) {

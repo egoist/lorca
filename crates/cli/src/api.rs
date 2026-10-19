@@ -465,6 +465,25 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                 requests::ask(app, &bot.runner_id, "memory.write", json!({ "bot_id": bot.id, "text": text, "expected_hash": expected_hash })).await
             }
         }
+        // A bot's working folder lives on its Runner: its files a folder at a time, what changed
+        // there since the last commit, and one file's diff, read here or through a sealed request.
+        "bots.workdir.files" | "bots.workdir.changes" | "bots.workdir.diff" => {
+            let bot = app.bot(&string(&params, "bot_id")?).ok_or("Unknown bot")?;
+            let verb = method.trim_start_matches("bots.");
+            let body = json!({ "bot_id": bot.id, "path": params["path"] });
+            let here = app.this_device_id().as_deref() == Some(bot.runner_id.as_str());
+            let mut answer = if here {
+                #[cfg(feature = "runner")]
+                { crate::workdir::serve(app, verb, &body).await? }
+                #[cfg(not(feature = "runner"))]
+                return Err("This Device runs no bots".into());
+            } else {
+                requests::ask(app, &bot.runner_id, verb, body).await?
+            };
+            answer["here"] = json!(here);
+            answer["runner"] = json!(app.device(&bot.runner_id).map(|d| d.name).unwrap_or_else(|| "its Runner".into()));
+            Ok(answer)
+        }
         "chats.delete" => {
             app.delete_chat(&string(&params, "chat_id")?);
             Ok(Value::Null)
