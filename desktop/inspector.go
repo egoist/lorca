@@ -8,10 +8,11 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// The pane beside a chat, after the macOS app's InspectorViewController: the bots in the chat, a
-// group's name, description, and project context, what the chat's bots published, and for a DM the bot's profile, what it runs with (provider,
-// model, thinking, the credential, and what the turns used), its memory, its routines, the plugins
-// on its Runner, and where turns run.
+// The pane beside a chat: the bots in the chat, a group's name, description, and project context,
+// and what is going on in it: reviews, outputs, coding agents, tasks, and for a DM the bot's
+// feedback, its routines and channels, and what the turns used. A bot's settings (its profile, what
+// it runs with, its memory, skills, plugins, and Runner) are in its settings sheet, which a
+// click on the bot opens.
 
 // inspectorState is what each bot's Runner last said about its memory, refreshed when the pane
 // opens on a chat and after every turn in it; why the last fetch failed (the Runner is offline, or
@@ -130,7 +131,7 @@ func (m *mainWindow) inspectorView(c *ui.Context, chatID string) {
 		return
 	}
 	members := store.BotsIn(chat)
-	// A direct chat is one bot, so its profile, provider, and model are edited right here.
+	// A direct chat is one bot, so the pane shows what it does there: its feedback, routines, and usage.
 	var single *model.Bot
 	if chat.IsDM() && len(members) == 1 {
 		single = members[0]
@@ -149,22 +150,16 @@ func (m *mainWindow) inspectorView(c *ui.Context, chatID string) {
 			m.inspectorReviews(c, chat)
 			m.inspectorOutputs(c, chat)
 			m.inspectorCoding(c, chat)
-			if single != nil {
-				m.inspectorProfile(c, single)
-				m.inspectorRuntime(c, single, chat)
-				m.inspectorMemory(c, single)
-			}
-			m.inspectorSkills(c, chat, members)
-			if single != nil {
-				m.inspectorRoutines(c, single)
-				m.inspectorChannels(c, single)
-				m.inspectorFeedback(c, single)
-			}
 			m.inspectorDurableTasks(c, chat)
 			if single != nil {
-				m.inspectorPlugins(c, single)
+				m.inspectorFeedback(c, single)
+				m.inspectorRoutines(c, single)
+				m.inspectorChannels(c, single)
+				m.inspectorUsage(c, single, chat)
+			} else {
+				m.inspectorSkills(c, model.GroupScope(chat.ID))
+				m.inspectorRouting(c, members)
 			}
-			m.inspectorRouting(c, members)
 		})
 	})
 }
@@ -225,7 +220,8 @@ func codingAgentRow(c *ui.Context, k *card, agent *model.AgentRun) bool {
 
 func (m *mainWindow) inspectorParticipants(c *ui.Context, chat *model.Chat, members []*model.Bot) {
 	section(c, L("Bots in this chat"), sectionCaption, nil, func(k *card) {
-		// In a group of several, a click or a right-click on a member offers to make it the owner.
+		// A click on a bot opens its settings. In a group of several, a click or a right-click on a
+		// member offers its settings and to make it the owner.
 		hasMenu := chat.IsGroup() && len(members) > 1
 		for _, bot := range members {
 			host := L("unassigned")
@@ -237,14 +233,23 @@ func (m *mainWindow) inspectorParticipants(c *ui.Context, chat *model.Chat, memb
 			if isOwner {
 				detail = L("Owner") + " · " + detail
 			}
-			o := botRowOptions{Detail: detail, Clickable: hasMenu, AvatarClickable: true}
-			if chat.CanRemoveBot() {
+			o := botRowOptions{Detail: detail, Clickable: true, AvatarClickable: true}
+			removable := chat.CanRemoveBot()
+			if removable {
 				o.AccessorySymbol, o.AccessoryTooltip = "minus.circle", L("Remove from chat")
+			} else if !hasMenu {
+				o.AccessorySymbol, o.AccessoryTooltip = "chevron.right", L("Bot Settings")
 			}
 			rowElement, row := botRow(c, k, bot, o)
 			botID, chatID := bot.ID, chat.ID
-			if row.Accessory {
+			if row.Accessory && removable {
 				store.RemoveBot(botID, chatID)
+			}
+			if !hasMenu {
+				rowElement.Tooltip(L("Bot Settings"))
+				if row.Clicked || (row.Accessory && !removable) {
+					m.presentBotSettings(botID)
+				}
 			}
 			// The avatar is the way to a bot's look: symbol, color, or an image.
 			if row.Avatar {
@@ -252,6 +257,10 @@ func (m *mainWindow) inspectorParticipants(c *ui.Context, chat *model.Chat, memb
 			}
 			if hasMenu {
 				menu := func(menu *ui.Menu) {
+					if menu.Item(L("Bot Settings…")).Chosen() {
+						m.presentBotSettings(botID)
+					}
+					menu.Separator()
 					if menu.Item(L("Make Owner")).Checked(isOwner).Chosen() {
 						store.SetOwner(botID, chatID)
 					}
@@ -303,7 +312,9 @@ func (m *mainWindow) inspectorProfile(c *ui.Context, bot *model.Bot) {
 	})
 }
 
-func (m *mainWindow) inspectorRuntime(c *ui.Context, bot *model.Bot, chat *model.Chat) {
+// inspectorRuntime is what the bot runs with: its provider, model, and thinking level, and the
+// provider's credential.
+func (m *mainWindow) inspectorRuntime(c *ui.Context, bot *model.Bot) {
 	p := colors(c)
 	// The built-in providers, then the custom ones. A custom provider the account deleted stays
 	// listed, under its slug, while the bot is still on it.
@@ -380,7 +391,14 @@ func (m *mainWindow) inspectorRuntime(c *ui.Context, bot *model.Bot, chat *model
 				m.presentConnectProvider(bot.Provider, baseURL, nil)
 			}
 		}
-		// What the turns here have used, and a way to shorten the context by hand.
+	})
+}
+
+// inspectorUsage is what the turns in the DM have used, a way to shorten the context by hand, and
+// what each turn may use, or the turn that stopped at a limit.
+func (m *mainWindow) inspectorUsage(c *ui.Context, bot *model.Bot, chat *model.Chat) {
+	p := colors(c)
+	section(c.Key("usage"), L("Usage"), sectionCaption, nil, func(k *card) {
 		if usage := chat.Usage; usage != nil {
 			label := p.Label
 			if _, result := actionRow(c, k, L("Context"), actionRowOptions{Value: usage.ContextSummary(), Tint: &label, Action: L("Compact")}); result.Action {
@@ -392,7 +410,6 @@ func (m *mainWindow) inspectorRuntime(c *ui.Context, bot *model.Bot, chat *model
 				keyValueRow(c, k, L("Spent"), usage.SpendSummary(), false, nil)
 			}
 		}
-		// What each turn may use, or the turn that stopped at a limit.
 		limits, tint := Lc("None", "limits"), p.Label2
 		if b := store.Budget("chat", chat.ID, bot.RunnerID); b != nil {
 			limits = b.Limits.Summary()

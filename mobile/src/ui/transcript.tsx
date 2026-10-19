@@ -15,7 +15,7 @@ import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSequence, with
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import { ShimmerView } from "../../modules/lorca-core/ShimmerView";
-import { agentStartRow, agentTitle, agentWrote, canBeQuoted, isAgentRow, isLive, isSentMessage, showsCard, showsSpeakers, type Author, type Body, type Bot, type Chat, type CommandRun, type Message } from "../core/model";
+import { agentMessageFromUser, agentStartRow, agentTitle, agentWrote, canBeQuoted, isAgentRow, isLive, isSentMessage, showsCard, showsSpeakers, type Author, type Body, type Bot, type Chat, type CommandRun, type Message } from "../core/model";
 import { engine } from "../core/engine";
 import { useStore } from "../core/store";
 import { language, t, useLanguage } from "../i18n";
@@ -49,10 +49,10 @@ export type Row =
   | { key: string; type: "notice"; text: string; groupStart: boolean }
   | { key: string; type: "permission"; message: Message; body: Extract<Body, { kind: "permission" }>; bot: Bot | undefined; groupStart: boolean }
   | { key: string; type: "command"; message: Message; run: CommandRun; bot: Bot | undefined; groupStart: boolean }
-  /// A coding agent's marker: the start or a message the bot sent it ("Messaged ⬢ Title"), or what
-  /// it said ("Message from ⬢ Title"). `agent` is the start row's card, which asks under the marker;
-  /// `start` is the row that started it, whose page a tap opens, when it is loaded.
-  | { key: string; type: "agent"; message: Message; incoming: boolean; title: string; kind: string; text: string; failed: boolean; start: string | undefined; groupStart: boolean }
+  /// A coding agent's marker: the start or a message the bot sent it ("Messaged ⬢ Title"), what
+  /// the user wrote it from its page (`byYou`, "You messaged ⬢ Title"), or what it said ("Message
+  /// from ⬢ Title"). `start` is the row that started it, whose page a tap opens, when it is loaded.
+  | { key: string; type: "agent"; message: Message; incoming: boolean; byYou: boolean; title: string; kind: string; text: string; failed: boolean; start: string | undefined; groupStart: boolean }
   | { key: string; type: "draft"; message: Message; body: DraftBody; bot: Bot | undefined; groupStart: boolean }
   | { key: string; type: "working"; bots: Bot[] }
   | { key: string; type: "status"; text: string };
@@ -103,6 +103,7 @@ export function buildRows(chat: Chat, bots: Map<string, Bot>, workingBotIds: str
             type: "agent",
             message,
             incoming: false,
+            byYou: false,
             title: agent ? agentTitle(agent) : t("a coding agent"),
             kind: agent?.kind ?? "",
             text: agentWrote(body),
@@ -134,11 +135,13 @@ export function buildRows(chat: Chat, bots: Map<string, Bot>, workingBotIds: str
       }
       case "agent_message": {
         const start = agentStartRow(chat.messages, message.body.agent_id);
+        const byYou = agentMessageFromUser(message);
         rows.push({
           key: message.id,
           type: "agent",
           message,
-          incoming: true,
+          incoming: !byYou,
+          byYou,
           title: message.body.title || t("a coding agent"),
           kind: message.body.agent_kind,
           text: message.body.text,
@@ -872,14 +875,20 @@ export const CommandRow = memo(function CommandRow({
   );
 });
 
+/// "Message from", "You messaged", or "Messaged": the words before an agent marker's title.
+export function agentRowLabel(row: Extract<Row, { type: "agent" }>): string {
+  return row.incoming ? t("Message from") : row.byYou ? t("You messaged") : t("Messaged");
+}
+
 /// A coding agent's marker, after the bot-to-bot one: "Messaged ⬢ Title" for the start and for a
-/// message the bot sent it, "Message from ⬢ Title" for what it said, the agent's mark where a bot's
+/// message the bot sent it, "You messaged ⬢ Title" for what the user wrote it from its page,
+/// "Message from ⬢ Title" for what it said, the agent's mark where a bot's
 /// avatar would be, and the message's first line under it (red when the agent ended on its own). A
 /// tap opens the agent's page.
 export const AgentRow = memo(function AgentRow({ row, onOpen }: { row: Extract<Row, { type: "agent" }>; onOpen: (row: Extract<Row, { type: "agent" }>) => void }) {
   useLanguage();
   const p = usePalette();
-  const label = row.incoming ? t("Message from") : t("Messaged");
+  const label = agentRowLabel(row);
   const preview = firstLine(row.text).replace(/\*\*|`/g, "");
   return (
     <Pressable

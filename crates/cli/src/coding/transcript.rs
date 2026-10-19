@@ -38,6 +38,10 @@ pub struct Item {
     pub tool: Option<ToolStep>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plan: Vec<PlanEntry>,
+    /// Who wrote a `prompt`: `user` when the user wrote it on the agent's page; none when the
+    /// bot passed it on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
 }
 
 /// A tool the agent used.
@@ -91,7 +95,11 @@ impl Item {
     /// was sent, what it said, `● Bash(git status)` and the start of what came back (`  ⎿ …`).
     pub fn lines(&self) -> Vec<String> {
         match self.kind.as_str() {
-            "prompt" => self.text.lines().enumerate().map(|(index, line)| if index == 0 { format!("> {line}") } else { format!("  {line}") }).collect(),
+            "prompt" => {
+                // The bot reads which messages the user wrote to the agent themselves.
+                let by = if self.from.as_deref() == Some("user") { "(from the user) " } else { "" };
+                self.text.lines().enumerate().map(|(index, line)| if index == 0 { format!("> {by}{line}") } else { format!("  {line}") }).collect()
+            }
             "text" => self.text.lines().map(|line| line.trim_end().to_string()).collect(),
             "status" => vec![format!("· {}", self.text)],
             "error" => vec![format!("Error: {}", self.text)],
@@ -355,6 +363,8 @@ mod tests {
     #[test]
     fn a_transcript_reads_like_the_agents_own_screen() {
         assert_eq!(Item::text("p", "prompt", "Fix the login bug\nand add a test").lines(), vec!["> Fix the login bug", "  and add a test"]);
+        let user = Item { from: Some("user".into()), ..Item::text("p", "prompt", "Use the staging key") };
+        assert_eq!(user.lines(), vec!["> (from the user) Use the staging key"]);
         assert_eq!(Item::tool("t", step("execute", "git status --short", "running", None)).lines(), vec!["● Bash(git status --short)"]);
         let done = Item::tool("t", step("execute", "ls", "done", Some("a\nb\n\nc\nd\ne\nf")));
         assert_eq!(done.lines(), vec!["● Bash(ls)", "  ⎿ a", "    b", "    c", "    d", "    … +2 lines"]);

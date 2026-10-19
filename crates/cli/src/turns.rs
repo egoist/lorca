@@ -206,8 +206,8 @@ async fn run_budgeted_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) 
         Arc::new(ListTeammates { app: app.clone(), chat_id: chat.meta.id.clone() }),
         Arc::new(MessageBot { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone(), hops: job.hops, task_id: job.task_id.clone(), origin: origin.clone() }),
         Arc::new(Handoffs { app: app.clone(), bot_id: bot.id.clone(), request: match &job.handoff { Some(crate::handoffs::HandoffJob::Request { request }) => Some(request.clone()), _ => None }, origin }),
-        Arc::new(CreateBot { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone() }),
-        Arc::new(EditBot { app: app.clone(), bot: bot.clone() }),
+        Arc::new(CreateBot::new(app, &chat.meta.id, &bot)),
+        Arc::new(EditBot::new(app, &bot)),
         Arc::new(Routines { app: app.clone(), bot: bot.clone() }),
         Arc::new(crate::channels::ChannelsTool { app: app.clone(), bot: bot.clone(), user_started: matches!(job.kind.as_str(), "turn" | "room_turn") }),
         Arc::new(crate::feedback::FeedbackTool { app: app.clone(), bot_id: bot.id.clone() }),
@@ -1889,7 +1889,13 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
         );
     }
     if let Some(runner) = runner {
-        prompt.push_str(&format!("\nYou run on the Runner \"{}\" ({}).", runner.name, runner.os_version));
+        prompt.push_str(&format!(
+            "\nYou run on the Runner \"{}\" ({}, {}). Your working directory, plugins, coding agents, browser profiles, \
+             secrets, and memory are the ones on this machine; another Runner's paths and plugins are not here.",
+            runner.name,
+            runner.platform(),
+            runner.os_version
+        ));
     }
     prompt
 }
@@ -2244,6 +2250,14 @@ fn transcript_bounded(app: &App, chat: &Chat, bot: &Bot, workdir: &std::path::Pa
                 let what = if *failed { "ended" } else { "says" };
                 out.push(user(&format!("[{} ({agent_id}), {whose} coding agent on “{title}”, {what}]: {text}", crate::model::coding_agent_name(agent_kind)), timestamp));
             }
+            // What the user wrote to a coding agent on its page, which reached it without the bot.
+            (Author::You, Body::AgentMessage { agent_id, agent_kind, title, text, .. }) => {
+                let whose = match app.coding_agents.started_by(agent_id) {
+                    Some(owner) if owner != bot.id => format!("{}'s", name_of(app, &owner)),
+                    _ => "your".to_string(),
+                };
+                out.push(user(&format!("[The user wrote to {} ({agent_id}), {whose} coding agent on “{title}”, directly; it has the message]: {text}", crate::model::coding_agent_name(agent_kind)), timestamp));
+            }
             (Author::Bot { bot_id }, Body::Handoff { to, reason, .. }) if bot_id != &bot.id => {
                 let from = name_of(app, bot_id);
                 if to == &bot.id {
@@ -2305,9 +2319,9 @@ fn with_mention_ids(app: &App, text: &str, mentions: &[String]) -> String {
 
 // MARK: - Tools
 
-struct ListTeammates {
-    app: Arc<App>,
-    chat_id: String,
+pub(crate) struct ListTeammates {
+    pub(crate) app: Arc<App>,
+    pub(crate) chat_id: String,
 }
 
 #[async_trait]
@@ -2317,7 +2331,9 @@ impl Tool for ListTeammates {
     }
     fn description(&self) -> &str {
         "List the other bots on this account: their id, name, what they are good at, which Runner they run on, whether that \
-         Runner is online, and the provider, model, and thinking they run with."
+         Runner is online, and the provider, model, and thinking they run with, and the coding agents each has at work (id, title, state, chat, Runner, \
+         folder, branch, pull request). Also lists the account's Runners, the machines a bot can run on (name, id, platform, \
+         online), for create_bot and edit_bot's runner."
     }
     fn parameters(&self) -> Value {
         json!({ "type": "object", "properties": {}, "additionalProperties": false })
@@ -2325,6 +2341,21 @@ impl Tool for ListTeammates {
     async fn execute(&self, _id: &str, _args: Value, _cancel: CancellationToken, _on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
         let chat = self.app.chat(&self.chat_id);
         let bots = self.app.state.lock().unwrap().bots.clone();
+        let this = self.app.this_device_id();
+        let now = crate::config::now_secs();
+        let live: Vec<crate::agent_roster::Listed> = crate::agent_roster::account(&self.app).into_iter().filter(|listed| listed.is_live(now)).collect();
+        let runners: Vec<Value> = runners(&self.app)
+            .iter()
+            .map(|d| {
+                json!({
+                    "name": d.name,
+                    "id": d.id,
+                    "platform": d.platform(),
+                    "online": self.app.device_is_online(&d.id),
+                    "this_runner": Some(&d.id) == this.as_ref(),
+                })
+            })
+            .collect();
         let rows: Vec<Value> = bots
             .iter()
             .map(|bot| {
@@ -2334,16 +2365,31 @@ impl Tool for ListTeammates {
                     "name": bot.name,
                     "description": bot.description,
                     "runner": runner.as_ref().map(|d| d.name.clone()).unwrap_or_else(|| "unassigned".into()),
+                    "runner_id": bot.runner_id,
+                    "platform": runner.as_ref().map(|d| d.platform().to_string()),
                     "provider": bot.provider,
                     // The model it runs: its own, else the provider's default.
                     "model": bot.model.clone().or_else(|| self.app.credentials.lock().unwrap().models(&bot.provider).first().map(|m| m.id.clone())),
                     "thinking": bot.thinking.as_deref().unwrap_or("default"),
                     "online": self.app.device_is_online(&bot.runner_id),
                     "in_this_chat": chat.as_ref().map(|c| c.meta.bot_ids.contains(&bot.id)).unwrap_or(false),
+                    // What it has at work: coding_agent list with scope account says the rest.
+                    "coding_agents": live.iter().filter(|listed| listed.bot_id == bot.id).map(|listed| json!({
+                        "id": listed.agent.id,
+                        "kind": listed.agent.kind,
+                        "title": listed.agent.title,
+                        "state": crate::agent_roster::state_words(&listed.agent),
+                        "chat": listed.chat_title,
+                        "chat_id": listed.chat_id,
+                        "runner": listed.agent.device,
+                        "folder": listed.agent.folder,
+                        "branch": listed.agent.branch,
+                        "pull_request": listed.agent.pull_request,
+                    })).collect::<Vec<_>>(),
                 })
             })
             .collect();
-        let text = serde_json::to_string_pretty(&json!({ "teammates": rows })).unwrap_or_default();
+        let text = serde_json::to_string_pretty(&json!({ "teammates": rows, "runners": runners })).unwrap_or_default();
         Ok(ToolResult::text(text).with_details(json!({ "summary": format!("Listed {} teammates", rows.len()) })))
     }
 }
@@ -2354,6 +2400,134 @@ fn bot_by_id(bots: &[Bot], id: &str) -> Result<Bot, ToolError> {
     bots.iter().find(|b| b.id == id).cloned().ok_or_else(|| {
         ToolError(format!("No bot with id {id}. Bots: {}", bots.iter().map(|b| format!("{} ({})", b.name, b.id)).collect::<Vec<_>>().join(", ")))
     })
+}
+
+// MARK: - Runners
+
+/// Every paired Device that is a Runner (`Device::is_runner`, as the apps' Runner menus judge
+/// it), named as the account names it: this one first, then by name.
+fn runners(app: &App) -> Vec<Device> {
+    let this = app.this_device_id();
+    let mut out: Vec<Device> = {
+        let state = app.state.lock().unwrap();
+        state.devices.iter().filter(|d| d.is_runner()).map(|d| named(&state.device_names, d)).collect()
+    };
+    out.sort_by_key(|d| (Some(&d.id) != this.as_ref(), d.name.to_lowercase()));
+    out
+}
+
+/// The Device under the name the account gave it, else the machine's own.
+fn named(names: &std::collections::BTreeMap<String, String>, device: &Device) -> Device {
+    let mut device = device.clone();
+    if let Some(name) = names.get(&device.id) {
+        device.name = name.clone();
+    }
+    device
+}
+
+/// "Name (id …, Platform)", as the team tools name a Runner.
+fn runner_label(device: &Device) -> String {
+    format!("{} (id {}, {})", device.name, device.id, device.platform())
+}
+
+/// The Runners that would take a bot now, for a refusal to name.
+fn runners_that_work(app: &App) -> String {
+    let online: Vec<String> = runners(app).iter().filter(|d| app.device_is_online(&d.id)).map(runner_label).collect();
+    if online.is_empty() {
+        "No Runner is online now.".into()
+    } else {
+        format!("Runners online now: {}.", online.join("; "))
+    }
+}
+
+/// The account's Runners as the team tools' descriptions list them. Whether each is online
+/// changes from turn to turn, so list_teammates says that and the descriptions, which a
+/// provider caches with the prompt, do not.
+fn runners_described(app: &App, own_runner: &str) -> String {
+    let rows: Vec<String> = runners(app)
+        .iter()
+        .map(|d| if d.id == own_runner { format!("{} (yours)", runner_label(d)) } else { runner_label(d) })
+        .collect();
+    if rows.is_empty() {
+        return String::new();
+    }
+    format!(" The account's Runners: {}. list_teammates says which are online.", rows.join("; "))
+}
+
+/// The Runner `query` names: a Device id, or the name list_teammates shows (the account's name
+/// for it, or the machine's own), in any case. Refuses a Device that is not a Runner and a
+/// Runner that is offline, naming the Runners that would work.
+fn runner_for(app: &App, query: &str) -> Result<Device, ToolError> {
+    let query = query.trim();
+    let candidates: Vec<(Device, String)> = {
+        let state = app.state.lock().unwrap();
+        state.devices.iter().map(|d| (named(&state.device_names, d), d.name.clone())).collect()
+    };
+    let found: Vec<Device> = match candidates.iter().find(|(d, _)| d.id == query) {
+        Some((d, _)) => vec![d.clone()],
+        None => candidates
+            .iter()
+            .filter(|(d, machine)| d.name.eq_ignore_ascii_case(query) || machine.eq_ignore_ascii_case(query))
+            .map(|(d, _)| d.clone())
+            .collect(),
+    };
+    let device = match found.as_slice() {
+        [] => return Err(ToolError(format!("No paired Device is called {query}. {}", runners_that_work(app)))),
+        [device] => device.clone(),
+        many => {
+            return Err(ToolError(format!(
+                "{} Devices are called {query}; name one by its id: {}.",
+                many.len(),
+                many.iter().map(runner_label).collect::<Vec<_>>().join("; ")
+            )))
+        }
+    };
+    if !device.is_runner() {
+        return Err(ToolError(format!(
+            "{} runs {}, so it is a Device and not a Runner: only macOS, Linux, and Windows Devices run bots. {}",
+            device.name,
+            device.platform(),
+            runners_that_work(app)
+        )));
+    }
+    if !app.device_is_online(&device.id) {
+        return Err(ToolError(format!("{} is offline, so a bot there could not start. {}", device.name, runners_that_work(app))));
+    }
+    Ok(device)
+}
+
+/// What a bot put on `runner` from another Runner should know, for the tool's result: whose
+/// workspace, plugins, and coding agents it gets, that it runs with the account's credentials,
+/// and a provider whose server is on the calling machine.
+fn on_runner_note(app: &App, name: &str, runner: &Device, provider: &str) -> String {
+    let (label, local) = {
+        let credentials = app.credentials.lock().unwrap();
+        (credentials.label(provider), credentials.machine_local_url(provider))
+    };
+    let mut note = format!(
+        " On {} {name} has that machine's working directory, plugins, coding agents, browser profiles, and secrets, not \
+         this one's, and runs {label} with the account's credentials, which every Runner has.",
+        runner.name
+    );
+    if let Some(url) = local {
+        note.push_str(&format!(
+            " {label} is at {url}, a server on the machine that calls it: on {} it answers only if the same server runs there.",
+            runner.name
+        ));
+    }
+    note
+}
+
+/// What Access a bot has on another Runner, for the tool's result.
+fn access_note(permissions: Option<&crate::permissions::BotPermissions>, runner: &Device) -> String {
+    match permissions {
+        Some(policy) if policy.connections.is_some() => format!(
+            " Their Access keeps shell, files, and drafts as they were, and allows none of {}'s plugins until the user grants them in their profile.",
+            runner.name
+        ),
+        Some(_) => " Their Access keeps shell, files, and drafts as they were, with every plugin there.".into(),
+        None => " They have full Access there.".into(),
+    }
 }
 
 struct MessageBot {
@@ -2802,6 +2976,23 @@ struct CreateBot {
     app: Arc<App>,
     chat_id: String,
     bot: Bot,
+    description: String,
+}
+
+impl CreateBot {
+    fn new(app: &Arc<App>, chat_id: &str, bot: &Bot) -> Self {
+        let description = format!(
+            "Create a new teammate bot with one clear job, on your Runner or, with runner, on another of the account's \
+             Runners that is online. A bot works with what is on its Runner: that machine's working directory, plugins, \
+             coding agents, browser profiles, and secrets, never another's; every Runner has the account's provider \
+             credentials. A bot on your Runner gets your Access; on another it keeps your Access to shell, files, and \
+             drafts, and when you are limited to some plugins it starts with none of that machine's until the user grants \
+             them. In a group chat the new bot joins it right away; in a direct chat it gets its own direct chat and can be \
+             added to a group later. Propose the team first and create bots only once the user agrees.{}",
+            runners_described(app, &bot.runner_id)
+        );
+        Self { app: app.clone(), chat_id: chat_id.to_string(), bot: bot.clone(), description }
+    }
 }
 
 #[async_trait]
@@ -2810,9 +3001,7 @@ impl Tool for CreateBot {
         "create_bot"
     }
     fn description(&self) -> &str {
-        "Create a new teammate bot on your Runner with one clear job. In a group chat the new bot joins it right away; \
-         in a direct chat it gets its own direct chat and can be added to a group later. Propose the team first and create \
-         bots only once the user agrees."
+        &self.description
     }
     fn parameters(&self) -> Value {
         json!({
@@ -2823,7 +3012,8 @@ impl Tool for CreateBot {
                 "provider": { "type": "string", "enum": self.app.credentials.lock().unwrap().kinds(), "description": "Defaults to your own provider" },
                 "model": { "type": "string", "description": "A model id the provider offers. Defaults to the provider's default model" },
                 "thinking": { "type": "string", "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"], "description": "How much the model thinks, a level the model takes. Defaults to the model's default" },
-                "workdir": { "type": "string", "description": "Working directory for its tools. Defaults to a private workspace under the CLI home; give it your own path to share files" }
+                "workdir": { "type": "string", "description": "Working directory for its tools, a path on its Runner. Defaults to a private workspace under that Runner's CLI home; on your Runner, give it your own path to share files" },
+                "runner": { "type": "string", "description": "The Runner it runs on: a Runner's id or name from list_teammates. Defaults to yours" }
             },
             "required": ["name", "description"],
             "additionalProperties": false
@@ -2851,6 +3041,16 @@ impl Tool for CreateBot {
         let (model, thinking) = (field("model"), field("thinking"));
         let runs = Runs { provider, model: None, thinking: None }.change(&self.app, None, model, thinking)?;
         let runs_with = (args["provider"].is_string() || model.is_some() || thinking.is_some()).then(|| runs.describe(&self.app));
+        let caller = self.app.bot(&self.bot.id).ok_or("The calling bot is gone")?;
+        // Another Runner is any online one on the account, as the apps' Runner menu offers it.
+        let runner = match field("runner") {
+            Some(query) => Some(runner_for(&self.app, query)?).filter(|runner| runner.id != caller.runner_id),
+            None => None,
+        };
+        let permissions = match &runner {
+            Some(_) => caller.permissions.as_ref().map(crate::permissions::BotPermissions::on_another_runner),
+            None => caller.permissions.clone(),
+        };
         let (symbol_name, accent) = look_for(&name);
         let bot = Bot {
             id: String::new(),
@@ -2859,13 +3059,13 @@ impl Tool for CreateBot {
             symbol_name,
             accent,
             avatar: None,
-            runner_id: self.bot.runner_id.clone(),
+            runner_id: runner.as_ref().map_or_else(|| caller.runner_id.clone(), |runner| runner.id.clone()),
             provider: runs.provider,
             model: runs.model,
             thinking: runs.thinking,
             legacy_instructions: String::new(),
-            workdir: args["workdir"].as_str().map(|w| w.trim().to_string()).filter(|w| !w.is_empty()),
-            permissions: self.app.bot(&self.bot.id).ok_or("The calling bot is gone")?.permissions,
+            workdir: field("workdir").map(str::to_string),
+            permissions,
             created_at: 0.0,
         };
         let (created, _dm) = self.app.create_bot_with_dm(bot, None).map_err(|e| ToolError(e.to_string()))?;
@@ -2886,19 +3086,23 @@ impl Tool for CreateBot {
             }
         }
 
-        let runner = self.app.device(&created.runner_id).map(|d| d.name).unwrap_or_else(|| "this Runner".into());
+        let on = self.app.device(&created.runner_id).map(|d| d.name).unwrap_or_else(|| "this Runner".into());
         let mut text = if joined_here {
-            format!("Created {} (id {}) on {runner}. They are in this chat now and take turns after you.", created.name, created.id)
+            format!("Created {} (id {}) on {on}. They are in this chat now and take turns after you.", created.name, created.id)
         } else {
             format!(
-                "Created {} (id {}) on {runner} with their own direct chat. To work with them together, the user can add them to a group chat.",
+                "Created {} (id {}) on {on} with their own direct chat. To work with them together, the user can add them to a group chat.",
                 created.name, created.id
             )
         };
         if let Some(runs) = runs_with {
             text.push_str(&format!(" They run {runs}."));
         }
-        Ok(ToolResult::text(text).with_details(json!({ "summary": format!("Created {}", created.name), "bot_id": created.id })))
+        if let Some(runner) = &runner {
+            text.push_str(&on_runner_note(&self.app, &created.name, runner, &created.provider));
+            text.push_str(&access_note(created.permissions.as_ref(), runner));
+        }
+        Ok(ToolResult::text(text).with_details(json!({ "summary": format!("Created {}", created.name), "bot_id": created.id, "runner_id": created.runner_id })))
     }
 }
 
@@ -2906,6 +3110,23 @@ impl Tool for CreateBot {
 struct EditBot {
     app: Arc<App>,
     bot: Bot,
+    description: String,
+}
+
+impl EditBot {
+    fn new(app: &Arc<App>, bot: &Bot) -> Self {
+        let description = format!(
+            "Change a teammate's profile: name, description, provider, model, thinking, working directory, or Runner. Only \
+             the fields you pass change. Description is the complete account of what the bot does and how it works. You can \
+             edit yourself. Changes apply from that bot's next turn. Edit only when the user asks or agrees. runner moves \
+             the bot to another online Runner: a turn it is in finishes where it is, then its turns and routines run on the \
+             new machine with that machine's working directory (its default one unless you pass workdir), plugins, coding \
+             agents, browser profiles, and secrets. Its memory stays on the old Runner. Its Access keeps shell, files, and \
+             drafts; when it is limited to some plugins it gets none of the new machine's until the user grants them.{}",
+            runners_described(app, &bot.runner_id)
+        );
+        Self { app: app.clone(), bot: bot.clone(), description }
+    }
 }
 
 #[async_trait]
@@ -2914,9 +3135,7 @@ impl Tool for EditBot {
         "edit_bot"
     }
     fn description(&self) -> &str {
-        "Change a teammate's profile: name, description, provider, model, thinking, or working directory. Only the \
-         fields you pass change. Description is the complete account of what the bot does and how it works. You can \
-         edit yourself. Changes apply from that bot's next turn. Edit only when the user asks or agrees."
+        &self.description
     }
     fn parameters(&self) -> Value {
         json!({
@@ -2928,7 +3147,8 @@ impl Tool for EditBot {
                 "provider": { "type": "string", "enum": self.app.credentials.lock().unwrap().kinds(), "description": "Another provider starts on its default model and thinking, unless you pass them too" },
                 "model": { "type": "string", "description": "A model id the provider offers, or default for the provider's default model" },
                 "thinking": { "type": "string", "enum": ["default", "off", "minimal", "low", "medium", "high", "xhigh", "max"], "description": "How much the model thinks: a level the model takes, or default" },
-                "workdir": { "type": "string", "description": "New working directory for its tools" }
+                "workdir": { "type": "string", "description": "New working directory for its tools, a path on its Runner (the new one when you pass runner)" },
+                "runner": { "type": "string", "description": "The Runner to move it to: a Runner's id or name from list_teammates" }
             },
             "required": ["bot_id"],
             "additionalProperties": false
@@ -2962,6 +3182,32 @@ impl Tool for EditBot {
             }
         }
         let runs = Runs::of(&target).change(&self.app, provider.as_deref(), model.as_deref(), thinking.as_deref())?;
+        // A move goes to an online Runner, as create_bot's runner does; the one it is on is no move.
+        let moved_to = match field("runner") {
+            Some(query) => Some(runner_for(&self.app, &query)?).filter(|runner| runner.id != target.runner_id),
+            None => None,
+        };
+        if let Some(runner) = &moved_to {
+            // A routine on events listens through a subscription its Runner made with the relay's
+            // receiver, which another Runner cannot take over.
+            let listening: Vec<String> = self
+                .app
+                .routines_of(&target.id)
+                .into_iter()
+                .filter(|routine| routine.events.as_ref().is_some_and(|events| events.ended_at.is_none() && !events.subscription_id.is_empty()))
+                .map(|routine| routine.name)
+                .collect();
+            if !listening.is_empty() {
+                let old = self.app.device(&target.runner_id).map(|d| d.name).unwrap_or_else(|| "its Runner".into());
+                return Err(ToolError(format!(
+                    "{} has routines on events that listen through {old}: {}. Delete them first, move {} to {}, then set them up again there.",
+                    target.name,
+                    listening.join(", "),
+                    target.name,
+                    runner.name
+                )));
+            }
+        }
         let changed: Vec<&str> = [
             ("name", new_name.is_some()),
             ("description", description.is_some()),
@@ -2969,16 +3215,22 @@ impl Tool for EditBot {
             ("model", model.is_some()),
             ("thinking", thinking.is_some()),
             ("working directory", workdir.is_some()),
+            ("Runner", moved_to.is_some()),
         ]
         .into_iter()
         .filter_map(|(label, set)| set.then_some(label))
         .collect();
         if changed.is_empty() {
-            return Err("Pass at least one field to change: name, description, provider, model, thinking, or workdir".into());
+            if field("runner").is_some() {
+                let on = self.app.device(&target.runner_id).map(|d| d.name).unwrap_or_else(|| "that Runner".into());
+                return Err(ToolError(format!("{} already runs on {on}.", target.name)));
+            }
+            return Err("Pass at least one field to change: name, description, provider, model, thinking, workdir, or runner".into());
         }
         let runtime = provider.is_some() || model.is_some() || thinking.is_some();
         let runs_with = runtime.then(|| runs.describe(&self.app));
 
+        let new_runner = moved_to.as_ref().map(|runner| runner.id.clone());
         let updated = self
             .app
             .update_bot(&target.id, |bot| {
@@ -2993,6 +3245,13 @@ impl Tool for EditBot {
                     bot.model = runs.model;
                     bot.thinking = runs.thinking;
                 }
+                if let Some(runner_id) = new_runner {
+                    // A path on the old machine names nothing on the new one: the bot starts in
+                    // that Runner's default workspace unless it was given a path there.
+                    bot.runner_id = runner_id;
+                    bot.workdir = None;
+                    bot.permissions = bot.permissions.as_ref().map(crate::permissions::BotPermissions::on_another_runner);
+                }
                 if let Some(v) = workdir {
                     bot.workdir = Some(v);
                 }
@@ -3000,13 +3259,27 @@ impl Tool for EditBot {
             .map_err(|e| ToolError(e.to_string()))?;
 
         let what = changed.join(", ");
-        let text = match (target.id == self.bot.id, runs_with) {
+        let mut text = match (target.id == self.bot.id, runs_with) {
             (true, Some(runs)) => format!("Updated your own profile ({what}). From your next turn you run {runs}; finish this one as you are."),
             (true, None) => format!("Updated your own profile ({what}). The new profile applies from your next turn; finish this one as you are."),
             (false, Some(runs)) => format!("Updated {} ({what}). From their next turn they run {runs}.", updated.name),
             (false, None) => format!("Updated {} ({what}). The new profile applies from their next turn.", updated.name),
         };
-        Ok(ToolResult::text(text).with_details(json!({ "summary": format!("Updated {}", updated.name), "bot_id": updated.id, "changed": changed })))
+        if let Some(runner) = &moved_to {
+            let old = self.app.device(&target.runner_id).map(|d| d.name).unwrap_or_else(|| "the old Runner".into());
+            let routines = self.app.routines_of(&updated.id).len();
+            text.push_str(&format!(
+                " A turn {} is in now finishes on {old}; the next ones{} run on {}, in {}.",
+                updated.name,
+                if routines > 0 { format!(" and {routines} routine(s)") } else { String::new() },
+                runner.name,
+                if updated.workdir.is_some() { "the working directory you gave" } else { "its default working directory there" },
+            ));
+            text.push_str(&on_runner_note(&self.app, &updated.name, runner, &updated.provider));
+            text.push_str(&access_note(updated.permissions.as_ref(), runner));
+            text.push_str(&format!(" Its memory stays on {old}; on {} it starts without it.", runner.name));
+        }
+        Ok(ToolResult::text(text).with_details(json!({ "summary": format!("Updated {}", updated.name), "bot_id": updated.id, "changed": changed, "runner_id": updated.runner_id })))
     }
 }
 
@@ -3694,14 +3967,14 @@ mod tests {
         crate::identity::create(app, Some("Runner".into())).unwrap();
         let caller = app.state.lock().unwrap().bots[0].clone();
         let chat_id = app.dm_with(&caller.id, None).unwrap().meta.id;
-        let create = CreateBot { app: app.clone(), bot: caller.clone(), chat_id };
+        let create = CreateBot::new(app, &chat_id, &caller);
         let policy = serde_json::from_value(json!({"connections":{},"shell":false,"filesystem":"none"})).unwrap();
         app.update_bot(&caller.id, |bot| bot.permissions = Some(policy)).unwrap();
         let update: ToolUpdateFn = Arc::new(|_| {});
         create.execute("new", json!({"name":"Inbox", "description":"Read selected inbox"}), CancellationToken::new(), update.clone()).await.unwrap();
         let created = app.state.lock().unwrap().bots.iter().find(|bot| bot.name == "Inbox").unwrap().clone();
         assert_eq!(created.permissions, app.bot(&caller.id).unwrap().permissions, "inherit current policy, not the turn's snapshot");
-        let edit = EditBot { app: app.clone(), bot: caller.clone() };
+        let edit = EditBot::new(app, &caller);
         let refused = edit.execute("grant", json!({"bot_id":caller.id,"permissions":{}}), CancellationToken::new(), update.clone()).await.unwrap_err();
         assert!(refused.0.contains("Only the user"));
         let refused = create.execute("grant", json!({"name":"Admin","description":"Use everything","permissions":{}}), CancellationToken::new(), update).await.unwrap_err();
@@ -5148,7 +5421,7 @@ mod tests {
         let listed: Value = serde_json::from_str(listed.content[0].as_text().unwrap()).unwrap();
         assert_eq!(listed["teammates"].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap()).collect::<Vec<_>>(), ["b1", "b2"]);
 
-        let edit = EditBot { app: app.clone(), bot: chef.clone() };
+        let edit = EditBot::new(app, &chef);
         edit.execute("call", json!({ "bot_id": "b2", "description": "Plans the menu" }), CancellationToken::new(), no_updates.clone()).await.unwrap();
         let descriptions: Vec<String> = app.state.lock().unwrap().bots.iter().map(|b| b.description.clone()).collect();
         assert_eq!(descriptions, ["", "Plans the menu"]);
@@ -5177,7 +5450,7 @@ mod tests {
         let scout = Bot { provider: "anthropic".into(), thinking: Some("minimal".into()), ..bot("b2", "Scout") };
         app.state.lock().unwrap().bots = vec![chef.clone(), scout];
         let no_updates: ToolUpdateFn = Arc::new(|_| {});
-        let tool = EditBot { app: app.clone(), bot: chef.clone() };
+        let tool = EditBot::new(app, &chef);
         let edit = |mut args: Value| {
             args["bot_id"] = json!("b2");
             tool.execute("call", args, CancellationToken::new(), no_updates.clone())
@@ -5254,7 +5527,7 @@ mod tests {
         crate::identity::create(app, Some("Runner".into())).unwrap();
         let chef = Bot { runner_id: app.this_device_id().unwrap(), ..bot("b1", "Chef") };
         app.state.lock().unwrap().bots = vec![chef.clone()];
-        let create = CreateBot { app: app.clone(), chat_id: "chat".into(), bot: chef };
+        let create = CreateBot::new(app, "chat", &chef);
         let no_updates: ToolUpdateFn = Arc::new(|_| {});
         let run = |args: Value| create.execute("call", args, CancellationToken::new(), no_updates.clone());
 
@@ -5266,6 +5539,179 @@ mod tests {
         assert!(result.content[0].as_text().unwrap().ends_with(" They run Claude Opus 5.5 on Anthropic, thinking high."));
         let scout = app.state.lock().unwrap().bots.iter().find(|b| b.name == "Scout").cloned().unwrap();
         assert_eq!((scout.provider, scout.model, scout.thinking), ("anthropic".into(), Some("claude-opus-5-5".into()), Some("high".into())));
+    }
+
+    /// Pairs a Device with the scratch account, as its `machine` blob would.
+    fn pair(app: &App, id: &str, name: &str, os: &str, online: bool) {
+        let mut state = app.state.lock().unwrap();
+        state.devices.push(Device { id: id.into(), name: name.into(), os: os.into(), os_version: "1".into(), box_pubkey: "box".into(), ..Default::default() });
+        if online {
+            state.device_online.insert(id.into());
+        }
+    }
+
+    /// A Mac's account with a Windows Runner online, a Linux Runner offline, and an Android
+    /// phone online: the caller is the lead bot on the Mac, limited to its GitHub plugin.
+    fn paired_account() -> (ScratchApp, Bot, String) {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        crate::identity::create(app, Some("Studio".into())).unwrap();
+        pair(app, "win-key", "DESKTOP-34HK9JT", "windows", true);
+        pair(app, "linux-key", "build-box", "linux", false);
+        pair(app, "pixel-key", "Pixel", "android", true);
+        let policy = serde_json::from_value(json!({ "connections": { "github": { "capabilities": ["read"] } }, "filesystem": "write", "shell": true })).unwrap();
+        let caller = app.state.lock().unwrap().bots[0].clone();
+        let caller = app.update_bot(&caller.id, |bot| bot.permissions = Some(policy)).unwrap();
+        let chat_id = app.dm_with(&caller.id, None).unwrap().meta.id;
+        (scratch, caller, chat_id)
+    }
+
+    #[tokio::test]
+    async fn create_bot_puts_a_teammate_on_another_runner_and_list_teammates_says_which() {
+        let (scratch, caller, chat_id) = paired_account();
+        let app = &scratch.0;
+        let no_updates: ToolUpdateFn = Arc::new(|_| {});
+        let create = CreateBot::new(app, &chat_id, &caller);
+        let this = app.this_device_id().unwrap();
+        // This Device is the machine the test runs on.
+        let here = app.device(&this).unwrap().platform().to_string();
+        // The description lists the Runners by name, id, and platform; the phone is none.
+        assert!(create.description().contains(&format!("Studio (id {this}, {here}) (yours); build-box (id linux-key, Linux); DESKTOP-34HK9JT (id win-key, Windows)")), "{}", create.description());
+        assert!(!create.description().contains("Pixel"));
+        let run = |args: Value| create.execute("call", args, CancellationToken::new(), no_updates.clone());
+
+        let result = run(json!({ "name": "Gpu", "description": "Measures frame latency", "runner": "desktop-34hk9jt" })).await.unwrap();
+        let text = result.content[0].as_text().unwrap();
+        assert!(text.starts_with("Created Gpu (id "), "{text}");
+        assert!(text.contains(" on DESKTOP-34HK9JT with their own direct chat."), "{text}");
+        assert!(text.contains("On DESKTOP-34HK9JT Gpu has that machine's working directory, plugins, coding agents"), "{text}");
+        assert!(text.contains("runs DeepSeek with the account's credentials, which every Runner has."), "{text}");
+        assert!(text.contains("allows none of DESKTOP-34HK9JT's plugins until the user grants them"), "{text}");
+        let gpu = app.state.lock().unwrap().bots.iter().find(|b| b.name == "Gpu").cloned().unwrap();
+        assert_eq!(gpu.runner_id, "win-key");
+        let access = gpu.permissions.unwrap();
+        assert_eq!((access.connections, access.shell), (Some(Default::default()), true), "the Mac's plugin grants name nothing on Windows");
+
+        // list_teammates names its Runner, and the account's Runners with whether each is online.
+        let listed = ListTeammates { app: app.clone(), chat_id: chat_id.clone() }.execute("call", json!({}), CancellationToken::new(), no_updates.clone()).await.unwrap();
+        let listed: Value = serde_json::from_str(listed.content[0].as_text().unwrap()).unwrap();
+        let row = listed["teammates"].as_array().unwrap().iter().find(|t| t["name"] == "Gpu").unwrap();
+        assert_eq!((&row["runner"], &row["runner_id"], &row["platform"], &row["online"]), (&json!("DESKTOP-34HK9JT"), &json!("win-key"), &json!("Windows"), &json!(true)));
+        let runners: Vec<(String, bool)> = listed["runners"].as_array().unwrap().iter().map(|r| (r["name"].as_str().unwrap().to_string(), r["online"].as_bool().unwrap())).collect();
+        assert_eq!(runners, [("Studio".into(), true), ("build-box".into(), false), ("DESKTOP-34HK9JT".into(), true)]);
+
+        // A phone is no Runner and an offline Runner takes no bot; each refusal names the ones that work.
+        let works = format!("Runners online now: Studio (id {this}, {here}); DESKTOP-34HK9JT (id win-key, Windows).");
+        let error = run(json!({ "name": "Mobile", "description": "Tests on the phone", "runner": "Pixel" })).await.unwrap_err();
+        assert_eq!(error.0, format!("Pixel runs Android, so it is a Device and not a Runner: only macOS, Linux, and Windows Devices run bots. {works}"));
+        let error = run(json!({ "name": "Builder", "description": "Packages Linux builds", "runner": "linux-key" })).await.unwrap_err();
+        assert_eq!(error.0, format!("build-box is offline, so a bot there could not start. {works}"));
+        let error = run(json!({ "name": "Builder", "description": "Packages Linux builds", "runner": "Raspberry" })).await.unwrap_err();
+        assert_eq!(error.0, format!("No paired Device is called Raspberry. {works}"));
+        assert!(app.state.lock().unwrap().bots.iter().all(|b| b.name != "Mobile" && b.name != "Builder"));
+
+        // By id, and on the caller's own Runner a teammate keeps the caller's Access as it is.
+        run(json!({ "name": "Helper", "description": "Helps", "runner": this })).await.unwrap();
+        let helper = app.state.lock().unwrap().bots.iter().find(|b| b.name == "Helper").cloned().unwrap();
+        assert_eq!((helper.runner_id, helper.permissions), (this.clone(), caller.permissions.clone()));
+
+        // A provider whose server is on the calling machine is said to answer only where it runs.
+        let models = vec![crate::credentials::CustomModel { id: "qwen3:8b".into(), name: None, context_window: None, max_output: None, images: None, levels: None }];
+        let ollama = crate::credentials::CustomProvider { name: "Ollama".into(), api: crate::credentials::CustomApi::ChatCompletions, base_url: "http://localhost:11434/v1".into(), api_key: String::new(), models, created_at: 1 };
+        app.credentials.lock().unwrap().custom.insert("custom:ollama".into(), ollama);
+        let result = run(json!({ "name": "Local", "description": "Runs a local model", "provider": "custom:ollama", "runner": "win-key" })).await.unwrap();
+        assert!(result.content[0].as_text().unwrap().contains("Ollama is at http://localhost:11434/v1, a server on the machine that calls it: on DESKTOP-34HK9JT it answers only if the same server runs there."));
+    }
+
+    #[tokio::test]
+    async fn edit_bot_moves_a_bot_with_its_routines_to_its_new_runners_workspace() {
+        let (scratch, caller, chat_id) = paired_account();
+        let app = &scratch.0;
+        let no_updates: ToolUpdateFn = Arc::new(|_| {});
+        CreateBot::new(app, &chat_id, &caller)
+            .execute("call", json!({ "name": "Scout", "description": "Finds sources", "workdir": "/Users/me/src" }), CancellationToken::new(), no_updates.clone())
+            .await
+            .unwrap();
+        let scout = app.state.lock().unwrap().bots.iter().find(|b| b.name == "Scout").cloned().unwrap();
+        let routine = crate::routines::create(app, &scout.id, "Brief", "0 9 * * *", "Summarize the news", None, true).unwrap();
+        let edit = EditBot::new(app, &caller);
+        assert!(edit.description().contains("DESKTOP-34HK9JT (id win-key, Windows)"));
+        let run = |args: Value| edit.execute("call", args, CancellationToken::new(), no_updates.clone());
+
+        let error = run(json!({ "bot_id": scout.id, "runner": "pixel-key" })).await.unwrap_err();
+        assert!(error.0.starts_with("Pixel runs Android, so it is a Device and not a Runner") && error.0.contains("DESKTOP-34HK9JT (id win-key, Windows)"), "{}", error.0);
+        let error = run(json!({ "bot_id": scout.id, "runner": "build-box" })).await.unwrap_err();
+        assert!(error.0.starts_with("build-box is offline") && error.0.contains("DESKTOP-34HK9JT (id win-key, Windows)"), "{}", error.0);
+        let error = run(json!({ "bot_id": scout.id, "runner": "Studio" })).await.unwrap_err();
+        assert_eq!(error.0, "Scout already runs on Studio.");
+        assert_eq!(app.bot(&scout.id).unwrap().runner_id, scout.runner_id);
+
+        let result = run(json!({ "bot_id": scout.id, "runner": "DESKTOP-34HK9JT" })).await.unwrap();
+        let text = result.content[0].as_text().unwrap();
+        assert!(text.starts_with("Updated Scout (Runner). The new profile applies from their next turn. A turn Scout is in now finishes on Studio; the next ones and 1 routine(s) run on DESKTOP-34HK9JT, in its default working directory there."), "{text}");
+        assert!(text.contains("Its memory stays on Studio"), "{text}");
+        let moved = app.bot(&scout.id).unwrap();
+        // The Mac's path names nothing on Windows: the bot starts in that Runner's own workspace.
+        assert_eq!((moved.runner_id.as_str(), moved.workdir.as_deref()), ("win-key", None));
+        assert_eq!(moved.permissions.unwrap().connections, Some(Default::default()));
+        // Its routine is the new Runner's to run: on while that Runner is online, waiting while it is not.
+        let routine = app.routine(&routine.id).unwrap();
+        assert_eq!(app.routines_of(&moved.id).len(), 1);
+        assert_eq!(app.routine_out(&routine)["state"], "on");
+        app.state.lock().unwrap().device_online.remove("win-key");
+        assert_eq!(app.routine_out(&routine)["state"], "waiting_for_runner");
+        app.state.lock().unwrap().device_online.insert("win-key".into());
+
+        // A path given with the move is the new machine's.
+        app.state.lock().unwrap().device_online.insert("linux-key".into());
+        run(json!({ "bot_id": scout.id, "runner": "build-box", "workdir": "/srv/build" })).await.unwrap();
+        let moved = app.bot(&scout.id).unwrap();
+        assert_eq!((moved.runner_id.as_str(), moved.workdir.as_deref()), ("linux-key", Some("/srv/build")));
+    }
+
+    #[tokio::test]
+    async fn a_turn_after_a_move_waits_for_the_old_runners_turn_in_the_chat() {
+        let (scratch, caller, chat_id) = paired_account();
+        let app = &scratch.0;
+        let turn = LiveTurn { job_id: "job-old".into(), chat_id: chat_id.clone(), bot_id: caller.id.clone(), routine_id: Some("routine-1".into()), activity: None };
+        app.set_device_turns("win-key", vec![turn]);
+        // A listing from a Device the relay does not show online is not waited on.
+        assert!(!app.bot_turn_elsewhere(&chat_id, &caller.id));
+        app.state.lock().unwrap().turns_online.insert("win-key".into());
+        assert!(app.bot_turn_elsewhere(&chat_id, &caller.id));
+        assert!(!app.bot_turn_elsewhere("another-chat", &caller.id));
+        assert!(app.routine_running_elsewhere("routine-1"));
+
+        let job = user_turn_job_for_test(&chat_id, &caller.id);
+        let cancel = CancellationToken::new();
+        let waiting = crate::runtime::wait_for_turn_elsewhere(app, &job, &cancel);
+        tokio::pin!(waiting);
+        assert!(tokio::time::timeout(Duration::from_millis(700), &mut waiting).await.is_err(), "the new turn waits while the old Runner lists its turn");
+        app.set_device_turns("win-key", Vec::new());
+        assert!(tokio::time::timeout(Duration::from_secs(2), &mut waiting).await.is_ok(), "and starts once it ends");
+        assert!(!app.routine_running_elsewhere("routine-1"));
+    }
+
+    fn user_turn_job_for_test(chat_id: &str, bot_id: &str) -> Job {
+        Job {
+            id: "job-new".into(),
+            chat_id: chat_id.into(),
+            bot_id: bot_id.into(),
+            kind: "turn".into(),
+            task_id: None,
+            task_context: None,
+            trigger_message_id: "m1".into(),
+            handoff: None,
+            requested_by: String::new(),
+            routine_id: None,
+            check: None,
+            from_bot_id: None,
+            hops: 0,
+            round: 0,
+            is_winding_down: false,
+            setup: None,
+            created_at: 0.0,
+        }
     }
 
     #[test]

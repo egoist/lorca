@@ -45,9 +45,15 @@ id at once: tell the user you started it and end your turn. Do not check on it o
 lands in the chat as its message to the user and you get a turn to relay it: its conclusion, its pull request, and the commands it \
 ran with their output, without checking its code, building, testing, judging its work, or sending it anything. When it ends on its \
 own, you get a turn to tell the user. `send` gives it `message`, which is what the user tells it, in their words, taken up once it \
-is done with what it does now, or at once with `interrupt: true`, which stops that first; an agent whose process stopped starts again on its session. `read` \
-shows its transcript since you last read it (or its last `lines`), for when the user asks how it stands. `stop` ends it, `list` \
-shows your agents in this chat. Every command it runs goes through Auto-review as yours do. Saved secrets never go in a prompt or \
+is done with what it does now, or at once with `interrupt: true`, which stops that first; an agent whose process stopped starts again on its session. The user \
+may also write to an agent on its page; you read that in the chat as \"[The user wrote to … directly]\", and the agent has it already, \
+so do not pass it on again. `read` \
+shows its transcript since you last read it (or its last `lines`), for when the user asks how it stands. `stop` ends it. `list` \
+shows your agents in this chat; with `scope: \"account\"` it shows every coding agent on the account, whichever bot, chat, and \
+Runner started it, each with its bot, chat, Runner, folder, branch, state, and pull request, so you can tell whose a pull request \
+or a job is (`query` narrows it: a pull request's link, a folder, a title, a bot). Only an agent's own bot reads, messages, or \
+stops it, from its chat: for another bot's, message that bot. When `start` finds another agent already at work in the same folder \
+or repository, it says whose and on what: tell the user. Every command it runs goes through Auto-review as yours do. Saved secrets never go in a prompt or \
 a message: for a job that needs one, such as publishing a package, name your command secrets in `secrets`, and the agent has each \
 as $NAME in its environment.";
 
@@ -64,6 +70,8 @@ impl Tool for CodingAgentTool {
             "type": "object",
             "properties": {
                 "action": { "type": "string", "enum": ["start", "read", "send", "stop", "list"] },
+                "scope": { "type": "string", "enum": ["chat", "account"], "description": "list: `chat` (default) for your agents in this chat, `account` for every coding agent on the account, any bot's, in any chat." },
+                "query": { "type": "string", "description": "list: only the agents whose id, title, folder, branch, repository, pull request, bot, or chat contains this, such as a pull request's link." },
                 "title": { "type": "string", "description": "start: a short title for the job, a few words the user sees wherever the agent shows." },
                 "prompt": { "type": "string", "description": "start: what the user asked for, in their words, with only the facts you know and the agent cannot find, such as where the repository is." },
                 "agent": { "type": "string", "enum": KINDS, "description": "start: which agent, only when the user asked for one. Default: the first the user turned on that this Runner has." },
@@ -103,7 +111,7 @@ impl Tool for CodingAgentTool {
             Some("send") => {
                 let agent = agent()?;
                 let message = args["message"].as_str().or(args["prompt"].as_str()).map(str::trim).filter(|text| !text.is_empty()).ok_or_else(|| ToolError("send needs a message".into()))?;
-                super::send(app, &agent, message, args["interrupt"].as_bool().unwrap_or(false)).await.map_err(ToolError)?
+                super::send(app, &agent, message, args["interrupt"].as_bool().unwrap_or(false), super::Sender::Bot).await.map_err(ToolError)?
             }
             Some("stop") => {
                 let agent = agent()?;
@@ -113,6 +121,19 @@ impl Tool for CodingAgentTool {
                 } else {
                     super::stop(app, &agent, "Stopped by the bot");
                     format!("Stopped {} ({}).", name(&record.kind), record.id)
+                }
+            }
+            Some("list") if args["scope"].as_str() == Some("account") => {
+                let query = args["query"].as_str().map(str::trim).filter(|query| !query.is_empty()).map(str::to_lowercase);
+                let listed: Vec<_> = crate::agent_roster::account(app).into_iter().filter(|listed| query.as_deref().is_none_or(|query| matches(listed, query))).collect();
+                if listed.is_empty() {
+                    match query {
+                        Some(_) => "No coding agent on the account matches that.".into(),
+                        None => "No coding agent on the account is open or changed in the last 30 days.".into(),
+                    }
+                } else {
+                    let rows: Vec<String> = listed.iter().map(|listed| listed.line(&self.bot.id, &self.chat_id)).collect();
+                    format!("Coding agents on the account, open ones first:\n{}", rows.join("\n"))
                 }
             }
             Some("list") => {
@@ -187,6 +208,10 @@ impl CodingAgentTool {
             crate::secrets::CommandSecrets { app: app.clone(), bot_id: self.bot.id.clone() }.variables(&secrets)?;
         }
         let place = workspace::prepare(&self.workdir, args["folder"].as_str()).await?;
+        let device_id = app.this_device_id();
+        let folder = super::home_relative(&place.folder);
+        let at = crate::agent_roster::Place { device_id: device_id.as_deref(), folder: &folder, repository: place.repository.as_deref() };
+        let others = crate::agent_roster::working_at(app, &at, None);
         let start = Start {
             chat_id: self.chat_id.clone(),
             bot_id: self.bot.id.clone(),
@@ -208,10 +233,14 @@ impl CodingAgentTool {
             Some(branch) => format!("{} (on branch {branch})", super::home_relative(&place.folder)),
             None => super::home_relative(&place.folder),
         };
-        Ok(format!(
+        let started = format!(
             "Started {} ({id}) on “{title}” in {place}. It works on its own and reports to the user in the chat when it is done, with its pull request; then you get a turn to relay its report, or to say why if it ends on its own. Tell the user you started it and end your turn. When the user asks, coding_agent read {id} shows its transcript, send passes it what they say, and stop ends it.",
             name(&kind)
-        ))
+        );
+        Ok(match crate::agent_roster::warning(&others, &self.bot.id, &self.chat_id) {
+            Some(warning) => format!("{started}\n\n{warning}"),
+            None => started,
+        })
     }
 }
 
@@ -252,6 +281,15 @@ fn secret_names(args: &Value) -> Result<Vec<String>, String> {
         }
         _ => Err("secrets is a list of names".into()),
     }
+}
+
+/// Whether an agent on the account answers `query`, lowercased.
+fn matches(listed: &crate::agent_roster::Listed, query: &str) -> bool {
+    let agent = &listed.agent;
+    [Some(&agent.id), Some(&agent.title), Some(&agent.folder), agent.branch.as_ref(), agent.repository.as_ref(), agent.pull_request.as_ref(), Some(&listed.bot_name), Some(&listed.bot_id), Some(&listed.chat_title), Some(&listed.chat_id)]
+        .into_iter()
+        .flatten()
+        .any(|field| field.to_lowercase().contains(query))
 }
 
 /// How an agent stands, in a few words for the bot.

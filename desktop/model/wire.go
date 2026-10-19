@@ -143,6 +143,8 @@ type WireAgent struct {
 	PullRequest *string       `json:"pull_request"`
 	Changes     *AgentChanges `json:"changes"`
 	Device      *string       `json:"device"`
+	DeviceID    *string       `json:"device_id"`
+	Repository  *string       `json:"repository"`
 	StartedAt   *float64      `json:"started_at"`
 	UpdatedAt   *float64      `json:"updated_at"`
 }
@@ -158,6 +160,7 @@ func ToAgentRun(wire *WireAgent) *AgentRun {
 	agent := &AgentRun{
 		ID: wire.ID, Kind: wire.Kind, Title: str(wire.Title), Task: str(wire.Task), Folder: str(wire.Folder), Branch: str(wire.Branch),
 		State: state, Outcome: str(wire.Outcome), PullRequest: str(wire.PullRequest), Device: str(wire.Device),
+		DeviceID: str(wire.DeviceID), Repository: str(wire.Repository),
 	}
 	if wire.Changes != nil {
 		changes := *wire.Changes
@@ -775,11 +778,8 @@ func ToDevice(wire WireDevice) *Device {
 		Version:      str(wire.Version),
 		MachineName:  str(wire.MachineName),
 	}
-	switch device.OS {
-	case OSMacOS, OSLinux, OSWindows, OSIOS, OSIPadOS, OSAndroid:
-	default:
-		device.OS = OSLinux
-	}
+	// An `os` the app has no name for stays as the CLI reported it: no Runner, as the CLI judges
+	// it (`Device::is_runner`).
 	if wire.Unknown {
 		device.Name, device.OS = L("Unknown Device"), OSUnknown
 	}

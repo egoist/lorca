@@ -92,6 +92,14 @@ impl BotPermissions {
         Ok(())
     }
 
+    /// The same Access on another Runner, for a teammate a bot puts there or a bot moved there:
+    /// shell, files, and drafts carry over; plugin grants name plugins installed on the Runner
+    /// the policy was written for, so a policy that lists plugins lists none on the new one
+    /// until the user grants that machine's. A policy with no list, every plugin, stays so.
+    pub fn on_another_runner(&self) -> Self {
+        Self { connections: self.connections.as_ref().map(|_| BTreeMap::new()), ..self.clone() }
+    }
+
     /// Whether the bot may use the plugin at all: its catalog and system prompt leave out one
     /// it may not.
     pub fn allows_connection(&self, connection: &str) -> bool {
@@ -132,8 +140,8 @@ pub struct AccessDenied {
     pub connection_id: Option<String>,
     pub capability: Option<Capability>,
     pub reason: String,
-    /// The bot's Access refused it, so the user can grant it. A bot deleted or moved to another
-    /// Runner mid-turn is refused without asking anyone.
+    /// The bot's Access refused it, so the user can grant it. A bot deleted mid-turn is refused
+    /// without asking anyone.
     pub grantable: bool,
 }
 
@@ -147,14 +155,11 @@ impl fmt::Display for AccessDenied {
 }
 
 /// The bot as it is stored now, or why it may do nothing: every call reads the current
-/// profile, so a change takes effect during an active turn.
+/// profile, so a change takes effect during an active turn. A turn of a bot moved to another
+/// Runner meanwhile finishes where it started, under the Access the bot has now.
 fn current(app: &Arc<App>, bot: &Bot, tool: &str, connection_id: Option<&str>) -> Result<Bot, AccessDenied> {
     let gone = |reason: &str| AccessDenied { tool: tool.into(), connection_id: connection_id.map(str::to_string), capability: None, reason: reason.into(), grantable: false };
-    match app.bot(&bot.id) {
-        Some(current) if current.runner_id != bot.runner_id => Err(gone("the bot was moved to another Runner")),
-        Some(current) => Ok(current),
-        None => Err(gone("the bot no longer exists")),
-    }
+    app.bot(&bot.id).ok_or_else(|| gone("the bot no longer exists"))
 }
 
 pub fn check_tool(app: &Arc<App>, bot: &Bot, tool: &str) -> Result<(), AccessDenied> {
@@ -424,7 +429,7 @@ mod tests {
     }
 
     #[test]
-    fn a_running_turn_reads_revocation_and_a_moved_bot_is_refused_without_a_request() {
+    fn a_running_turn_reads_revocation_a_moved_bot_finishes_and_a_deleted_one_is_refused_without_a_request() {
         let (scratch, snapshot, chat_id) = scratch();
         let app = &scratch.0;
         assert!(check_tool(app, &snapshot, "bash").is_ok());
@@ -433,15 +438,28 @@ mod tests {
         assert!(check_connection(app, &snapshot, "gmail-personal", "list_messages", Some(Capability::Read)).is_err());
         let reopened = App::load(crate::config::Config { home: scratch.1.clone(), port: 0 }).unwrap();
         assert_eq!(reopened.bot(&snapshot.id).unwrap().permissions, Some(inbox_policy()), "the persisted profile retains policy");
+        // Moved to another Runner, the turn in flight finishes here under the Access it has now.
         app.state.lock().unwrap().bots.iter_mut().find(|bot| bot.id == snapshot.id).unwrap().runner_id = "another-runner".into();
-        let moved = check_tool(app, &snapshot, "read").unwrap_err();
-        assert!(!moved.grantable && moved.reason.contains("moved"));
+        assert!(check_tool(app, &snapshot, "read").is_ok());
+        assert!(check_tool(app, &snapshot, "bash").unwrap_err().grantable);
+        app.state.lock().unwrap().bots.retain(|bot| bot.id != snapshot.id);
+        let gone = check_tool(app, &snapshot, "read").unwrap_err();
+        assert!(!gone.grantable && gone.reason.contains("no longer exists"));
         #[cfg(feature = "runner")]
         {
-            assert!(refuse(app, &chat_id, &snapshot, moved).block);
-            assert!(app.store.page(&chat_id, None, 200).unwrap().0.is_empty(), "nobody is asked about a moved bot");
+            assert!(refuse(app, &chat_id, &snapshot, gone).block);
+            assert!(app.store.page(&chat_id, None, 200).unwrap().0.is_empty(), "nobody is asked about a deleted bot");
         }
         let _ = chat_id;
+    }
+
+    #[test]
+    fn access_on_another_runner_keeps_shell_files_and_drafts_and_no_plugin_grants() {
+        let moved = inbox_policy().on_another_runner();
+        assert_eq!(moved.connections, Some(BTreeMap::new()), "a list of this Runner's plugins grants none there");
+        assert_eq!((moved.filesystem, moved.shell, moved.drafts), (FilesystemAccess::Read, false, true));
+        assert!(!moved.allows_connection("gmail-work"));
+        assert_eq!(BotPermissions::default().on_another_runner(), BotPermissions::default(), "every plugin stays every plugin");
     }
 
     #[test]

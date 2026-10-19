@@ -25,7 +25,7 @@ Every other command goes whole to the review before it starts, and so does any c
 **The transcript** (`plugins::review::request`) is the chat as the Runner recorded it, oldest first, inside `<transcript>`:
 
 - In a user's turn, the chat's newest messages: at least the newest 300, from a position rounded down to a multiple of 100 (`LocalStore::recent`), so consecutive reviews send the same beginning while the chat grows; then the newest lines that fit 40,000 characters.
-- `User:` lines are the user's messages, the only source of the user's intent.
+- `User:` lines are the user's messages, the only source of the user's intent: what they write the bot, and, as `User, to the Claude Code on “Title”:`, what they write a coding agent on its page ([Coding agents](coding-agents.md#the-user-writes-to-it)).
 - A bot's words appear only right before the user message that answered them, the last 2,000 characters, where a question is, so that "yes" reads as the answer to what the bot proposed. The bot's own actions in between keep it the referent; a teammate's message in between does not. Its narration beside the action under review never appears.
 - Each action of a bot's is one line with how it ended: `DevOps ran: git worktree add /tmp/rel → ok`, `used github__create_issue: … → held by Auto-review`, `started Claude Code in ~/.lorca/worktrees/… on branch fix: … → ok`, `user allowed`, `user did not allow`, `not run`. What a tool printed or returned never appears. A held command shows by its card's `held`; another call by its result, which starts "Auto-review held this action". A call still in flight, the one under review among them, is left out.
 - A teammate's `message_bot` handoff is `[teammate] Chef to DevOps: …`, never the user's intent.

@@ -12,7 +12,9 @@ use tokio_util::sync::CancellationToken;
 
 /// Claude Code's stream-json, scripted: a job asks to run `git push` through the Bash hook,
 /// edits a file, names a pull request, and is done; a "(follow-up)" is answered at once; a
-/// "(crash)" job exits mid-turn. A "(secret)" job keeps what it was sent and writes out, runs,
+/// "(crash)" job exits mid-turn, and an "(auth)" job ends its turn in an error, as a signed-out
+/// Claude Code does, and exits; a message that arrives while it waits on Lorca is taken up after.
+/// A "(secret)" job keeps what it was sent and writes out, runs,
 /// and says `$NPM_TOKEN`. Every run appends its arguments to `args.log` beside it.
 const FAKE_CLAUDE: &str = r#"#!/usr/bin/env python3
 import json, os, sys
@@ -24,6 +26,7 @@ def out(value):
 def read():
     line = sys.stdin.readline()
     return json.loads(line) if line else None
+backlog = []
 def wait_for(request_id):
     while True:
         answer = read()
@@ -31,8 +34,10 @@ def wait_for(request_id):
             sys.exit(0)
         if answer.get("type") == "control_response" and answer["response"]["request_id"] == request_id:
             return answer
+        if answer.get("type") == "user":
+            backlog.append(answer)
 while True:
-    message = read()
+    message = backlog.pop(0) if backlog else read()
     if message is None:
         break
     if message.get("type") == "control_request":
@@ -45,6 +50,11 @@ while True:
     content = str(message["message"]["content"])
     if "(crash)" in content:
         sys.stderr.write("out of credits\n"); sys.exit(3)
+    if "(auth)" in content:
+        reason = "Failed to authenticate: OAuth session expired and could not be refreshed"
+        out({"type": "assistant", "message": {"id": "a0", "content": [{"type": "text", "text": reason}]}, "parent_tool_use_id": None})
+        out({"type": "result", "subtype": "success", "is_error": True, "result": reason})
+        sys.exit(1)
     if "(secret)" in content:
         token = os.environ.get("NPM_TOKEN", "missing")
         with open("received.txt", "w") as received:
@@ -599,6 +609,41 @@ async fn an_agent_that_ends_on_its_own_says_why_in_the_chat() {
     assert!(cue.contains("has ended on its own: Claude Code exited with code 3") && cue.contains("Tell the user"), "{cue}");
 }
 
+/// An agent whose first turn fails, as a signed-out Claude Code's does in milliseconds, fails
+/// while the turn that started it still runs: the failure waits for that turn, then the bot gets
+/// a turn of its own that is told why.
+#[tokio::test]
+async fn an_agent_that_fails_during_the_bots_turn_wakes_it_once_the_turn_ends() {
+    let scratch = setup().await;
+    let app = &scratch.app;
+    let tool = tool(&scratch);
+    let row = start_row(app, "call-1");
+    let chat_lock = app.chat_lock("chat");
+    let turn = chat_lock.lock().await;
+    call(&tool, "call-1", json!({ "action": "start", "agent": "claude", "title": "Login", "folder": "shop", "prompt": "Fix the login bug (auth)" })).await.unwrap();
+
+    let reason = "Failed to authenticate: OAuth session expired and could not be refreshed";
+    let failed = card_when(app, &row, |card| card.state == "failed").await;
+    assert_eq!(failed.outcome.as_deref(), Some(reason));
+    let (message_id, _, text, failed) = eventually("its message", || agent_messages(app).pop()).await;
+    assert_eq!((text.as_str(), failed), (reason, true));
+    let agent = app.coding_agents.of("chat", "b1").pop().unwrap();
+    // Its process exits after the failed turn; that changes nothing, and nothing has heard it.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(agent.record().state, "failed");
+    assert_eq!(agent.record().unheard.as_deref(), Some(message_id.as_str()));
+    let cue = heard_cue(app, &agent.record(), &agent, true);
+    assert!(cue.contains(&format!("has ended on its own: {reason}")) && cue.contains("Tell the user"), "{cue}");
+    let ran = |app: &App| app.store.page("chat", None, 200).unwrap().0.into_iter().any(|message| matches!(&message.body, Body::Notice { text, .. } if text.starts_with("Chef cannot run yet")));
+    assert!(!ran(app), "no turn runs while the bot's turn does");
+
+    // The bot's turn ends: the agent's turn follows, reads the failure, and runs (here it finds
+    // no provider, which it says).
+    drop(turn);
+    eventually("the bot's turn about it", || ran(app).then_some(())).await;
+    assert!(agent.record().unheard.is_none());
+}
+
 #[tokio::test]
 async fn a_restart_keeps_the_handle_and_a_follow_up_resumes_the_session() {
     let scratch = setup().await;
@@ -637,6 +682,68 @@ async fn a_restart_keeps_the_handle_and_a_follow_up_resumes_the_session() {
     app.coding_agents.agents.lock().unwrap().clear();
     load(app);
     assert_eq!(card(app, &row).outcome.as_deref(), Some("Stopped when Lorca quit"));
+}
+
+/// The user writes to the agent on its page (`coding.send`), down the bot's own path: the
+/// message waits in its queue until it takes it up, its step says the user wrote it, and the
+/// chat shows it as the user's; once stopped, a message resumes its session.
+#[tokio::test]
+async fn the_user_writes_to_an_agent_on_its_page() {
+    let scratch = setup().await;
+    let app = &scratch.app;
+    auto_review_off(app);
+    let tool = tool(&scratch);
+    let row = start_row(app, "call-1");
+    let chat_lock = app.chat_lock("chat");
+    let _held = chat_lock.lock().await;
+    call(&tool, "call-1", json!({ "action": "start", "agent": "claude", "title": "Login", "folder": "shop", "prompt": "Fix the login bug" })).await.unwrap();
+    let agent = app.coding_agents.of("chat", "b1").pop().unwrap();
+    let send = |text: &str| {
+        let body = json!({ "chat_id": "chat", "message_id": row, "text": text });
+        async move { serve(app, "coding.send", &body).await }
+    };
+    let transcript = || async { serve(app, "coding.transcript", &json!({ "chat_id": "chat", "message_id": row })).await };
+    assert_eq!(send("  ").await.unwrap_err(), "Write a message first");
+
+    // While its question waits, a message waits in its queue, the user's.
+    let (asked, ..) = question(app).await;
+    let sent = send("Use the staging branch (follow-up)").await.unwrap();
+    assert_eq!(sent["sent"], true);
+    let answer = transcript().await.unwrap();
+    assert_eq!(answer["queued"], json!([{ "text": "Use the staging branch (follow-up)", "from": "user", "at": answer["queued"][0]["at"] }]));
+    assert_eq!(answer["open"], true);
+    // The chat shows it as the user's message to the agent, which counts as nothing unread.
+    let (messages, _) = app.store.page("chat", None, 200).unwrap();
+    let mine = messages.iter().find(|message| message.author == Author::You && matches!(&message.body, Body::AgentMessage { text, .. } if text == "Use the staging branch (follow-up)")).expect("the user's message in the chat");
+    assert!(!mine.counts_unread());
+    // Auto-review reads it as the user's request; the bot reads it in its history.
+    assert!(crate::plugins::mcp::answer(app, &asked, Decision::Allowed), "{:?}", last_card(app));
+    // It takes it up once it is done with what it was doing, and its step says who wrote it.
+    let taken = eventually("the queued message", || steps_now(&agent).into_iter().find(|item| item.kind == "prompt" && item.text == "Use the staging branch (follow-up)")).await;
+    assert_eq!(taken.from.as_deref(), Some("user"));
+    card_when(app, &row, |card| card.state == "idle").await;
+    assert_eq!(transcript().await.unwrap()["queued"], json!([]));
+    let (chat, bot) = (app.chat("chat").unwrap(), app.bot("b1").unwrap());
+    let history = format!("{:?}", crate::turns::transcript_for(app, &chat, &bot, &scratch.home));
+    assert!(history.contains(&format!("[The user wrote to Claude Code ({}), your coding agent on “Login”, directly; it has the message]: Use the staging branch (follow-up)", agent.id())), "{history}");
+
+    // Stopped, it still takes a message: its session starts again on it. What it said last stays
+    // unheard until a turn reads it.
+    let unheard = agent.record().unheard;
+    assert!(unheard.is_some(), "its report waits for the bot");
+    serve(app, "coding.stop", &json!({ "chat_id": "chat", "message_id": row })).await.unwrap();
+    assert_eq!(transcript().await.unwrap()["queued"], json!([]), "what waited goes with it");
+    send("Now the docs (follow-up)").await.unwrap();
+    assert_eq!(agent.record().unheard, unheard);
+    let prompt = eventually("its prompt", || steps_now(&agent).into_iter().find(|item| item.kind == "prompt" && item.text == "Now the docs (follow-up)")).await;
+    assert_eq!(prompt.from.as_deref(), Some("user"));
+    eventually("its answer", || steps_now(&agent).into_iter().find(|item| item.text == "Followed up.")).await;
+    card_when(app, &row, |card| card.state == "idle").await;
+    let args = std::fs::read_to_string(programs().join("args.log")).unwrap();
+    assert!(args.lines().any(|line| line.contains("--resume sess-1")), "{args}");
+    // The first prompt is the bot's, and the bot reads which one the user wrote.
+    assert_eq!(steps_now(&agent).into_iter().find(|item| item.kind == "prompt").unwrap().from, None);
+    assert!(agent.read(Some(50)).0.contains("> (from the user) Now the docs (follow-up)"));
 }
 
 #[tokio::test]
@@ -807,6 +914,7 @@ async fn a_bot_without_shell_access_starts_no_agent_and_its_agent_runs_nothing()
             kind: "claude".into(),
             title: "x".into(),
             session: None,
+            repository: None,
             folder: scratch.repo.clone(),
             branch: None,
             base: None,
@@ -976,4 +1084,174 @@ async fn setup_without_stand_ins() -> Scratch {
         process::tests_support::uninstall(kind);
     }
     scratch
+}
+
+/// A coding agent's row as another bot's start left it, or as it reached this Device from
+/// another Runner.
+fn listed_row(app: &App, chat_id: &str, bot_id: &str, agent: AgentRun) -> String {
+    let message = Message::new(
+        chat_id,
+        Author::Bot { bot_id: bot_id.into() },
+        Body::Tool {
+            name: "coding_agent".into(),
+            summary: "Ran coding_agent".into(),
+            detail: String::new(),
+            is_running: false,
+            call_id: format!("call-{}", agent.id),
+            arguments: Value::Null,
+            result: None,
+            is_error: false,
+            description: None,
+            target_bot_id: None,
+            script_command: None,
+            run: None,
+            agent: Some(agent),
+            target_agent_id: None,
+        },
+    );
+    app.upsert_message(message.clone(), false);
+    message.id
+}
+
+/// Every coding agent on the account lists with the bot and chat it belongs to, whichever bot,
+/// chat, and Runner started it, for the bot, `list_teammates`, and the apps alike; a start where
+/// another agent works says whose it is and what it works on, and so does a message that starts
+/// a stopped one again.
+#[tokio::test]
+async fn the_accounts_agents_list_with_their_bot_and_chat_and_a_start_beside_one_says_whose() {
+    let scratch = setup().await;
+    let app = &scratch.app;
+    auto_review_off(app);
+    workspace::git(&scratch.repo, &["remote", "add", "origin", "git@github.com:acme/shop.git"]).await.unwrap();
+    let here = app.this_device_id().unwrap();
+    let now = crate::config::now_secs();
+    // Scout shares this Runner, in a group; Far runs on another Runner, in a DM of its own.
+    {
+        let mut state = app.state.lock().unwrap();
+        for (id, name, runner) in [("b2", "Scout", here.as_str()), ("b3", "Far", "dev-studio")] {
+            state.bots.push(Bot { id: id.into(), name: name.into(), runner_id: runner.into(), ..scratch.bot.clone() });
+        }
+        for (id, kind, title, bot) in [("chat-group", "group", Some("Lorca dev".to_string()), "b2"), ("chat-far", "dm", None, "b3")] {
+            state.chats.push(Chat {
+                meta: ChatMeta { id: id.into(), kind: kind.into(), title, bot_ids: vec![bot.into()], owner_bot_id: None, description: None, is_pinned: false, section_id: None, is_hidden: false, mute: None, created_at: 0.0, channel: None },
+                unread_count: 0,
+                usage: None,
+                compactions: Vec::new(),
+            });
+        }
+    }
+    let folder = home_relative(&std::fs::canonicalize(&scratch.repo).unwrap());
+    // Scout's works in the same folder here, on #249.
+    let scout = AgentRun {
+        id: "agent-scout01".into(),
+        kind: "codex".into(),
+        title: "#249: a bot's Runner".into(),
+        task: "Implement #249".into(),
+        folder: folder.clone(),
+        branch: Some("bot-runner".into()),
+        state: "working".into(),
+        device: Some("Workbench".into()),
+        device_id: Some(here.clone()),
+        started_at: Some(now - 600.0),
+        updated_at: Some(now - 60.0),
+        ..AgentRun::default()
+    };
+    listed_row(app, "chat-group", "b2", scout);
+    // Far's, on another Runner, in a clone of the same repository, opened PR 254 and is done.
+    let far = AgentRun {
+        id: "agent-far0001".into(),
+        kind: "claude".into(),
+        title: "Docs: the launcher".into(),
+        task: "Fix the docs".into(),
+        folder: "~/src/shop".into(),
+        state: "idle".into(),
+        pull_request: Some("https://github.com/acme/shop/pull/254".into()),
+        device: Some("Studio".into()),
+        device_id: Some("dev-studio".into()),
+        repository: Some("github.com/acme/shop".into()),
+        started_at: Some(now - 7200.0),
+        updated_at: Some(now - 3600.0),
+        ..AgentRun::default()
+    };
+    listed_row(app, "chat-far", "b3", far);
+    // Far's in another repository, stopped yesterday, lists but is nowhere near; one that ended
+    // two months ago no longer lists.
+    let elsewhere = AgentRun { id: "agent-far0002".into(), kind: "pi".into(), title: "Blog".into(), folder: "~/src/blog".into(), state: "stopped".into(), outcome: Some("Stopped".into()), device_id: Some("dev-studio".into()), updated_at: Some(now - 86400.0), ..AgentRun::default() };
+    listed_row(app, "chat-far", "b3", elsewhere);
+    let old = AgentRun { id: "agent-far0003".into(), kind: "pi".into(), title: "Old".into(), folder: folder.clone(), state: "stopped".into(), device_id: Some(here.clone()), updated_at: Some(now - 60.0 * 86400.0), ..AgentRun::default() };
+    listed_row(app, "chat-far", "b3", old);
+
+    // Chef's start in the folder runs, and says who else works there and on what.
+    let tool = tool(&scratch);
+    start_row(app, "call-1");
+    let started = call(&tool, "call-1", json!({ "action": "start", "agent": "claude", "title": "#249 again", "folder": "shop", "prompt": "Implement #249 (follow-up)" })).await.unwrap();
+    assert!(started.starts_with("Started Claude Code"), "{started}");
+    assert!(started.contains("Other coding agents already work in this folder or repository") && started.contains("Tell the user who else is working there"), "{started}");
+    assert!(started.contains("- agent-scout01 Codex “#249: a bot's Runner”: working, for Scout (b2) in “Lorca dev” (chat-group) on Workbench") && started.contains("on bot-runner"), "{started}");
+    assert!(started.contains("- agent-far0001 Claude Code “Docs: the launcher”: done, for Far (b3) in “Far” (chat-far) on Studio, in ~/src/shop, https://github.com/acme/shop/pull/254"), "{started}");
+    assert!(!started.contains("agent-far0002") && !started.contains("agent-far0003"), "{started}");
+    let chefs = app.coding_agents.of("chat", "b1").pop().unwrap();
+    assert_eq!(chefs.record().repository.as_deref(), Some("github.com/acme/shop"));
+    let chefs_card = card_when(app, &app.coding_agents.of("chat", "b1")[0].record().message_id, |card| card.state == "idle").await;
+    assert_eq!((chefs_card.device_id.as_deref(), chefs_card.repository.as_deref()), (Some(here.as_str()), Some("github.com/acme/shop")));
+
+    // The bot lists the account's agents, any bot's, in any chat, open ones first.
+    let listed = call(&tool, "call-2", json!({ "action": "list", "scope": "account" })).await.unwrap();
+    let lines: Vec<&str> = listed.lines().filter(|line| line.starts_with("- ")).collect();
+    assert_eq!(lines.len(), 4, "{listed}");
+    assert!(lines[0].starts_with(&format!("- {} Claude Code “#249 again”: done, yours, in this chat on Workbench", chefs.id())), "{listed}");
+    assert!(lines[1].starts_with("- agent-scout01") && lines[2].starts_with("- agent-far0001") && lines[3].starts_with("- agent-far0002 pi “Blog”: ended (Stopped), for Far (b3)"), "{listed}");
+    // Given a pull request's link, whose it is.
+    let whose = call(&tool, "call-3", json!({ "action": "list", "scope": "account", "query": "github.com/acme/shop/pull/254" })).await.unwrap();
+    assert_eq!(whose.lines().filter(|line| line.starts_with("- ")).count(), 1, "{whose}");
+    assert!(whose.contains("agent-far0001") && whose.contains("for Far (b3) in “Far” (chat-far)"), "{whose}");
+    // Without a scope, the bot's own agents in its chat, as before.
+    let own = call(&tool, "call-4", json!({ "action": "list" })).await.unwrap();
+    assert!(own.contains(&chefs.id()) && !own.contains("agent-scout01"), "{own}");
+    // Another bot's agent is listed, not the bot's to message.
+    assert!(call(&tool, "call-5", json!({ "action": "send", "id": "agent-scout01", "message": "hi" })).await.is_err());
+
+    // The apps get the same picture.
+    let answer = crate::api::dispatch(app, "coding.list", json!({})).await.unwrap();
+    let agents = answer["agents"].as_array().unwrap();
+    let ids: Vec<&str> = agents.iter().map(|listed| listed["agent"]["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, vec![chefs.id().as_str(), "agent-scout01", "agent-far0001", "agent-far0002"]);
+    let scout = &agents[1];
+    assert_eq!((scout["bot_id"].as_str(), scout["bot_name"].as_str(), scout["chat_id"].as_str(), scout["chat_title"].as_str()), (Some("b2"), Some("Scout"), Some("chat-group"), Some("Lorca dev")));
+    assert_eq!(agents[2]["agent"]["device_id"].as_str(), Some("dev-studio"));
+    assert!(agents[2]["message_id"].as_str().is_some_and(|id| id.starts_with("msg-")));
+
+    // list_teammates names each bot's live agents.
+    let teammates = crate::turns::ListTeammates { app: app.clone(), chat_id: "chat".into() }
+        .execute("call", json!({}), CancellationToken::new(), Arc::new(|_| {}))
+        .await
+        .unwrap()
+        .text_content();
+    let teammates: Value = serde_json::from_str(&teammates).unwrap();
+    let of = |bot: &str| teammates["teammates"].as_array().unwrap().iter().find(|row| row["id"] == bot).unwrap()["coding_agents"].clone();
+    assert_eq!(of("b2")[0]["id"], "agent-scout01");
+    assert_eq!((of("b2")[0]["chat"].as_str(), of("b2")[0]["state"].as_str()), (Some("Lorca dev"), Some("working")));
+    let far_agents: Vec<String> = of("b3").as_array().unwrap().iter().map(|agent| agent["id"].as_str().unwrap().to_string()).collect();
+    assert_eq!(far_agents, vec!["agent-far0001"], "only the live ones");
+    assert_eq!(of("b3")[0]["pull_request"], "https://github.com/acme/shop/pull/254");
+
+    // Chef's stopped agent, started again with a message, hears who works there meanwhile.
+    call(&tool, "call-6", json!({ "action": "stop", "id": chefs.id() })).await.unwrap();
+    let resumed = call(&tool, "call-7", json!({ "action": "send", "id": chefs.id(), "message": "Go on (follow-up)" })).await.unwrap();
+    assert!(resumed.contains("started again on its session") && resumed.contains("agent-scout01") && resumed.contains("agent-far0001"), "{resumed}");
+    assert!(!resumed.contains(&format!("- {}", chefs.id())), "not itself: {resumed}");
+}
+
+/// A start where nobody else works hears nothing more.
+#[tokio::test]
+async fn a_start_where_no_other_agent_works_says_nothing_of_others() {
+    let scratch = setup().await;
+    let app = &scratch.app;
+    auto_review_off(app);
+    let tool = tool(&scratch);
+    start_row(app, "call-1");
+    let started = call(&tool, "call-1", json!({ "action": "start", "agent": "claude", "folder": "shop", "prompt": "Implement it (follow-up)" })).await.unwrap();
+    assert!(!started.contains("Other coding agents"), "{started}");
+    let empty = call(&tool, "call-2", json!({ "action": "list", "scope": "account", "query": "nothing like this" })).await.unwrap();
+    assert_eq!(empty, "No coding agent on the account matches that.");
 }

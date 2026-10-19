@@ -731,6 +731,8 @@ type DeviceUpdate struct {
 }
 
 // IsRunner is derived from the OS alone: a desktop Device is a Runner and can be assigned bots.
+// The CLI's bot tools judge it the same way (`Device::is_runner`), against the same cases in
+// `crates/cli/testdata/runners.json`.
 func (d *Device) IsRunner() bool { return d.OS.IsDesktop() }
 
 // IsStandaloneRunner identifies released standalone CLIs by their advertised updates.
@@ -1644,8 +1646,12 @@ type AgentRun struct {
 	PullRequest string
 	Changes     *AgentChanges
 	Device      string
-	StartedAt   time.Time
-	UpdatedAt   time.Time
+	// DeviceID is the Runner it runs on, by Device id.
+	DeviceID string
+	// Repository is its folder's git origin, as "github.com/owner/repo".
+	Repository string
+	StartedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 // Name is its product's name.
@@ -1804,6 +1810,18 @@ type AgentMessage struct {
 type AgentTranscript struct {
 	Items []AgentItem
 	Card  *AgentRun
+	// Queued are the messages it was sent and has yet to take up, oldest first.
+	Queued []AgentQueued
+	// Open is whether a message can reach it: it runs, or its session waits to be resumed.
+	Open bool
+}
+
+// AgentQueued is a message a coding agent was sent and has yet to take up.
+type AgentQueued struct {
+	Text string `json:"text"`
+	// From is `user` when the user wrote it on the agent's page; empty when the bot passed it on.
+	From string  `json:"from"`
+	At   float64 `json:"at"`
 }
 
 // AgentItem is one step of a coding agent's transcript: what it was sent (`prompt`), Lorca's own
@@ -1819,6 +1837,9 @@ type AgentItem struct {
 	Seconds *float64         `json:"seconds"`
 	Tool    *AgentToolStep   `json:"tool"`
 	Plan    []AgentPlanEntry `json:"plan"`
+	// From, on a `prompt`, is `user` when the user wrote it on the agent's page; empty when the
+	// bot passed it on.
+	From string `json:"from"`
 }
 
 // AgentToolStep is a tool the agent used: what it did in a line, and how it went.

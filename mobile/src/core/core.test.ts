@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test";
 import {
   addModelRow,
   agentIsOpen,
+  agentMessageFromUser,
   agentIsRunning,
   agentName,
   agentStartRow,
@@ -635,6 +636,11 @@ describe("format", () => {
     expect(preview(chat("dm", [started, followUp]), bots)).toBe("Messaged Login fix: Run them too");
     const said = msg({ kind: "bot", bot_id: "b1" }, { kind: "agent_message", agent_id: "agent-1", agent_kind: "claude", title: "Login fix", text: "Done, PR #7" });
     expect(preview(chat("dm", [started, said]), bots)).toBe("Message from Login fix: Done, PR #7");
+    // What the user wrote the agent from its page.
+    const wrote = msg({ kind: "you" }, { kind: "agent_message", agent_id: "agent-1", agent_kind: "claude", title: "Login fix", text: "Also check\nthe signup form" });
+    expect(preview(chat("dm", [started, said, wrote]), bots)).toBe("You messaged Login fix: Also check the signup form");
+    expect(agentMessageFromUser(wrote)).toBe(true);
+    expect(agentMessageFromUser(said)).toBe(false);
   });
 
   test("the working row reads what the one bot at work is doing", () => {

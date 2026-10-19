@@ -1063,4 +1063,9 @@ export const zh: Record<string, string> = {
   "None installed": "均未安装",
   "Bots": "智能体",
   "Search your chats and messages.": "搜索你的聊天和消息。",
+  "You messaged": "你已发消息给",
+  "You messaged {name}: {detail}": "你已发消息给 {name}:{detail}",
+  "{name} is starting…": "{name} 正在启动…",
+  "{name} can't take a message now": "{name} 现在无法接收消息",
+  "Queued": "排队中",
 };

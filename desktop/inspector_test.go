@@ -2,6 +2,7 @@ package main
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/egoist/lorca/desktop/model"
@@ -57,7 +58,7 @@ func TestInspectorLeavesDecisionModelsOut(t *testing.T) {
 	store.SetBotRuntime(bot.ID, "opencode", "", "")
 	tt := ui.NewTester(func(c *ui.Context) {
 		applyTheme(c)
-		m.inspectorRuntime(c, store.Bot("bot-nova"), store.Chat("chat-nova"))
+		m.inspectorRuntime(c, store.Bot("bot-nova"))
 	}, 360, 400)
 	settle(tt)
 	if err := tt.Click("OpenCode Zen"); err != nil {
@@ -73,5 +74,65 @@ func TestInspectorLeavesDecisionModelsOut(t *testing.T) {
 	}
 	if got := tt.Menu(); slices.Contains(got, "Jev 1.13") || slices.Contains(got, "Jev 1.13 Free") || !slices.Contains(got, "Kimi K3") {
 		t.Errorf("models %q", got)
+	}
+}
+
+// The DM inspector shows what goes on in the chat; a click on its bot opens the bot's settings, a
+// tab per page: its profile and memory, what it runs with and where its turns run, and its plugins.
+func TestInspectorBotOpensSettings(t *testing.T) {
+	m := demoWindow(t)
+	m.selectChat("chat-nova")
+	inspector := ui.NewTester(func(c *ui.Context) {
+		applyTheme(c)
+		m.inspectorView(c, "chat-nova")
+	}, 300, 900)
+	inspector.SetScale(2)
+	settle(inspector)
+	for _, moved := range []string{L("Runs with"), L("Memory"), L("Plugins"), L("Where turns run")} {
+		if inspector.HasText(strings.ToUpper(moved)) {
+			t.Errorf("the inspector still shows %s", moved)
+		}
+	}
+	if !inspector.HasText(strings.ToUpper(L("Usage"))) || !inspector.HasText(strings.ToUpper(L("Routines"))) {
+		t.Fatalf("the inspector lacks Usage or Routines in %q", inspector.Texts())
+	}
+	renderBoth(t, inspector, "inspector-dm")
+	click(t, inspector, "Project Manager")
+	if !m.hasSheet() {
+		t.Fatal("a click on the bot did not open its settings")
+	}
+	sheet := ui.NewTester(m.frame(m.view), 1100, 900)
+	sheet.SetScale(2)
+	settleTransitions(sheet)
+	tabs := []struct {
+		tab, render      string
+		shown, elsewhere []string
+	}{
+		{L("Profile"), "bot-settings", []string{L("Bot Settings"), strings.ToUpper(L("Profile")), strings.ToUpper(L("Memory"))},
+			[]string{strings.ToUpper(L("Runs with")), strings.ToUpper(L("Plugins"))}},
+		{L("Runs with"), "bot-settings-runs-with", []string{strings.ToUpper(L("Runs with")), strings.ToUpper(L("Where turns run"))},
+			[]string{strings.ToUpper(L("Profile")), strings.ToUpper(L("Memory"))}},
+		{L("Plugins"), "bot-settings-plugins", []string{strings.ToUpper(L("Plugins"))},
+			[]string{strings.ToUpper(L("Runs with")), strings.ToUpper(L("Profile"))}},
+	}
+	for _, each := range tabs {
+		click(t, sheet, each.tab)
+		settle(sheet)
+		for _, shown := range each.shown {
+			if !sheet.HasText(shown) {
+				t.Errorf("the %s tab lacks %s in %q", each.tab, shown, sheet.Texts())
+			}
+		}
+		for _, other := range each.elsewhere {
+			if sheet.HasText(other) {
+				t.Errorf("the %s tab shows %s", each.tab, other)
+			}
+		}
+		renderBoth(t, sheet, each.render)
+	}
+	click(t, sheet, L("Done"))
+	settleTransitions(sheet)
+	if m.hasSheet() {
+		t.Fatal("Done did not close the settings")
 	}
 }
