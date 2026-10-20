@@ -128,10 +128,10 @@ while True:
 
 /// An ACP server, scripted, standing in for OpenCode and fx: a session, and a prompt that runs
 /// `git status` once the client allows it, writes a file, and answers. A "(slow)" prompt waits
-/// for `release.txt` before it ends, so a message can arrive while it works. Each run appends its
+/// for `release.txt` or a `session/cancel` before it ends, so a message can arrive while it works. Each run appends its
 /// arguments and the permission settings it was given to `<program>-args.log`.
 const FAKE_ACP: &str = r#"#!/usr/bin/env python3
-import json, os, sys, time
+import json, os, select, sys, time
 here = os.path.dirname(os.path.abspath(__file__))
 with open(os.path.join(here, os.path.basename(sys.argv[0]) + "-args.log"), "a") as log:
     log.write(" ".join(sys.argv[1:]) + " " + os.environ.get("OPENCODE_CONFIG_CONTENT", "") + " FX_PERMISSION_MODE=" + os.environ.get("FX_PERMISSION_MODE", "") + "\n")
@@ -171,8 +171,18 @@ while True:
         update("ses_1", {"sessionUpdate": "tool_call_update", "toolCallId": "call_1", "status": "completed" if chosen == "once" else "failed", "rawInput": {"command": "git status"}, "content": [{"type": "content", "content": {"type": "text", "text": "clean"}}]})
         update("ses_1", {"sessionUpdate": "tool_call", "toolCallId": "call_2", "title": "write", "kind": "edit", "status": "completed", "locations": [{"path": os.path.abspath("b.txt")}], "content": [{"type": "diff", "path": os.path.abspath("b.txt"), "oldText": None, "newText": "hi"}]})
         if "(slow)" in text:
+            cancelled = False
             while not os.path.exists(os.path.join(here, "release.txt")):
-                time.sleep(0.05)
+                if select.select([sys.stdin], [], [], 0.05)[0]:
+                    note = read()
+                    if note is None:
+                        sys.exit(0)
+                    if note.get("method") == "session/cancel":
+                        cancelled = True
+                        break
+            if cancelled:
+                out({"jsonrpc": "2.0", "id": ident, "result": {"stopReason": "cancelled"}})
+                continue
             os.remove(os.path.join(here, "release.txt"))
         update("ses_1", {"sessionUpdate": "agent_message_chunk", "messageId": "msg_%d" % asked, "content": {"type": "text", "text": "OpenCode did it"}})
         update("ses_1", {"sessionUpdate": "agent_message_chunk", "messageId": "msg_%d" % asked, "content": {"type": "text", "text": " (" + chosen + ")."}})
@@ -785,7 +795,7 @@ async fn codex_runs_read_only_commands_at_once_and_reports_its_plan() {
 }
 
 #[tokio::test]
-async fn opencode_speaks_acp_and_a_message_while_it_works_waits_for_its_turn() {
+async fn opencode_speaks_acp_and_a_message_while_it_works_cancels_its_turn() {
     let scratch = setup().await;
     let app = &scratch.app;
     let tool = tool(&scratch);
@@ -799,10 +809,9 @@ async fn opencode_speaks_acp_and_a_message_while_it_works_waits_for_its_turn() {
     assert!(launched.lines().any(|line| line.starts_with("acp ") && line.contains(r#""bash":"ask""#)), "{launched}");
     assert_eq!(agent.record().session.as_deref(), Some("ses_1"));
 
-    // A message while it works waits for its turn to end.
+    // A message while it works cancels the turn under way and starts the next.
     let sent = call(&tool, "call-2", json!({ "action": "send", "id": agent.id(), "message": "And c.txt" })).await.unwrap();
-    assert!(sent.starts_with("Sent. OpenCode takes it up once"), "{sent}");
-    std::fs::write(programs().join("release.txt"), "go").unwrap();
+    assert!(sent.starts_with("Sent. OpenCode takes it up at its next step"), "{sent}");
     // Both turns end before it is done, and it says so once.
     let (_, _, text, _) = eventually("its message", || agent_messages(app).pop()).await;
     assert_eq!(text, "OpenCode did it (once).");
@@ -810,6 +819,7 @@ async fn opencode_speaks_acp_and_a_message_while_it_works_waits_for_its_turn() {
     let prompts: Vec<&str> = items.iter().filter(|item| item.kind == "prompt").map(|item| item.text.as_str()).collect();
     assert_eq!(prompts.len(), 2, "{items:?}");
     assert_eq!(prompts[1], "And c.txt");
+    assert!(items.iter().any(|item| item.kind == "status" && item.text == "Interrupted"), "{items:?}");
     let thought = items.iter().find(|item| item.kind == "thought").unwrap();
     assert_eq!(thought.text, "Look first.");
     let edit = items.iter().find_map(|item| item.tool.clone().filter(|step| step.kind == "edit")).unwrap();
