@@ -6,8 +6,7 @@
 // five seconds, and keeps to the end unless the user scrolled up to read. While it asks, its
 // question is a card at the end of the chat. Each prompt says who wrote it, the bot or the user.
 // A composer at the foot writes the agent directly (`coding.send`): it takes the message up at
-// its next step (OpenCode and fx once done with what they do now), so the message waits at the
-// end of the transcript as "Queued" until then. The field takes no text while the agent starts or cannot be reached; a
+// its next step, so the message waits at the end of the transcript as "Queued" until then. The field takes no text while the agent starts or cannot be reached; a
 // message that did not go stays in the field with why above it.
 
 import { Stack, useFocusEffect, useRouter } from "expo-router";

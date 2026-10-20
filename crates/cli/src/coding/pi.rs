@@ -7,7 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -45,6 +45,10 @@ pub(crate) struct Pi {
     next_id: AtomicU64,
     /// It works on something: a message steers it.
     busy: Arc<AtomicBool>,
+    /// Its tools under way. pi takes a steer only once they are done, so a message cuts in.
+    tools: Arc<AtomicUsize>,
+    /// It was stopped for a message, which takes up from there: the stop is no pause.
+    cutting_in: Arc<AtomicBool>,
 }
 
 /// Where Lorca keeps the review extension, written again as each agent starts.
@@ -65,8 +69,11 @@ pub(crate) async fn start(home: &Path, program: &Path, folder: &Path, prompt: &s
     let (process, stdout, exit) = process::spawn(program, &args, folder, variables).await?;
     let pending: Arc<Pending> = Arc::new(Mutex::new(HashMap::new()));
     let busy = Arc::new(AtomicBool::new(false));
-    tokio::spawn(read(process.clone(), process::json_lines(stdout), exit, events.clone(), pending.clone(), busy.clone(), folder.to_path_buf()));
-    let pi = Arc::new(Pi { process, pending, next_id: AtomicU64::new(1), busy });
+    let tools = Arc::new(AtomicUsize::new(0));
+    let cutting_in = Arc::new(AtomicBool::new(false));
+    let state = Run { busy: busy.clone(), tools: tools.clone(), cutting_in: cutting_in.clone() };
+    tokio::spawn(read(process.clone(), process::json_lines(stdout), exit, events.clone(), pending.clone(), state, folder.to_path_buf()));
+    let pi = Arc::new(Pi { process, pending, next_id: AtomicU64::new(1), busy, tools, cutting_in });
     pi.send(prompt, false).await?;
     // Its session file resumes it once its process is gone. pi answers once it can, which may be
     // after a tool waiting on Lorca has its answer.
@@ -105,8 +112,19 @@ impl Pi {
 #[async_trait]
 impl Driver for Pi {
     async fn send(&self, text: &str, interrupt: bool) -> Result<(), String> {
-        if interrupt && self.busy.load(Ordering::SeqCst) {
-            self.command(json!({ "type": "abort" })).await?;
+        // A tool under way would hold a steer until it is done: the run stops, and the message
+        // starts the next one.
+        let cut_in = interrupt || self.tools.load(Ordering::SeqCst) > 0;
+        if cut_in && self.busy.load(Ordering::SeqCst) {
+            self.cutting_in.store(true, Ordering::SeqCst);
+            if let Err(error) = self.command(json!({ "type": "abort" })).await {
+                self.cutting_in.store(false, Ordering::SeqCst);
+                return Err(error);
+            }
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while self.busy.load(Ordering::SeqCst) && Instant::now() < deadline {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
         }
         // While it works, the message goes in before its next model call.
         let command = if self.busy.load(Ordering::SeqCst) { json!({ "type": "steer", "message": text }) } else { json!({ "type": "prompt", "message": text, "streamingBehavior": "steer" }) };
@@ -163,7 +181,16 @@ fn message_text(content: &Value) -> String {
     }
 }
 
-async fn read(process: Arc<Process>, mut messages: tokio::sync::mpsc::UnboundedReceiver<Value>, exit: oneshot::Receiver<process::Exit>, events: Events, pending: Arc<Pending>, busy: Arc<AtomicBool>, folder: PathBuf) {
+/// What the reader keeps for `send`: whether it works, its tools under way, and whether a message
+/// stopped it.
+struct Run {
+    busy: Arc<AtomicBool>,
+    tools: Arc<AtomicUsize>,
+    cutting_in: Arc<AtomicBool>,
+}
+
+async fn read(process: Arc<Process>, mut messages: tokio::sync::mpsc::UnboundedReceiver<Value>, exit: oneshot::Receiver<process::Exit>, events: Events, pending: Arc<Pending>, run: Run, folder: PathBuf) {
+    let Run { busy, tools, cutting_in } = run;
     let item = |item: Item| {
         let _ = events.send(Event::Item(item));
     };
@@ -222,9 +249,11 @@ async fn read(process: Arc<Process>, mut messages: tokio::sync::mpsc::UnboundedR
                 let call = record["toolCallId"].as_str().unwrap_or("").to_string();
                 let step = step(record["toolName"].as_str().unwrap_or("tool"), &record["args"], &folder);
                 steps.insert(call.clone(), step.clone());
+                tools.fetch_add(1, Ordering::SeqCst);
                 item(Item::tool(call, step));
             }
             "tool_execution_end" => {
+                let _ = tools.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| Some(count.saturating_sub(1)));
                 let call = record["toolCallId"].as_str().unwrap_or("").to_string();
                 let mut step = steps.remove(&call).unwrap_or_else(|| step(record["toolName"].as_str().unwrap_or("tool"), &json!({}), &folder));
                 let failed = record["isError"].as_bool().unwrap_or(false);
@@ -245,7 +274,14 @@ async fn read(process: Arc<Process>, mut messages: tokio::sync::mpsc::UnboundedR
                 if record["aborted"].as_bool().unwrap_or(false) {
                     item(Item::text(uuid::Uuid::new_v4().to_string(), "status", "Interrupted"));
                 }
+                tools.store(0, Ordering::SeqCst);
                 busy.store(false, Ordering::SeqCst);
+                // Stopped for a message: it goes on with that, not done.
+                if cutting_in.swap(false, Ordering::SeqCst) {
+                    failed = None;
+                    last_said = None;
+                    continue;
+                }
                 let _ = events.send(match failed.take() {
                     Some(error) if !record["aborted"].as_bool().unwrap_or(false) => Event::Failed(error),
                     _ => Event::Idle(last_said.take()),

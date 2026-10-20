@@ -343,19 +343,8 @@ func (t *agentPage) send() {
 	})
 }
 
-// agentTakesUp says when an agent at work takes up a message it was sent: Claude Code, Codex,
-// and pi at their next step, OpenCode and fx once their turn is over.
-func agentTakesUp(kind string) string {
-	switch kind {
-	case "opencode", "fx":
-		return L("It takes this up once it is done with what it is doing")
-	}
-	return L("It takes this up at its next step")
-}
-
 // composerState is what the composer says for the agent as it stands: its placeholder, the line
-// under it, and whether it takes a message. One at work takes it up at its next step, or once it
-// is done with what it does now if it cannot be steered; one whose process is gone starts again on its session; one still starting, or one
+// under it, and whether it takes a message. One at work takes it up at its next step; one whose process is gone starts again on its session; one still starting, or one
 // that ended before its session began, takes none.
 func (t *agentPage) composerState(agent *model.AgentRun) (placeholder, hint string, enabled bool) {
 	name := agent.Name()
@@ -366,9 +355,6 @@ func (t *agentPage) composerState(agent *model.AgentRun) (placeholder, hint stri
 	case t.loaded && !t.reachable:
 		return placeholder, L("%@ ended before its session began, so it cannot take a message. Ask the bot to start a new one.", name), false
 	case agent.State == model.AgentWorking || agent.State == model.AgentAsking:
-		if agent.Kind == "opencode" || agent.Kind == "fx" {
-			return placeholder, L("%@ takes it up once it is done with what it is doing.", name), true
-		}
 		return placeholder, L("%@ takes it up at its next step.", name), true
 	case agent.State == model.AgentStopped || agent.State == model.AgentFailed:
 		return placeholder, L("Sending starts %@ again on its session.", name), true
@@ -698,17 +684,13 @@ func (t *agentPage) transcript(c *ui.Context) {
 			ui.Column(c.Key(step.item.ID)).Margin(top, 0, 0, 0).MinWidth(0).Children(func() { t.step(c, step, i == 0) })
 		}
 		// What it was sent and has yet to take up, under what it does now.
-		kind := ""
-		if agent := t.agent(); agent != nil {
-			kind = agent.Kind
-		}
 		for i, queued := range t.queued {
 			top := float32(12)
 			if i == 0 && len(steps) == 0 {
 				top = 0
 			}
 			ui.Column(c.Key("queued:"+strconv.Itoa(i))).Margin(top, 0, 0, 0).MinWidth(0).Children(func() {
-				agentPromptCard(c, t.promptAuthor(queued.From), queued.Text, queued.From == "user", agentTakesUp(kind), false, nil)
+				agentPromptCard(c, t.promptAuthor(queued.From), queued.Text, queued.From == "user", L("It takes this up at its next step"), false, nil)
 			})
 		}
 	})

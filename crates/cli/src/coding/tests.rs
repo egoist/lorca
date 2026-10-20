@@ -732,7 +732,7 @@ async fn the_user_writes_to_an_agent_on_its_page() {
     assert!(!mine.counts_unread());
     // Auto-review reads it as the user's request; the bot reads it in its history.
     assert!(crate::plugins::mcp::answer(app, &asked, Decision::Allowed), "{:?}", last_card(app));
-    // It takes it up once it is done with what it was doing, and its step says who wrote it.
+    // It takes it up, and its step says who wrote it.
     let taken = eventually("the queued message", || steps_now(&agent).into_iter().find(|item| item.kind == "prompt" && item.text == "Use the staging branch (follow-up)")).await;
     assert_eq!(taken.from.as_deref(), Some("user"));
     card_when(app, &row, |card| card.state == "idle").await;
@@ -1271,11 +1271,20 @@ async fn a_start_where_no_other_agent_works_says_nothing_of_others() {
     assert_eq!(empty, "No coding agent on the account matches that.");
 }
 
-/// The real Claude Code at work on a long command: the user's message steers it at once, and Stop
-/// ends the command it runs, which sits in a process group of its own, and closes its step.
+/// Each real agent at work on a long command: the user's message steers it at once, and Stop ends
+/// the command it runs, even one in a process group of its own, as Claude Code's are, and closes
+/// its step.
 #[tokio::test]
-#[ignore = "runs the real Claude Code, which signs in and spends tokens"]
-async fn real_claude_steers_and_stops() {
+#[ignore = "runs the real coding agents, which sign in and spend tokens"]
+async fn real_agents_steer_and_stop() {
+    let kinds = std::env::var("LORCA_REAL_AGENTS").unwrap_or_else(|_| "claude,codex,opencode,pi,fx".into());
+    for kind in kinds.split(',').map(str::trim).filter(|kind| !kind.is_empty()) {
+        println!("== {kind}");
+        steers_and_stops(kind).await;
+    }
+}
+
+async fn steers_and_stops(kind: &str) {
     let scratch = setup_without_stand_ins().await;
     let app = &scratch.app;
     auto_review_off(app);
@@ -1303,7 +1312,7 @@ async fn real_claude_steers_and_stops() {
             panic!("never {what}")
         });
     };
-    call(&tool, "call-1", json!({ "action": "start", "agent": "claude", "title": "Wait", "folder": "shop", "prompt": long(301) })).await.unwrap();
+    call(&tool, "call-1", json!({ "action": "start", "agent": kind, "title": "Wait", "folder": "shop", "prompt": long(301) })).await.unwrap();
     let agent = app.coding_agents.of("chat", "b1").pop().expect("it started");
     wait(agent.clone(), "ran the command", Box::new(running)).await;
     let sent = send(app, &agent, "Never mind that. Reply with just the word BANANA.", false, Sender::User).await;
@@ -1311,7 +1320,7 @@ async fn real_claude_steers_and_stops() {
     let steered = Instant::now();
     wait(agent.clone(), "took the message up", Box::new(|agent: &Agent| steps_now(agent).iter().any(|item| item.kind == "text" && item.text.contains("BANANA")))).await;
     println!("steered in {:?}", steered.elapsed());
-    assert!(steered.elapsed() < Duration::from_secs(60), "it waited for the command");
+    assert!(steered.elapsed() < Duration::from_secs(60), "{kind} waited for the command");
 
     wait(agent.clone(), "went idle", Box::new(|agent: &Agent| agent.record().state == "idle")).await;
     send(app, &agent, &long(302), false, Sender::User).await.unwrap();
@@ -1320,7 +1329,7 @@ async fn real_claude_steers_and_stops() {
     stop(app, &agent, "Stopped");
     assert!(!running(&agent), "a step still runs after Stop");
     tokio::time::sleep(Duration::from_secs(2)).await;
-    let left = std::process::Command::new("pgrep").args(["-f", "time.sleep\\(30[12]\\)"]).output().unwrap();
+    let left = std::process::Command::new("pgrep").args(["-f", "time.sleep\\(30[1-4]\\)"]).output().unwrap();
     assert!(left.stdout.is_empty(), "the command outlived Stop: {}", String::from_utf8_lossy(&left.stdout));
     for item in steps_now(&agent) {
         println!("   {}", item.lines().join("\n   "));

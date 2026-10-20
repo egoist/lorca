@@ -681,7 +681,6 @@ pub(crate) async fn send(app: &Arc<App>, agent: &Arc<Agent>, text: &str, interru
         *agent.active_at.lock().unwrap() = Instant::now();
         let busy = matches!(record.state.as_str(), "working" | "starting");
         return Ok(match (busy, interrupt) {
-            (true, false) if matches!(record.kind.as_str(), "opencode" | "fx") => format!("Sent. {who} takes it up once it is done with what it is doing."),
             (true, false) => format!("Sent. {who} takes it up at its next step."),
             (true, true) => format!("Sent. {who} stopped what it was doing to take it up."),
             _ => format!("Sent. {who} is working on it."),

@@ -1861,7 +1861,7 @@ func (s *Store) StopAgent(chatID, messageID string, done func(error)) {
 }
 
 // SendToAgent gives a coding agent the user's message, here or on its bot's Runner, down the
-// path the bot's own messages take: it takes it up once it is done with what it does now, and an
+// path the bot's own messages take: it takes it up at its next step, and an
 // agent whose process is gone starts again on its session. The chat shows it as the user's
 // message to the agent.
 func (s *Store) SendToAgent(chatID, messageID, text string, done func(error)) {

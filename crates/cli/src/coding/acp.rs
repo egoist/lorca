@@ -3,8 +3,8 @@
 //! `session/load` to resume one), and a prompt per message (`session/prompt`), which answers
 //! once the turn is over. What it does arrives as `session/update` notifications; what needs a
 //! decision comes as `session/request_permission`, which Lorca answers allow once or reject.
-//! The protocol has no steering: a message sent while it works waits for the turn to end, and
-//! one that interrupts cancels the turn first (`session/cancel`). Lorca offers it no file or
+//! The protocol has no steering: a message sent while it works cancels the turn under way
+//! (`session/cancel`) and starts the next. Lorca offers it no file or
 //! terminal methods, so it works with its own tools.
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -169,7 +169,7 @@ async fn prompts(shared: Arc<Shared>, mut text: String) {
 
 #[async_trait]
 impl Driver for Acp {
-    async fn send(&self, text: &str, interrupt: bool) -> Result<(), String> {
+    async fn send(&self, text: &str, _interrupt: bool) -> Result<(), String> {
         let shared = &self.0;
         let under_way = {
             let mut queue = shared.queue.lock().unwrap();
@@ -182,11 +182,9 @@ impl Driver for Acp {
             tokio::spawn(prompts(shared.clone(), text.to_string()));
             return Ok(());
         }
-        // The turn under way ends cancelled, and the message waiting starts the next.
-        if interrupt {
-            shared.process.send(&json!({ "jsonrpc": "2.0", "method": "session/cancel", "params": { "sessionId": shared.session } })).await?;
-        }
-        Ok(())
+        // ACP has no steering: the turn under way ends cancelled, and the message waiting starts
+        // the next.
+        shared.process.send(&json!({ "jsonrpc": "2.0", "method": "session/cancel", "params": { "sessionId": shared.session } })).await
     }
 
     async fn stop(&self) {
