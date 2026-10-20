@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -199,6 +200,13 @@ type Store struct {
 	commandStarts map[string]time.Time
 	// reportedWatchedChat is the chat last reported to the CLI as on screen.
 	reportedWatchedChat *string
+	// watching is the report on its way to the CLI: one request at a time, the latest chat next, so
+	// the CLI ends on the chat on screen.
+	watching struct {
+		sync.Mutex
+		next    *string
+		sending bool
+	}
 	loadingOlder        map[string]bool
 	replies             *replyEngine
 	started             bool
@@ -2670,11 +2678,34 @@ func (s *Store) SetWatchedChat(id string) {
 		return
 	}
 	s.reportedWatchedChat = &id
-	var chatID any
-	if id != "" {
-		chatID = id
+	s.watching.Lock()
+	defer s.watching.Unlock()
+	s.watching.next = &id
+	if !s.watching.sending {
+		s.watching.sending = true
+		go s.sendWatching()
 	}
-	go func() { _ = s.request("ui.watching", map[string]any{"chat_id": chatID}, nil) }()
+}
+
+// sendWatching sends the reports SetWatchedChat leaves, in order, skipping any a newer one
+// replaced before it went.
+func (s *Store) sendWatching() {
+	for {
+		s.watching.Lock()
+		next := s.watching.next
+		s.watching.next = nil
+		if next == nil {
+			s.watching.sending = false
+			s.watching.Unlock()
+			return
+		}
+		s.watching.Unlock()
+		var chatID any
+		if *next != "" {
+			chatID = *next
+		}
+		_ = s.request("ui.watching", map[string]any{"chat_id": chatID}, nil)
+	}
 }
 
 func (s *Store) MarkRead(id string) {

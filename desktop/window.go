@@ -14,8 +14,11 @@ type appWindow struct {
 	sheets    []*sheet
 	nextSheet int
 	title     string
-	// focused is the window being where the user looks: in front, shown, not minimized.
+	// focused is the window having the keyboard: in front, shown, not minimized.
 	focused bool
+	// onScreen is the window shown and not minimized, with the keyboard or without it: AppKit
+	// orders a window restored from the Dock back in without making it key.
+	onScreen bool
 }
 
 func (w *appWindow) invalidate() {

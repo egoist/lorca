@@ -326,8 +326,17 @@ type windowState interface {
 // windowChanged follows a window coming forward or going away.
 func (a *appDelegate) windowChanged(w *appWindow, win windowState) {
 	w.focused = win.IsFocused() && win.IsVisible() && !win.IsMinimized()
+	// A window takes the keyboard before AppKit finishes deminiaturizing it, so the focus event
+	// still reads it minimized: one with the keyboard is on screen.
+	w.onScreen = win.IsVisible() && (!win.IsMinimized() || win.IsFocused())
 	a.notifier.watchingChanged()
 	w.invalidate()
+}
+
+// inFront is the app being the one the user uses: frontmost on macOS, and anywhere, one of its
+// windows having the keyboard.
+func (a *appDelegate) inFront() bool {
+	return a.active || mygo.FocusedWindow() != nil
 }
 
 // activeChanged follows the app becoming the frontmost one or leaving it.
@@ -364,9 +373,6 @@ func (a *appDelegate) showMainWindow() {
 		}
 		win := a.newWindow(&m.appWindow, options, m.view)
 		win.OnFocus(func() {
-			if id := m.selectedChatID(); id != "" {
-				store.MarkRead(id)
-			}
 			// Back from the browser, perhaps from a routine's setup: what waits on it tries now.
 			store.ResubscribeAwaitingSetup()
 		})

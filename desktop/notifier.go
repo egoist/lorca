@@ -114,24 +114,27 @@ func newNotifier() *notifier {
 // started is notifications going out: once the first connection settles.
 func (n *notifier) started() bool { return store != nil && !store.IsStarting }
 
-// watchedChat is the chat the user is looking at: the main window is in front and shows it.
+// watchedChat is the chat the user is looking at: the app is in front and its main window, on
+// screen, shows it. As the Mac app's, the window need not have the keyboard.
 func (n *notifier) watchedChat() string {
 	m := app.main
-	if m == nil || !m.focused || !m.selection.IsChat() {
+	if m == nil || !app.inFront() || !m.onScreen || !m.selection.IsChat() {
 		return ""
 	}
 	return m.selection.ChatID
 }
 
-// watchingChanged follows the selection and the main window's visibility.
+// watchingChanged follows the selection, the main window's visibility, and the app's place in
+// front.
 func (n *notifier) watchingChanged() {
 	if n == nil || !n.started() {
 		return
 	}
 	watched := n.watchedChat()
 	store.SetWatchedChat(watched)
-	// Whatever was posted for the chat now on screen has been seen.
+	// Whatever arrived for the chat now on screen, or was posted for it, has been seen.
 	if watched != "" {
+		store.MarkRead(watched)
 		clearNotices(watched)
 	}
 }
@@ -143,6 +146,11 @@ func (n *notifier) storeChanged(event model.Event) {
 	switch event.Kind {
 	case model.EventConnectionChanged:
 		n.watchingChanged()
+	case model.EventChatsChanged:
+		// A reply that finished before the CLI heard of the chat on screen is read all the same.
+		if watched := n.watchedChat(); watched != "" && n.started() {
+			store.MarkRead(watched)
+		}
 	case model.EventSnapshotReplaced, model.EventIdentityChanged:
 		n.rememberPermissions()
 		n.watchingChanged()
