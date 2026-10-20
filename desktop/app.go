@@ -50,6 +50,8 @@ type appDelegate struct {
 	trayWords      [2]string
 	quitting       bool
 	notifier       *notifier
+	// active is the app being the frontmost one, on macOS, where the system says so.
+	active bool
 }
 
 // answerWait is how long a computer without an identity waits for the CLI's first answer before
@@ -148,18 +150,23 @@ func (a *appDelegate) storeChanged(event model.Event) {
 	a.presentPendingTemplateLink()
 	switch event.Kind {
 	case model.EventIdentityChanged, model.EventSnapshotReplaced, model.EventChatsChanged:
-		count := 0
-		if store.HasIdentity == nil || *store.HasIdentity {
-			// A muted chat keeps its count in the sidebar but leaves the badge alone.
-			now := time.Now()
-			for _, chat := range store.Chats {
-				if !chat.IsMuted(now) {
-					count += chat.UnreadCount
-				}
+		setBadge(unreadBadge())
+	}
+}
+
+// unreadBadge is the count on the app's icon: the unread replies of the chats that are not muted.
+func unreadBadge() int {
+	count := 0
+	if store.HasIdentity == nil || *store.HasIdentity {
+		// A muted chat keeps its count in the sidebar but leaves the badge alone.
+		now := time.Now()
+		for _, chat := range store.Chats {
+			if !chat.IsMuted(now) {
+				count += chat.UnreadCount
 			}
 		}
-		setBadge(count)
 	}
+	return count
 }
 
 func (a *appDelegate) finishStartup() {
@@ -299,11 +306,7 @@ func (a *appDelegate) newWindow(w *appWindow, options mygo.WindowOptions, view f
 	options.Content = ui.View(w.frame(view))
 	win := mygo.NewWindow(options)
 	w.win = win
-	report := func() {
-		w.focused = win.IsFocused() && win.IsVisible() && !win.IsMinimized()
-		a.notifier.watchingChanged()
-		w.invalidate()
-	}
+	report := func() { a.windowChanged(w, win) }
 	win.OnFocus(report)
 	win.OnBlur(report)
 	win.OnShow(report)
@@ -311,6 +314,26 @@ func (a *appDelegate) newWindow(w *appWindow, options mygo.WindowOptions, view f
 	win.OnMinimize(report)
 	win.OnRestore(report)
 	return win
+}
+
+// windowState is what a window's events report: where it stands on screen.
+type windowState interface {
+	IsFocused() bool
+	IsVisible() bool
+	IsMinimized() bool
+}
+
+// windowChanged follows a window coming forward or going away.
+func (a *appDelegate) windowChanged(w *appWindow, win windowState) {
+	w.focused = win.IsFocused() && win.IsVisible() && !win.IsMinimized()
+	a.notifier.watchingChanged()
+	w.invalidate()
+}
+
+// activeChanged follows the app becoming the frontmost one or leaving it.
+func (a *appDelegate) activeChanged(active bool) {
+	a.active = active
+	a.notifier.watchingChanged()
 }
 
 func (a *appDelegate) showMainWindow() {

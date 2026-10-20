@@ -26,6 +26,8 @@ func main() {
 			app.reopen()
 		}
 	})
+	mygo.App.OnDidBecomeActive(func() { app.activeChanged(true) })
+	mygo.App.OnDidResignActive(func() { app.activeChanged(false) })
 	mygo.App.OnWindowAllClosed(func() {
 		if !app.keepsRunning() {
 			mygo.App.Quit()
