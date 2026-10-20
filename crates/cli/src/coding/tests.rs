@@ -1270,3 +1270,59 @@ async fn a_start_where_no_other_agent_works_says_nothing_of_others() {
     let empty = call(&tool, "call-2", json!({ "action": "list", "scope": "account", "query": "nothing like this" })).await.unwrap();
     assert_eq!(empty, "No coding agent on the account matches that.");
 }
+
+/// The real Claude Code at work on a long command: the user's message steers it at once, and Stop
+/// ends the command it runs, which sits in a process group of its own, and closes its step.
+#[tokio::test]
+#[ignore = "runs the real Claude Code, which signs in and spends tokens"]
+async fn real_claude_steers_and_stops() {
+    let scratch = setup_without_stand_ins().await;
+    let app = &scratch.app;
+    auto_review_off(app);
+    let tool = tool(&scratch);
+    start_row(app, "call-1");
+    let long = |marker: u32| format!("Run exactly this shell command in the foreground (not in the background) and wait for it: python3 -c \"import time; time.sleep({marker})\" Then say done.");
+    let running = |agent: &Agent| steps_now(agent).iter().any(|item| item.tool.as_ref().is_some_and(|step| step.kind == "execute" && step.status == "running"));
+    let wait = |agent: Arc<Agent>, what: &'static str, check: Box<dyn Fn(&Agent) -> bool + Send>| async move {
+        tokio::time::timeout(Duration::from_secs(120), async {
+            loop {
+                if let Some((asked, ..)) = last_card(app).filter(|(.., decision)| decision == "pending") {
+                    crate::plugins::mcp::answer(app, &asked, Decision::Allowed);
+                }
+                if check(&agent) {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            for item in steps_now(&agent) {
+                println!("   {}", item.lines().join("\n   "));
+            }
+            panic!("never {what}")
+        });
+    };
+    call(&tool, "call-1", json!({ "action": "start", "agent": "claude", "title": "Wait", "folder": "shop", "prompt": long(301) })).await.unwrap();
+    let agent = app.coding_agents.of("chat", "b1").pop().expect("it started");
+    wait(agent.clone(), "ran the command", Box::new(running)).await;
+    let sent = send(app, &agent, "Never mind that. Reply with just the word BANANA.", false, Sender::User).await;
+    println!("sent: {sent:?}");
+    let steered = Instant::now();
+    wait(agent.clone(), "took the message up", Box::new(|agent: &Agent| steps_now(agent).iter().any(|item| item.kind == "text" && item.text.contains("BANANA")))).await;
+    println!("steered in {:?}", steered.elapsed());
+    assert!(steered.elapsed() < Duration::from_secs(60), "it waited for the command");
+
+    wait(agent.clone(), "went idle", Box::new(|agent: &Agent| agent.record().state == "idle")).await;
+    send(app, &agent, &long(302), false, Sender::User).await.unwrap();
+    let alive = || !std::process::Command::new("pgrep").args(["-f", "time.sleep\\(302\\)"]).output().unwrap().stdout.is_empty();
+    wait(agent.clone(), "ran the second command", Box::new(move |_: &Agent| alive())).await;
+    stop(app, &agent, "Stopped");
+    assert!(!running(&agent), "a step still runs after Stop");
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let left = std::process::Command::new("pgrep").args(["-f", "time.sleep\\(30[12]\\)"]).output().unwrap();
+    assert!(left.stdout.is_empty(), "the command outlived Stop: {}", String::from_utf8_lossy(&left.stdout));
+    for item in steps_now(&agent) {
+        println!("   {}", item.lines().join("\n   "));
+    }
+}

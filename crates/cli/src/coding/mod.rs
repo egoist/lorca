@@ -243,6 +243,17 @@ impl Agent {
         matches!(self.record.lock().unwrap().state.as_str(), "starting" | "working" | "idle")
     }
 
+    /// Its process is gone: the calls it had under way end with it.
+    fn end_steps(&self, app: &App) {
+        let running: Vec<Item> = self.transcript.lock().unwrap().items().filter(|item| item.tool.as_ref().is_some_and(|step| step.status == "running")).cloned().collect();
+        for mut item in running {
+            if let Some(step) = item.tool.as_mut() {
+                step.status = "failed".into();
+            }
+            self.add(app, item);
+        }
+    }
+
     /// Puts a step in its transcript and its file. True when it changed anything.
     fn add(&self, app: &App, item: Item) -> bool {
         let mut item = item_without_secrets(app, item);
@@ -670,7 +681,8 @@ pub(crate) async fn send(app: &Arc<App>, agent: &Arc<Agent>, text: &str, interru
         *agent.active_at.lock().unwrap() = Instant::now();
         let busy = matches!(record.state.as_str(), "working" | "starting");
         return Ok(match (busy, interrupt) {
-            (true, false) => format!("Sent. {who} takes it up once it is done with what it is doing."),
+            (true, false) if matches!(record.kind.as_str(), "opencode" | "fx") => format!("Sent. {who} takes it up once it is done with what it is doing."),
+            (true, false) => format!("Sent. {who} takes it up at its next step."),
             (true, true) => format!("Sent. {who} stopped what it was doing to take it up."),
             _ => format!("Sent. {who} is working on it."),
         });
@@ -735,6 +747,7 @@ pub(crate) fn stop(app: &Arc<App>, agent: &Arc<Agent>, reason: &str) {
     agent.hold.lock().unwrap().take();
     // What waited for it goes with it.
     agent.queued.lock().unwrap().clear();
+    agent.end_steps(app);
     if let Some(driver) = driver {
         tokio::spawn(async move { driver.stop().await });
     }
@@ -889,6 +902,7 @@ fn ended(app: &Arc<App>, agent: &Arc<Agent>, end: driver::Ended, generation: u64
     agent.asks.store(false, Ordering::SeqCst);
     // Its process took what waited for it along.
     agent.queued.lock().unwrap().clear();
+    agent.end_steps(app);
     let stopping = agent.stopping.load(Ordering::SeqCst);
     let tell_bot = {
         let mut record = agent.record.lock().unwrap();

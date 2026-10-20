@@ -7,7 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -27,6 +27,9 @@ pub(crate) struct Claude {
     /// Messages sent that it has not taken up yet. It takes one up when it says so
     /// (`--replay-user-messages`): between turns, or at a step of the turn it is on.
     pending: Arc<AtomicUsize>,
+    /// It takes a message at once when asked to (`interrupt_send_now_v1`): the turn under way
+    /// makes way for it, its command moved to the background or ended.
+    send_now: Arc<AtomicBool>,
 }
 
 /// Starts Claude Code in `folder` on `prompt`, or resumes `session` with it.
@@ -53,7 +56,8 @@ pub(crate) async fn start(program: &Path, folder: &Path, prompt: &str, session: 
     }
     let (process, stdout, exit) = process::spawn(program, &args, folder, variables).await?;
     let pending = Arc::new(AtomicUsize::new(0));
-    tokio::spawn(read(process.clone(), process::json_lines(stdout), exit, events, pending.clone(), folder.to_path_buf()));
+    let send_now = Arc::new(AtomicBool::new(false));
+    tokio::spawn(read(process.clone(), process::json_lines(stdout), exit, events, pending.clone(), send_now.clone(), folder.to_path_buf()));
     process
         .send(&json!({
             "type": "control_request",
@@ -61,7 +65,7 @@ pub(crate) async fn start(program: &Path, folder: &Path, prompt: &str, session: 
             "request": { "subtype": "initialize", "hooks": { "PreToolUse": [{ "matcher": "Bash", "hookCallbackIds": [BASH_HOOK] }] } },
         }))
         .await?;
-    let driver = Arc::new(Claude { process, pending });
+    let driver = Arc::new(Claude { process, pending, send_now });
     driver.send(prompt, false).await?;
     Ok(driver)
 }
@@ -74,11 +78,19 @@ impl Driver for Claude {
             self.process.send(&json!({ "type": "control_request", "request_id": id, "request": { "subtype": "interrupt" } })).await?;
         }
         self.pending.fetch_add(1, Ordering::SeqCst);
-        let sent = self.process.send(&json!({ "type": "user", "message": { "role": "user", "content": text } })).await;
+        let uuid = uuid::Uuid::new_v4().to_string();
+        let sent = self.process.send(&json!({ "type": "user", "message": { "role": "user", "content": text }, "uuid": uuid })).await;
         if sent.is_err() {
             self.pending.fetch_sub(1, Ordering::SeqCst);
+            return sent;
         }
-        sent
+        // A message steers: the turn under way takes it up now rather than once it is done.
+        // Between turns this does nothing, and the message starts the next.
+        if !interrupt && self.send_now.load(Ordering::SeqCst) {
+            let id = format!("lorca-send-now-{}", uuid::Uuid::new_v4());
+            self.process.send(&json!({ "type": "control_request", "request_id": id, "request": { "subtype": "interrupt", "send_now": true, "message_uuid": uuid } })).await?;
+        }
+        Ok(())
     }
 
     async fn stop(&self) {
@@ -129,7 +141,7 @@ pub(crate) fn plan(input: &Value) -> Vec<PlanEntry> {
         .collect()
 }
 
-async fn read(process: Arc<Process>, mut messages: tokio::sync::mpsc::UnboundedReceiver<Value>, exit: oneshot::Receiver<process::Exit>, events: Events, pending: Arc<AtomicUsize>, folder: PathBuf) {
+async fn read(process: Arc<Process>, mut messages: tokio::sync::mpsc::UnboundedReceiver<Value>, exit: oneshot::Receiver<process::Exit>, events: Events, pending: Arc<AtomicUsize>, send_now: Arc<AtomicBool>, folder: PathBuf) {
     let mut session_told = false;
     let mut last_said: Option<String> = None;
     // The calls under way, and the ones Lorca said no to.
@@ -143,6 +155,8 @@ async fn read(process: Arc<Process>, mut messages: tokio::sync::mpsc::UnboundedR
     while let Some(message) = messages.recv().await {
         match message["type"].as_str().unwrap_or("") {
             "system" if message["subtype"] == "init" => {
+                let capabilities = message["capabilities"].as_array().into_iter().flatten();
+                send_now.store(capabilities.into_iter().any(|capability| capability == "interrupt_send_now_v1"), Ordering::SeqCst);
                 if let (Some(id), false) = (message["session_id"].as_str(), session_told) {
                     session_told = true;
                     let _ = events.send(Event::Session(id.to_string()));

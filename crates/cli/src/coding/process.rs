@@ -12,6 +12,27 @@ use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::{oneshot, Mutex};
 use tokio_util::sync::CancellationToken;
 
+/// The processes `pid` started, and the ones they started, as `ps` lists them.
+#[cfg(unix)]
+async fn descendants(pid: u32) -> Vec<u32> {
+    let Ok(output) = tokio::process::Command::new("ps").args(["-A", "-o", "pid=", "-o", "ppid="]).output().await else { return Vec::new() };
+    let pairs: Vec<(u32, u32)> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace().map(str::parse::<u32>);
+            Some((fields.next()?.ok()?, fields.next()?.ok()?))
+        })
+        .collect();
+    let mut found = vec![pid];
+    let mut next = 0;
+    while next < found.len() {
+        let parent = found[next];
+        found.extend(pairs.iter().filter(|(_, ppid)| *ppid == parent).map(|(child, _)| *child));
+        next += 1;
+    }
+    found.split_off(1)
+}
+
 /// What a Claude Code session started from another one would inherit: they mark the parent's
 /// session, which the agent Lorca starts is not part of.
 const INHERITED_MARKERS: [&str; 10] = [
@@ -105,7 +126,18 @@ pub(crate) async fn spawn(program: &Path, args: &[String], cwd: &Path, variables
         let (status, stopped) = tokio::select! {
             status = child.wait() => (status.ok(), false),
             _ = token.cancelled() => {
+                // Claude Code runs each command in a process group of its own, which the group's
+                // kill leaves running: what descends from it goes too.
+                #[cfg(unix)]
+                let descendants = match child.id() {
+                    Some(pid) => descendants(pid).await,
+                    None => Vec::new(),
+                };
                 let _ = child.start_kill();
+                #[cfg(unix)]
+                for pid in descendants {
+                    unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+                }
                 (child.wait().await.ok(), true)
             }
         };

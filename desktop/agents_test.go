@@ -290,7 +290,7 @@ func TestRenderCodingAgents(t *testing.T) {
 	settle(tt)
 	renderBoth(t, tt, "coding-page-open")
 	// The user writes to the agent itself: Return sends, and the page shows the message as theirs.
-	if !tt.HasText(L("%@ takes it up once it is done with what it is doing.", "Claude Code")) {
+	if !tt.HasText(L("%@ takes it up at its next step.", "Claude Code")) {
 		t.Errorf("no line under the composer: %q", tt.Texts())
 	}
 	if err := tt.Click(L("Message %@", "Claude Code")); err != nil {
@@ -399,7 +399,7 @@ func TestTheChatPreviewNamesTheAgent(t *testing.T) {
 func TestTheAgentPagesComposer(t *testing.T) {
 	demoWindow(t)
 	page := &agentPage{loaded: true, reachable: true}
-	working := L("%@ takes it up once it is done with what it is doing.", "Codex")
+	working := L("%@ takes it up at its next step.", "Codex")
 	again := L("Sending starts %@ again on its session.", "Codex")
 	cases := []struct {
 		state   model.AgentState

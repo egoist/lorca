@@ -343,9 +343,19 @@ func (t *agentPage) send() {
 	})
 }
 
+// agentTakesUp says when an agent at work takes up a message it was sent: Claude Code, Codex,
+// and pi at their next step, OpenCode and fx once their turn is over.
+func agentTakesUp(kind string) string {
+	switch kind {
+	case "opencode", "fx":
+		return L("It takes this up once it is done with what it is doing")
+	}
+	return L("It takes this up at its next step")
+}
+
 // composerState is what the composer says for the agent as it stands: its placeholder, the line
-// under it, and whether it takes a message. One at work takes it up once it is done with what it
-// does now; one whose process is gone starts again on its session; one still starting, or one
+// under it, and whether it takes a message. One at work takes it up at its next step, or once it
+// is done with what it does now if it cannot be steered; one whose process is gone starts again on its session; one still starting, or one
 // that ended before its session began, takes none.
 func (t *agentPage) composerState(agent *model.AgentRun) (placeholder, hint string, enabled bool) {
 	name := agent.Name()
@@ -356,7 +366,10 @@ func (t *agentPage) composerState(agent *model.AgentRun) (placeholder, hint stri
 	case t.loaded && !t.reachable:
 		return placeholder, L("%@ ended before its session began, so it cannot take a message. Ask the bot to start a new one.", name), false
 	case agent.State == model.AgentWorking || agent.State == model.AgentAsking:
-		return placeholder, L("%@ takes it up once it is done with what it is doing.", name), true
+		if agent.Kind == "opencode" || agent.Kind == "fx" {
+			return placeholder, L("%@ takes it up once it is done with what it is doing.", name), true
+		}
+		return placeholder, L("%@ takes it up at its next step.", name), true
 	case agent.State == model.AgentStopped || agent.State == model.AgentFailed:
 		return placeholder, L("Sending starts %@ again on its session.", name), true
 	}
@@ -685,13 +698,17 @@ func (t *agentPage) transcript(c *ui.Context) {
 			ui.Column(c.Key(step.item.ID)).Margin(top, 0, 0, 0).MinWidth(0).Children(func() { t.step(c, step, i == 0) })
 		}
 		// What it was sent and has yet to take up, under what it does now.
+		kind := ""
+		if agent := t.agent(); agent != nil {
+			kind = agent.Kind
+		}
 		for i, queued := range t.queued {
 			top := float32(12)
 			if i == 0 && len(steps) == 0 {
 				top = 0
 			}
 			ui.Column(c.Key("queued:"+strconv.Itoa(i))).Margin(top, 0, 0, 0).MinWidth(0).Children(func() {
-				agentPromptCard(c, t.promptAuthor(queued.From), queued.Text, queued.From == "user", true, false, nil)
+				agentPromptCard(c, t.promptAuthor(queued.From), queued.Text, queued.From == "user", agentTakesUp(kind), false, nil)
 			})
 		}
 	})
@@ -747,7 +764,7 @@ func (t *agentPage) step(c *ui.Context, step agentStep, first bool) {
 			commandOutput(c, tool.Output, 12).Margin(4, 0, 2, 0)
 		}
 	case item.Kind == "prompt":
-		agentPromptCard(c, t.promptAuthor(item.From), item.Text, item.From == "user", false, open, toggle)
+		agentPromptCard(c, t.promptAuthor(item.From), item.Text, item.From == "user", "", open, toggle)
 	case item.Kind == "status":
 		ui.Text(c, item.Text).FontSize(11.5).TextColor(p.Label3).Selectable()
 	case item.Kind == "thought":
@@ -790,8 +807,8 @@ func (t *agentPage) step(c *ui.Context, step agentStep, first bool) {
 
 // agentPromptCard is what the agent was sent, under who wrote it: "You", in the accent's tint, for
 // what the user wrote on its page, else the bot that passed it on. One it has yet to take up
-// reads "Queued". A long one, as the first brief is, folds past six lines behind Show more.
-func agentPromptCard(c *ui.Context, author, text string, mine, queued, open bool, toggle func()) {
+// reads "Queued", with when it takes it up as its tooltip. A long one, as the first brief is, folds past six lines behind Show more.
+func agentPromptCard(c *ui.Context, author, text string, mine bool, queued string, open bool, toggle func()) {
 	p := colors(c)
 	long := toggle != nil && (strings.Count(text, "\n") >= 6 || len([]rune(text)) > 480)
 	card := ui.Column(c).Gap(4).Padding(9, 12, 10, 12).Radius(10).Background(p.BotBubble).Border(1, p.BotBubbleBorder)
@@ -801,8 +818,8 @@ func agentPromptCard(c *ui.Context, author, text string, mine, queued, open bool
 	card.Children(func() {
 		ui.Row(c).Gap(6).Children(func() {
 			ui.Text(c, author).FontSize(textCaption).FontWeight(600).TextColor(p.Label3)
-			if queued {
-				ui.Text(c, "· "+L("Queued")).FontSize(textCaption).TextColor(p.Label3).Tooltip(L("It takes this up once it is done with what it is doing"))
+			if queued != "" {
+				ui.Text(c, "· "+L("Queued")).FontSize(textCaption).TextColor(p.Label3).Tooltip(queued)
 			}
 		})
 		body := ui.Text(c, text).FontSize(12.5).LineHeight(1.4).Selectable()
