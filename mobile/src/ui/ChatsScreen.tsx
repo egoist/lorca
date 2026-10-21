@@ -30,7 +30,8 @@ const KEEP_OFFSET = { disabled: true };
 
 /// The chat list: the first screen of a narrow window, the sidebar of a wide one. In the sidebar
 /// a chat opens in the pane beside the list, in place of the one open there, and its row stays lit.
-export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
+/// `bar: false` leaves the bar to the screen that shows it (the phone's Bots tab; see ChatsBar).
+export function ChatsScreen({ sidebar = false, bar = true }: { sidebar?: boolean; bar?: boolean }) {
   useLanguage();
   const p = usePalette();
   const router = useRouter();
@@ -45,12 +46,6 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
   const showsHidden = useStore((s) => s.showsHidden);
   const collapsesOthers = useStore((s) => s.collapsesOthers);
   const running = useStore((s) => s.running);
-  const connecting = useConnecting();
-  const updateRequired = useStore((s) => s.relayUpdateRequired);
-  const relayError = useStore((s) => s.relayError);
-  const relayUrl = useStore((s) => s.relayUrl);
-  // The Attention button shows while something waits on the user.
-  const needsAttention = useStore((s) => s.attention.items.length > 0);
   const bots = useBotMap();
   const workingBots = useWorkingBotIds();
   const [query, setQuery] = useState("");
@@ -136,93 +131,7 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
 
   return (
     <>
-      {Platform.OS === "ios" ? (
-        <>
-          <Stack.Toolbar placement="left">
-            <Stack.Toolbar.Button icon="gearshape" accessibilityLabel={t("Settings")} onPress={() => router.push("/settings")} />
-            <Stack.Toolbar.Button hidden={!needsAttention} icon="tray.full" accessibilityLabel={t("Attention")} onPress={() => router.push("/attention")} />
-          </Stack.Toolbar>
-          <Stack.Toolbar placement="right">
-            <Stack.Toolbar.Menu icon="square.and.pencil" accessibilityLabel={t("New")}>
-              <Stack.Toolbar.MenuAction icon="person.2.fill" onPress={() => router.push("/new-group")}>
-                {t("New Group Chat")}
-              </Stack.Toolbar.MenuAction>
-              <Stack.Toolbar.MenuAction icon="person.badge.plus" onPress={() => router.push("/new-bot")}>
-                {t("New Bot")}
-              </Stack.Toolbar.MenuAction>
-              <Stack.Toolbar.MenuAction icon="square.and.arrow.down" onPress={() => router.push("/template")}>
-                {t("New Bot from Template…")}
-              </Stack.Toolbar.MenuAction>
-              <Stack.Toolbar.MenuAction icon="point.3.connected.trianglepath.dotted" onPress={() => router.push("/workflows")}>
-                {t("New Workflow")}
-              </Stack.Toolbar.MenuAction>
-              <Stack.Toolbar.MenuAction icon="folder.badge.plus" onPress={() => newSection()}>
-                {t("New Section")}
-              </Stack.Toolbar.MenuAction>
-            </Stack.Toolbar.Menu>
-          </Stack.Toolbar>
-        </>
-      ) : (
-        <>
-          <Stack.Toolbar placement="left" tintColor={p.secondaryLabel}>
-            <Stack.Toolbar.Button icon={AndroidIcons.settings} accessibilityLabel={t("Settings")} onPress={() => router.push("/settings")} />
-            <Stack.Toolbar.Button hidden={!needsAttention} icon={AndroidIcons.inbox} accessibilityLabel={t("Attention")} onPress={() => router.push("/attention")} />
-          </Stack.Toolbar>
-          <Stack.Toolbar placement="right" tintColor={p.secondaryLabel}>
-            <Stack.Toolbar.Menu icon={AndroidIcons.add} accessibilityLabel={t("New")}>
-              <Stack.Toolbar.MenuAction icon={AndroidIcons.group} onPress={() => router.push("/new-group")}>
-                {t("New Group Chat")}
-              </Stack.Toolbar.MenuAction>
-              <Stack.Toolbar.MenuAction icon={AndroidIcons.personAdd} onPress={() => router.push("/new-bot")}>
-                {t("New Bot")}
-              </Stack.Toolbar.MenuAction>
-              <Stack.Toolbar.MenuAction icon={AndroidIcons.download} onPress={() => router.push("/template")}>
-                {t("New Bot from Template…")}
-              </Stack.Toolbar.MenuAction>
-              <Stack.Toolbar.MenuAction icon={AndroidIcons.workflow} onPress={() => router.push("/workflows")}>
-                {t("New Workflow")}
-              </Stack.Toolbar.MenuAction>
-              <Stack.Toolbar.MenuAction icon={AndroidIcons.newFolder} onPress={() => newSection()}>
-                {t("New Section")}
-              </Stack.Toolbar.MenuAction>
-            </Stack.Toolbar.Menu>
-          </Stack.Toolbar>
-        </>
-      )}
-      {/* The relay status sits in the bar's title slot, so the list never moves. Once a try to
-          connect has failed it says so, and a tap shows the error. */}
-      {updateRequired ? (
-        <Stack.Title asChild>
-          <View style={styles.status} accessibilityRole="header" accessibilityLabel={t("Update Lorca to sync")}>
-            <Text style={[styles.statusText, { color: p.secondaryLabel }]} numberOfLines={1}>
-              {t("Update Lorca to sync")}
-            </Text>
-          </View>
-        </Stack.Title>
-      ) : connecting && relayError ? (
-        <Stack.Title asChild>
-          <Pressable
-            style={({ pressed }) => [styles.status, pressed && styles.statusPressed]}
-            accessibilityRole="button"
-            accessibilityLabel={problemTitle(relayError)}
-            onPress={() => showRelayProblem(relayError, relayUrl)}
-          >
-            <Symbol name="exclamationmark.triangle.fill" size={13} color={p.red} />
-            <Text style={[styles.statusText, { color: p.secondaryLabel }]} numberOfLines={1}>
-              {problemTitle(relayError)}
-            </Text>
-          </Pressable>
-        </Stack.Title>
-      ) : connecting ? (
-        <Stack.Title asChild>
-          <View style={styles.status} accessibilityRole="header" accessibilityLabel={t("Connecting…")}>
-            <ActivityIndicator size="small" color={p.secondaryLabel as any} />
-            <Text style={[styles.statusText, { color: p.secondaryLabel }]} numberOfLines={1}>
-              {t("Connecting…")}
-            </Text>
-          </View>
-        </Stack.Title>
-      ) : null}
+      {bar ? <ChatsBar /> : null}
       <View style={styles.screen}>
         <FlashList
           style={styles.list}
@@ -258,6 +167,113 @@ export function ChatsScreen({ sidebar = false }: { sidebar?: boolean }) {
 /// True once the relay has been unreachable for a moment: a launch or a quick reconnect shows
 /// nothing, and neither does the reconnect after coming back to the foreground, which replaces
 /// the socket the suspension killed and can take a few seconds on a slow network or a VPN.
+/// The chat list's bar: Settings and Attention on the left, New on the right, and the relay's
+/// status in the title slot. The list shows it in its own stack's bar; the phone's Bots tab shows
+/// it in the bar of the stack around the tabs, the one a chat slides into, so that one bar carries
+/// the list's buttons and then the chat's (TabsLayout).
+export function ChatsBar() {
+  useLanguage();
+  const p = usePalette();
+  const router = useRouter();
+  const connecting = useConnecting();
+  const updateRequired = useStore((s) => s.relayUpdateRequired);
+  const relayError = useStore((s) => s.relayError);
+  const relayUrl = useStore((s) => s.relayUrl);
+  // The Attention button shows while something waits on the user.
+  const needsAttention = useStore((s) => s.attention.items.length > 0);
+  return (
+    <>
+    {Platform.OS === "ios" ? (
+      <>
+        <Stack.Toolbar placement="left">
+          <Stack.Toolbar.Button icon="gearshape" accessibilityLabel={t("Settings")} onPress={() => router.push("/settings")} />
+          <Stack.Toolbar.Button hidden={!needsAttention} icon="tray.full" accessibilityLabel={t("Attention")} onPress={() => router.push("/attention")} />
+        </Stack.Toolbar>
+        <Stack.Toolbar placement="right">
+          <Stack.Toolbar.Menu icon="square.and.pencil" accessibilityLabel={t("New")}>
+            <Stack.Toolbar.MenuAction icon="person.2.fill" onPress={() => router.push("/new-group")}>
+              {t("New Group Chat")}
+            </Stack.Toolbar.MenuAction>
+            <Stack.Toolbar.MenuAction icon="person.badge.plus" onPress={() => router.push("/new-bot")}>
+              {t("New Bot")}
+            </Stack.Toolbar.MenuAction>
+            <Stack.Toolbar.MenuAction icon="square.and.arrow.down" onPress={() => router.push("/template")}>
+              {t("New Bot from Template…")}
+            </Stack.Toolbar.MenuAction>
+            <Stack.Toolbar.MenuAction icon="point.3.connected.trianglepath.dotted" onPress={() => router.push("/workflows")}>
+              {t("New Workflow")}
+            </Stack.Toolbar.MenuAction>
+            <Stack.Toolbar.MenuAction icon="folder.badge.plus" onPress={() => newSection()}>
+              {t("New Section")}
+            </Stack.Toolbar.MenuAction>
+          </Stack.Toolbar.Menu>
+        </Stack.Toolbar>
+      </>
+    ) : (
+      <>
+        <Stack.Toolbar placement="left" tintColor={p.secondaryLabel}>
+          <Stack.Toolbar.Button icon={AndroidIcons.settings} accessibilityLabel={t("Settings")} onPress={() => router.push("/settings")} />
+          <Stack.Toolbar.Button hidden={!needsAttention} icon={AndroidIcons.inbox} accessibilityLabel={t("Attention")} onPress={() => router.push("/attention")} />
+        </Stack.Toolbar>
+        <Stack.Toolbar placement="right" tintColor={p.secondaryLabel}>
+          <Stack.Toolbar.Menu icon={AndroidIcons.add} accessibilityLabel={t("New")}>
+            <Stack.Toolbar.MenuAction icon={AndroidIcons.group} onPress={() => router.push("/new-group")}>
+              {t("New Group Chat")}
+            </Stack.Toolbar.MenuAction>
+            <Stack.Toolbar.MenuAction icon={AndroidIcons.personAdd} onPress={() => router.push("/new-bot")}>
+              {t("New Bot")}
+            </Stack.Toolbar.MenuAction>
+            <Stack.Toolbar.MenuAction icon={AndroidIcons.download} onPress={() => router.push("/template")}>
+              {t("New Bot from Template…")}
+            </Stack.Toolbar.MenuAction>
+            <Stack.Toolbar.MenuAction icon={AndroidIcons.workflow} onPress={() => router.push("/workflows")}>
+              {t("New Workflow")}
+            </Stack.Toolbar.MenuAction>
+            <Stack.Toolbar.MenuAction icon={AndroidIcons.newFolder} onPress={() => newSection()}>
+              {t("New Section")}
+            </Stack.Toolbar.MenuAction>
+          </Stack.Toolbar.Menu>
+        </Stack.Toolbar>
+      </>
+    )}
+    {/* The relay status sits in the bar's title slot, so the list never moves. Once a try to
+        connect has failed it says so, and a tap shows the error. */}
+    {updateRequired ? (
+      <Stack.Title asChild>
+        <View style={styles.status} accessibilityRole="header" accessibilityLabel={t("Update Lorca to sync")}>
+          <Text style={[styles.statusText, { color: p.secondaryLabel }]} numberOfLines={1}>
+            {t("Update Lorca to sync")}
+          </Text>
+        </View>
+      </Stack.Title>
+    ) : connecting && relayError ? (
+      <Stack.Title asChild>
+        <Pressable
+          style={({ pressed }) => [styles.status, pressed && styles.statusPressed]}
+          accessibilityRole="button"
+          accessibilityLabel={problemTitle(relayError)}
+          onPress={() => showRelayProblem(relayError, relayUrl)}
+        >
+          <Symbol name="exclamationmark.triangle.fill" size={13} color={p.red} />
+          <Text style={[styles.statusText, { color: p.secondaryLabel }]} numberOfLines={1}>
+            {problemTitle(relayError)}
+          </Text>
+        </Pressable>
+      </Stack.Title>
+    ) : connecting ? (
+      <Stack.Title asChild>
+        <View style={styles.status} accessibilityRole="header" accessibilityLabel={t("Connecting…")}>
+          <ActivityIndicator size="small" color={p.secondaryLabel as any} />
+          <Text style={[styles.statusText, { color: p.secondaryLabel }]} numberOfLines={1}>
+            {t("Connecting…")}
+          </Text>
+        </View>
+      </Stack.Title>
+    ) : null}
+    </>
+  );
+}
+
 function useConnecting(): boolean {
   const relayConnected = useStore((s) => s.relayConnected);
   const activeSince = useStore((s) => s.activeSince);

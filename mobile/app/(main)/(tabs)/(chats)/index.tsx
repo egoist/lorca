@@ -1,5 +1,5 @@
 import { Stack } from "expo-router";
-import { StyleSheet, Text, View } from "react-native";
+import { Platform, StyleSheet, Text, View } from "react-native";
 import { t, useLanguage } from "../../../../src/i18n";
 import { ChatsScreen } from "../../../../src/ui/ChatsScreen";
 import { useWide } from "../../../../src/ui/layout";
@@ -10,7 +10,7 @@ import { usePalette } from "../../../../src/ui/theme";
 export default function IndexScreen() {
   useLanguage();
   const p = usePalette();
-  if (!useWide()) return <ChatsScreen />;
+  if (!useWide()) return <ChatsScreen bar={Platform.OS !== "ios"} />;
   return (
     <View style={styles.empty}>
       <Stack.Screen options={{ headerShown: false }} />
