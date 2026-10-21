@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
@@ -55,9 +54,8 @@ func listedAgentDetail(agent *model.AgentRun) string {
 }
 
 // codingAgentsButton is the account's coding agents in the header: shown while one is live, or
-// while the flyout is open, with how many are live as a badge.
+// while the flyout is open. It carries no badge, which would read as unread messages.
 func (m *mainWindow) codingAgentsButton(c *ui.Context) {
-	p := colors(c)
 	s := &m.coding
 	count := store.LiveAgents(model.Now())
 	if count == 0 && !s.open {
@@ -67,11 +65,6 @@ func (m *mainWindow) codingAgentsButton(c *ui.Context) {
 	var button ui.Element
 	holder.Children(func() {
 		button = hoverButton(c, hoverButtonOptions{Symbol: "chevron.left.forwardslash.chevron.right", Tooltip: L("Coding agents"), Label: L("Coding agents (%d)", count), Active: s.open})
-		if count > 0 {
-			ui.Row(c).Absolute().Top(-2).Right(-4).MinWidth(15).Height(15).Padding(0, 4).Radius(8).Justify(ui.Center).Background(p.Accent).PassThrough().Children(func() {
-				ui.Text(c, fmt.Sprint(count)).FontSize(10).FontWeight(600).TextColor(p.White).FontFeatures("tnum")
-			})
-		}
 	})
 	if button.Clicked() {
 		if s.open {
