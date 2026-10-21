@@ -42,6 +42,9 @@ func notificationFor(message *model.Message) *chatNotification {
 	case body.Kind == model.BodyPermission && body.Request.IsPending() && body.Request.IsSecret():
 		base.kind, base.body = notifyPermission, L("Asks for %@", body.Request.Summary)
 		return &base
+	case body.Kind == model.BodyPermission && body.Request.IsPending() && body.Request.IsQuestion():
+		base.kind, base.body = notifyPermission, L("Asks: %@", body.Request.Summary)
+		return &base
 	case body.Kind == model.BodyPermission && body.Request.IsPending() && !body.Request.IsAccess():
 		base.kind, base.body = notifyPermission, L("Confirmation needed: %@", body.Request.Summary)
 		return &base
@@ -49,8 +52,9 @@ func notificationFor(message *model.Message) *chatNotification {
 		base.kind, base.body = notifyPermission, L("Confirmation needed: %@", "$ "+model.FirstLine(body.Tool.Run.Command))
 		return &base
 	// A coding agent's report is to the user, who reviews its work: it alerts as a reply does. Why
-	// one ended on its own is its bot's to tell.
-	case body.Kind == model.BodyAgentMessage && body.AgentMessage != nil && !body.AgentMessage.Failed:
+	// one ended on its own is its bot's to tell. A bot's own sub agent reports to the bot, whose
+	// reply alerts.
+	case body.Kind == model.BodyAgentMessage && body.AgentMessage != nil && !body.AgentMessage.Failed && body.AgentMessage.AgentKind != "lorca":
 		title := firstNonEmpty(body.AgentMessage.Title, model.CodingAgentName(body.AgentMessage.AgentKind))
 		base.kind, base.body = notifyReply, L("Message from %@: %@", title, body.AgentMessage.Text)
 		return &base

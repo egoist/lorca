@@ -285,9 +285,12 @@ func (m *mainWindow) chatRowView(c *ui.Context, chat *model.Chat, row chatRow, s
 		case model.BodyNotice:
 			noticeCell(c, body.Text, row.groupStart)
 		case model.BodyPermission:
-			if body.Request.IsSecret() {
+			switch {
+			case body.Request.IsQuestion():
+				m.questionCard(c, chat, message, cardAvatar, row.groupStart)
+			case body.Request.IsSecret():
 				m.secretCard(c, chat, message, cardAvatar, row.groupStart)
-			} else {
+			default:
 				m.permissionCard(c, chat, message, cardAvatar, row.groupStart)
 			}
 		case model.BodyDraft:

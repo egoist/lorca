@@ -6,6 +6,11 @@ and the update window shows it.
 
 ## [Unreleased]
 
+- A coding agent's questions come as a card in the chat: pick an option, check several, or write
+  your own answer, then Submit, or Skip.
+- A bot's own subagents show with Lorca's mark, and their reports to the bot don't notify; the
+  bot's reply does.
+
 ## [0.1.18]
 
 - The app draws what changed, not the whole window: windows repaint only what changed, layout

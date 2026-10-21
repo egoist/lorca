@@ -358,6 +358,12 @@ func TestAnAgentNotifiesWhenItAsksAndWhenItReports(t *testing.T) {
 	if notificationFor(report) != nil {
 		t.Error("an agent that ended on its own notifies")
 	}
+	// A bot's own sub agent reports to the bot, whose reply notifies.
+	sub := &model.Message{Author: card.Author, Body: model.Body{Kind: model.BodyAgentMessage,
+		AgentMessage: &model.AgentMessage{AgentKind: "lorca", Title: "Survey the docs", Text: "Found three broken links."}}}
+	if notification := notificationFor(sub); notification != nil {
+		t.Errorf("a sub agent's report notifies: %+v", notification)
+	}
 	// What the user wrote to an agent on its page is their own.
 	mine := &model.Message{Author: model.You, Body: model.Body{Kind: model.BodyAgentMessage,
 		AgentMessage: &model.AgentMessage{AgentKind: "claude", Title: "Login", Text: "Use the staging key"}}}

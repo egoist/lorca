@@ -1848,6 +1848,30 @@ func (s *Store) AnswerPermission(chatID, messageID, decision string) {
 	s.perform("chats.permission", map[string]any{"chat_id": chatID, "message_id": messageID, "decision": decision})
 }
 
+// AnswerQuestion answers a coding agent's question card with the user's answer to each question,
+// by question id: an option's label, several joined with ", ", or the user's own words. The card
+// shows them once the CLI took them; Skip is AnswerPermission's `deny`. Fails with why they did
+// not go, such as an empty answer.
+func (s *Store) AnswerQuestion(chatID, messageID string, answers map[string]string, done func(error)) {
+	answers = maps.Clone(answers)
+	answered := func(err error) {
+		if err == nil {
+			s.Update(messageID, chatID, func(message *Message) {
+				if message.Body.Kind != BodyPermission || !message.Body.Request.IsQuestion() || !message.Body.Request.IsPending() {
+					return
+				}
+				request := *message.Body.Request
+				question := *request.Question
+				question.Answers = answers
+				request.Question, request.Decision = &question, DecisionAllowed
+				message.Body.Request = &request
+			})
+		}
+		done(err)
+	}
+	s.simple(answered, "chats.permission", map[string]any{"chat_id": chatID, "message_id": messageID, "decision": "allow", "answers": answers})
+}
+
 // MARK: - Coding agents
 
 // StopAgent stops a coding agent, here or on its bot's Runner; its row says so once the Runner has.

@@ -37,7 +37,7 @@ Identity is a **key pair**. Devices pair. The relay stores public keys and ciphe
 - **CLI:** identity and machine keys, local websocket, encrypt/decrypt, agent loop, the account’s provider credentials, sync with the relay.
 - **Relay:** store-and-forward API. Rust, axum, SQLite or Postgres (`crates/relay`). Self-host it anywhere; clients point `LORCA_RELAY_URL` at it.
 
-Production installs are named **Lorca** and use `app.lorca`; development installs are named **Lorca Dev** and use `app.lorca.dev`. They are separate applications on macOS, Windows, Linux, iOS, and Android. The production CLI stores its account under `~/.lorca` and listens on `4862`, while the desktop-app development build sets `LORCA_HOME=~/.lorca-dev` and listens on `4863`. On phones the distinct application ids give each build its own OS sandbox, and the core uses `lorca/core` or `lorca-dev/core` inside that sandbox. Their iOS keychain groups are `group.app.lorca` and `group.app.lorca.dev`.
+Production installs are **Lorca** (`app.lorca`, `~/.lorca`, port `4862`) and development installs **Lorca Dev** (`app.lorca.dev`, `~/.lorca-dev`, port `4863`), separate applications on every platform: [Production and development installs](docs/architecture/development.md#production-and-development-installs).
 
 If the CLI is down, the app shows a native empty state with the launcher’s status and the manual `lorca serve` command.
 
@@ -87,7 +87,9 @@ One doc per subject under `docs/architecture/`, each short enough to read in one
 | [Outputs and evidence](docs/architecture/outputs.md) | Bot-generated files and document links, immutable versions, task evidence references, encrypted transport and native previews |
 | [Stop](docs/architecture/stopping.md) | What Stop ends: the turn's model call and tool calls, a call that never returns, commands and browser calls, the work it handed off on any Runner; what keeps running |
 | [Terminal sessions](docs/architecture/terminal-sessions.md) | A bot's commands in terminals of their own: when a call returns, background commands, the command's card, answering and stopping, Running tasks |
-| [Coding agents](docs/architecture/coding-agents.md) | Claude Code, Codex, OpenCode, pi, or fx a bot runs on its Runner: which one, its folder, protocols, secrets, review, transcript steps, pull request state, its message and the bot's wake-up, the apps |
+| [Coding agents](docs/architecture/coding-agents.md) | Claude Code, Codex, OpenCode, pi, or fx on a bot's Runner: which one, its folder, protocols, secrets, review, transcript, pull request state, its report and the bot's wake-up, the apps |
+| [The user and an agent](docs/architecture/agent-messages.md) | What the user writes an agent on its page, and its questions to the user on a card |
+| [Subagents](docs/architecture/subagents.md) | The bot's own agent loop on a task: starting one, how it runs, its report to the bot |
 | [Coding agent roster](docs/architecture/agent-roster.md) | Every coding agent on the account, listed on each Device from its own store: for the bot, a start beside another agent, and the apps |
 | [Secret requests](docs/architecture/secrets.md) | A password, key, or code a bot asks for on a card: sealed to its Runner, kept there, filled into Browser on its site or a command's environment by name, kept out of results and chats; managing a Runner's secrets |
 | [Browser sessions](docs/architecture/browser-sessions.md) | A bot's browser profiles on its Runner: their sign-ins, opening one in a window, taking the browser over and handing it back, recording a workflow and running it as a skill's steps, screenshots in the chat, what works from another Device, the Profiles section |

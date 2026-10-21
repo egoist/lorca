@@ -9,7 +9,7 @@ A Device asks a Runner for work on that Runner through the relay: a question goe
 - `budgets.*` and `connector_limits.*`, so a bot's limits and call limits are set from any Device.
 - `plugins.install` / `plugins.rename` / `plugins.uninstall` / `plugins.variables` / `plugins.connect` / `plugins.sign_out` / `plugins.detail`, so plugins on a Runner are managed from any Device, and `plugins.sign_in.finish` / `plugins.sign_in.cancel`, with which the Device that asked for a sign-in (its `redirect_uri` on `plugins.connect` or `permission.answer`) hands back where its browser landed (see Sign-in in [Codemode and Plugins](plugins.md#plugins)).
 - The `mcp.*` methods but `mcp.parse`, so a Runner's own MCP servers are managed from any Device.
-- `permissions.catalog`, so a bot's Access sheet lists its Runner's plugins and their tools; `permission.answer`, so a permission card is answered from any Device and a secret request's values reach its Runner as ciphertext.
+- `permissions.catalog`, so a bot's Access sheet lists its Runner's plugins and their tools; `permission.answer`, so a permission card is answered from any Device and a secret request's values, or an agent question's answers, reach its Runner as ciphertext.
 - `bash.stdin`, `bash.stop`, and `bash.background`, so a command a bot runs is answered, stopped, or sent to the background from any Device.
 - `coding.transcript`, `coding.send`, and `coding.stop`, so a coding agent is read, written to, and stopped from any Device; `coding.agents` and `.set`, so a Runner's coding agents are ordered from any Device.
 - `secrets.list`, `secrets.set`, and `secrets.delete`, so a Runner's secrets are listed without their values, replaced, or deleted from any Device.

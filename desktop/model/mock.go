@@ -527,7 +527,19 @@ func developerThread() []*Message {
 			},
 		}}, minutesAgo(5)),
 		mockMessage(BotAuthor("bot-patch"), textBody("I asked Claude Code to fix the Chinese page too. Codex is adding the dark mode toggle on a branch of its own."), minutesAgo(5)),
-		// What the asking agent asks: a card of its own at the end of the chat.
+		// What the asking agent asks: a card of its own at the end of the chat, a question to the
+		// user, and a command to allow.
+		mockMessage(BotAuthor("bot-patch"), Body{Kind: BodyPermission, Request: &PermissionRequest{
+			PluginID: "coding_agent", PluginName: "Codex", Tool: "question", Summary: "Where should the dark mode toggle go?", Decision: DecisionPending,
+			Reason: "Codex, the coding agent on “Settings: add a dark mode toggle”, asks you.",
+			Question: &QuestionAsk{Questions: []Question{{
+				ID: "Where should the dark mode toggle go?", Header: "Placement", Text: "Where should the dark mode toggle go?",
+				Options: []QuestionOption{
+					{Label: "After Appearance", Description: "Beside the other look settings"},
+					{Label: "In the header", Description: "One click from every page"},
+				},
+			}}},
+		}}, minutesAgo(3)),
 		mockMessage(BotAuthor("bot-patch"), Body{Kind: BodyPermission, Request: &PermissionRequest{
 			PluginID: "computer", PluginName: "Studio", Tool: "bash", Summary: "$ git push -u origin dark-mode-toggle", Command: "git push -u origin dark-mode-toggle",
 			Reason: "Codex, the coding agent on “Settings: add a dark mode toggle”, asks to run this. Pushing sends the branch to GitHub, where others can see it.",

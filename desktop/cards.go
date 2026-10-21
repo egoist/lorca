@@ -315,6 +315,190 @@ func (m *mainWindow) secretCard(c *ui.Context, chat *model.Chat, message *model.
 	})
 }
 
+// MARK: - The question card
+
+// questionCaption is the line under a question card's title: why, while it asks; how it ended and
+// what was asked, once skipped, expired, or dismissed. An answered card shows its answers instead.
+func questionCaption(request *model.PermissionRequest) string {
+	switch {
+	case request.IsPending():
+		return request.Reason
+	case request.Decision == model.DecisionAllowed:
+		return ""
+	}
+	return request.DecisionText() + " · " + request.Summary
+}
+
+// questionCardState is a question card's own, by question: the option picked, the options
+// checked, and the user's own words; then an answer under way and why one failed.
+type questionCardState struct {
+	picked  []int
+	checked [][]bool
+	other   []string
+	busy    bool
+	err     string
+}
+
+// answer is the user's answer to question i: the option picked or its own words, or for several
+// options the ones checked and its own words, joined with ", ". Empty while there is none.
+func (st *questionCardState) answer(i int, question model.Question) string {
+	other := strings.TrimSpace(st.other[i])
+	if !question.MultiSelect {
+		if picked := st.picked[i]; picked >= 0 && picked < len(question.Options) {
+			return question.Options[picked].Label
+		}
+		return other
+	}
+	var parts []string
+	for j, option := range question.Options {
+		if st.checked[i][j] {
+			parts = append(parts, option.Label)
+		}
+	}
+	if other != "" {
+		parts = append(parts, other)
+	}
+	return strings.Join(parts, ", ")
+}
+
+// questionCard is a coding agent asking the user, as its bot passes the question on: who asks and
+// why, then each question under its header with its options, one to pick or several to check,
+// each with what it means, and a field for the user's own words; Submit once each has an answer,
+// and Skip. Once answered, each question with its answer; else how it ended.
+func (m *mainWindow) questionCard(c *ui.Context, chat *model.Chat, message *model.Message, cardAvatar *avatarContent, groupStart bool) {
+	p := colors(c)
+	request := message.Body.Request
+	questions := request.Question.Questions
+	chatID, messageID := chat.ID, message.ID
+	holder := ui.Box(c.Key("question:" + message.ID))
+	st := ui.Local(holder, "card", func() questionCardState { return questionCardState{} })
+	if len(st.picked) != len(questions) {
+		st.picked, st.checked, st.other = make([]int, len(questions)), make([][]bool, len(questions)), make([]string, len(questions))
+		for i, question := range questions {
+			st.picked[i], st.checked[i] = -1, make([]bool, len(question.Options))
+		}
+	}
+	answers := map[string]string{}
+	for i, question := range questions {
+		if answer := st.answer(i, question); answer != "" {
+			answers[question.ID] = answer
+		}
+	}
+	complete := len(questions) > 0 && len(answers) == len(questions)
+	submit := func() {
+		if st.busy || !complete {
+			return
+		}
+		st.busy, st.err = true, ""
+		store.AnswerQuestion(chatID, messageID, answers, func(err error) {
+			st.busy = false
+			if err != nil {
+				st.err = model.ErrorText(err)
+			}
+		})
+	}
+	title := botName(message) + " " + request.VerbPhrase()
+	caption := questionCaption(request)
+	tint := p.Accent
+	if !request.IsPending() {
+		tint = p.Label2
+	}
+	holder.Children(func() {
+		cardFrame(c, cardAvatar, groupStart, title+": "+firstNonEmpty(caption, request.Summary), func() {
+			ui.Row(c).Size(18, 18).Center().TextColor(tint).Children(func() { symbol(c, "questionmark.circle", 17, 1.9) })
+			ui.Column(c).Grow(1).Shrink(1).MinWidth(0).Children(func() {
+				ui.Text(c, title).FontSize(12.5).FontWeight(600).FixedLineHeight(17).SingleLine().Tooltip(title)
+				if caption != "" {
+					ui.Text(c, caption).Margin(2, 0, 0, 0).FontSize(11.5).LineHeight(1.35).TextColor(p.Label2).MaxLines(4)
+				}
+				if !request.IsPending() {
+					if request.Decision != model.DecisionAllowed {
+						return
+					}
+					for _, question := range questions {
+						ui.Column(c.Key(question.ID)).Margin(9, 0, 0, 0).Children(func() {
+							if question.Header != "" {
+								ui.Text(c, question.Header).FontSize(11).TextColor(p.Label2).SingleLine()
+							}
+							ui.Text(c, question.Text).FontSize(12.5).LineHeight(1.35).Selectable()
+							if answer := request.Question.Answers[question.ID]; answer != "" {
+								ui.Text(c, L("Answered: %@", answer)).Margin(2, 0, 0, 0).FontSize(11.5).LineHeight(1.35).TextColor(p.Label2).Selectable()
+							}
+						})
+					}
+					return
+				}
+				for i, question := range questions {
+					ui.Column(c.Key(question.ID)).Margin(10, 0, 0, 0).Children(func() {
+						if question.Header != "" {
+							ui.Text(c, question.Header).FontSize(11).TextColor(p.Label2).SingleLine()
+						}
+						ui.Text(c, question.Text).FontSize(12.5).LineHeight(1.35)
+						option := func(j int, description string, control func() ui.Element) {
+							ui.Column(c.Key(fmt.Sprintf("option-%d", j))).Children(func() {
+								control().Gap(7).FontSize(12.5).Disabled(st.busy)
+								if description != "" {
+									ui.Text(c, description).Margin(0, 0, 0, 23).FontSize(11).LineHeight(1.35).TextColor(p.Label2)
+								}
+							})
+						}
+						if len(question.Options) > 0 {
+							list := func() {
+								for j, each := range question.Options {
+									option(j, each.Description, func() ui.Element {
+										if question.MultiSelect {
+											return ui.Checkbox(c, &st.checked[i][j], each.Label)
+										}
+										radio := ui.Radio(c, &st.picked[i], j, each.Label)
+										if radio.Changed() {
+											// An option picked takes the place of the user's own words.
+											st.other[i], st.err = "", ""
+										}
+										return radio
+									})
+								}
+							}
+							if question.MultiSelect {
+								ui.Column(c).Gap(6).Margin(7, 0, 0, 0).Label(question.Text).Children(list)
+							} else {
+								ui.RadioGroup(c, list).Gap(6).Margin(7, 0, 0, 0).Label(question.Text)
+							}
+						}
+						placeholder := L("Other")
+						if len(question.Options) == 0 {
+							placeholder = L("Type your answer")
+						}
+						ui.Row(c).Margin(7, 0, 0, 0).Children(func() {
+							input := textField(c, &st.other[i], fieldOptions{Placeholder: placeholder, Label: placeholder, Disabled: st.busy}).Grow(1).Shrink(1).MinWidth(0)
+							if input.Changed() {
+								st.err = ""
+								// The user's own words take the place of the option picked.
+								if !question.MultiSelect && strings.TrimSpace(st.other[i]) != "" {
+									st.picked[i] = -1
+								}
+							}
+							if input.Submitted() {
+								submit()
+							}
+						})
+					})
+				}
+				ui.Row(c).Gap(6).Margin(10, 0, 0, 0).Children(func() {
+					if pushButton(c.Key("submit"), L("Submit"), pushOptions{Small: true, Disabled: st.busy || !complete}).Clicked() {
+						submit()
+					}
+					if pushButton(c.Key("skip"), L("Skip"), pushOptions{Small: true, Disabled: st.busy}).Clicked() {
+						store.AnswerPermission(chatID, messageID, "deny")
+					}
+				})
+				if st.err != "" {
+					ui.Text(c, st.err).Margin(7, 0, 0, 0).FontSize(11).LineHeight(1.35).TextColor(p.Red).MaxLines(3).Tooltip(st.err)
+				}
+			})
+		})
+	})
+}
+
 // MARK: - The command card
 
 // commandTitle is "Chef wants to run a command on Workbench", "Chef's command is running", or

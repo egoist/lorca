@@ -2,7 +2,9 @@ package model
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -59,6 +61,55 @@ func TestAccessRequestOnlyOpensAccessOrIsDismissed(t *testing.T) {
 	messages := store.Chat("chat-nova").Messages
 	if messages[len(messages)-1].Body.Request.Decision != DecisionDismissed {
 		t.Fatal("Dismiss should dismiss the request")
+	}
+}
+
+func TestAnswerQuestionSendsAnswersByQuestion(t *testing.T) {
+	posts := make(chan func(), 4)
+	requests := make(chan map[string]any, 4)
+	transport := templateTransport{request: func(method string, params any) (json.RawMessage, error) {
+		data, _ := json.Marshal(params)
+		var payload map[string]any
+		_ = json.Unmarshal(data, &payload)
+		payload["method"] = method
+		requests <- payload
+		return json.RawMessage(`{}`), nil
+	}}
+	store := NewStore(transport, func(fn func()) { posts <- fn }, false)
+	store.Chats = []*Chat{{ID: "chat-1", Messages: []*Message{{ID: "ask", Author: BotAuthor("bot-1"), Body: Body{Kind: BodyPermission, Request: &PermissionRequest{
+		PluginID: "coding_agent", PluginName: "Claude Code", Tool: "question", Summary: "Which database?", Decision: DecisionPending,
+		Question: &QuestionAsk{Questions: []Question{{ID: "Which database?", Text: "Which database?"}}},
+	}}}}}}
+	answers := map[string]string{"Which database?": "SQLite"}
+	var answered error = errors.New("not yet")
+	store.AnswerQuestion("chat-1", "ask", answers, func(err error) { answered = err })
+	answers["Which database?"] = "later edit"
+	templatePosted(t, posts)()
+	payload := <-requests
+	want := map[string]any{"method": "chats.permission", "chat_id": "chat-1", "message_id": "ask", "decision": "allow", "answers": map[string]any{"Which database?": "SQLite"}}
+	if !reflect.DeepEqual(payload, want) {
+		t.Fatalf("payload %+v", payload)
+	}
+	if answered != nil {
+		t.Fatalf("answer failed: %v", answered)
+	}
+	request := store.Chat("chat-1").Messages[0].Body.Request
+	if request.Decision != DecisionAllowed || request.Question.Answers["Which database?"] != "SQLite" || request.DecisionText() != L("Answered") {
+		t.Fatalf("the card did not take the answer: %+v", request)
+	}
+}
+
+func TestQuestionWording(t *testing.T) {
+	request := &PermissionRequest{PluginID: "computer", Tool: "question", Question: &QuestionAsk{}, Decision: DecisionDenied}
+	if request.IsShell() || request.DecisionText() != L("Skipped") {
+		t.Fatal("a question reads as a shell card")
+	}
+	request.Decision = DecisionExpired
+	if request.DecisionText() != L("Expired") {
+		t.Fatal("expired question")
+	}
+	if CodingAgentName("lorca") != L("Subagent") || slices.Contains(CodingAgentKinds, "lorca") {
+		t.Fatal("a sub agent is not a coding agent to pick")
 	}
 }
 

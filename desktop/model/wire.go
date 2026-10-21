@@ -260,6 +260,7 @@ type WireBody struct {
 	Note          *string          `json:"note"`
 	Direct        *bool            `json:"direct"`
 	Secret        *WireSecretAsk   `json:"secret"`
+	Question      *WireQuestionAsk `json:"question"`
 	ReplyTo       *struct {
 		MessageID string     `json:"message_id"`
 		Author    WireAuthor `json:"author"`
@@ -275,6 +276,21 @@ type WireSecretAsk struct {
 		Name  string `json:"name"`
 		Label string `json:"label"`
 	} `json:"fields"`
+}
+
+// WireQuestionAsk is a coding agent's questions to the user, in the CLI's shape.
+type WireQuestionAsk struct {
+	Questions []struct {
+		ID       string `json:"id"`
+		Header   string `json:"header"`
+		Question string `json:"question"`
+		Options  []struct {
+			Label       string `json:"label"`
+			Description string `json:"description"`
+		} `json:"options"`
+		MultiSelect bool `json:"multi_select"`
+	} `json:"questions"`
+	Answers map[string]string `json:"answers"`
 }
 
 // WireSecret is one of a Runner's secrets, as `secrets.list` answers it.
@@ -964,6 +980,7 @@ func ToMessage(wire WireMessage) *Message {
 			HasRule:    body.Rule != nil,
 			Command:    str(body.Command),
 			Secret:     secretAsk(body.Secret),
+			Question:   questionAsk(body.Question),
 		}}
 	case "draft":
 		card := &DraftCard{ReviewID: str(body.ReviewID), State: str(body.State), PluginID: str(body.PluginID),
@@ -1316,6 +1333,21 @@ func ToBotMemory(wire WireBotMemory) BotMemory {
 		memory.MaxLines, memory.MaxBytes = index.MaxLines, index.MaxBytes
 	}
 	return memory
+}
+
+func questionAsk(wire *WireQuestionAsk) *QuestionAsk {
+	if wire == nil {
+		return nil
+	}
+	ask := &QuestionAsk{Answers: wire.Answers}
+	for _, each := range wire.Questions {
+		question := Question{ID: each.ID, Header: each.Header, Text: each.Question, MultiSelect: each.MultiSelect}
+		for _, option := range each.Options {
+			question.Options = append(question.Options, QuestionOption{Label: option.Label, Description: option.Description})
+		}
+		ask.Questions = append(ask.Questions, question)
+	}
+	return ask
 }
 
 func secretAsk(wire *WireSecretAsk) *SecretAsk {

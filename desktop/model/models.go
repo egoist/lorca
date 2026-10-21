@@ -1082,6 +1082,31 @@ type PermissionRequest struct {
 	// Secret is a secret request: what the bot asks for and where its Runner uses it. The card
 	// takes the values; they go sealed to the Runner and never come back.
 	Secret *SecretAsk
+	// Question is a coding agent asking the user: its questions, and the answers once given.
+	Question *QuestionAsk
+}
+
+// QuestionAsk is what a coding agent asks the user on a card: one to four questions, and the
+// answers by question id once the user answered.
+type QuestionAsk struct {
+	Questions []Question
+	Answers   map[string]string
+}
+
+// Question is one question a coding agent asks: a short header ("Database"), the question, and
+// the options to pick from, none when it takes the user's own words.
+type Question struct {
+	ID          string
+	Header      string
+	Text        string
+	Options     []QuestionOption
+	MultiSelect bool
+}
+
+// QuestionOption is one answer a question offers, and what picking it means.
+type QuestionOption struct {
+	Label       string
+	Description string
 }
 
 // SecretUse is where a secret goes.
@@ -1126,6 +1151,9 @@ type SavedSecret struct {
 // IsSecret is a secret request: the card holds a field for each value.
 func (r *PermissionRequest) IsSecret() bool { return r.Tool == "secret" && r.Secret != nil }
 
+// IsQuestion is a coding agent asking the user: the card holds its questions and their options.
+func (r *PermissionRequest) IsQuestion() bool { return r.Tool == "question" && r.Question != nil }
+
 // FullCommand is the command as the card and its sheet show it, without the summary's `$ ` prompt.
 func (r *PermissionRequest) FullCommand() string {
 	if r.Command != "" {
@@ -1167,7 +1195,9 @@ func (r *PermissionRequest) ShownReason() string {
 }
 
 // IsShell is a shell command on the bot's Runner.
-func (r *PermissionRequest) IsShell() bool { return r.PluginID == "computer" && !r.IsAccess() }
+func (r *PermissionRequest) IsShell() bool {
+	return r.PluginID == "computer" && !r.IsAccess() && !r.IsQuestion()
+}
 
 // IsConnect is a sign-in card: Sign in starts the OAuth flow on the Runner.
 func (r *PermissionRequest) IsConnect() bool { return r.Tool == "connect" }
@@ -1178,6 +1208,8 @@ func (r *PermissionRequest) VerbPhrase() string {
 	switch {
 	case r.IsAccess():
 		return L("needs more access")
+	case r.IsQuestion():
+		return L("has a question from %@", r.PluginName)
 	case r.IsSecret():
 		switch r.Secret.Use {
 		case SecretBrowser:
@@ -1201,6 +1233,9 @@ func (r *PermissionRequest) DecisionText() string {
 	case DecisionPending:
 		return L("Waiting for you")
 	case DecisionAllowed:
+		if r.IsQuestion() {
+			return L("Answered")
+		}
 		if r.IsSecret() {
 			return L("Saved")
 		}
@@ -1211,11 +1246,17 @@ func (r *PermissionRequest) DecisionText() string {
 	case DecisionAlways:
 		return L("Always allowed")
 	case DecisionDenied:
+		if r.IsQuestion() {
+			return L("Skipped")
+		}
 		if r.IsConnect() || r.IsSecret() {
 			return L("Not now")
 		}
 		return L("Denied")
 	case DecisionExpired:
+		if r.IsQuestion() {
+			return L("Expired")
+		}
 		return L("No answer in time")
 	case DecisionDismissed:
 		return L("Dismissed")
@@ -1619,9 +1660,12 @@ const (
 // CodingAgentKinds are the coding agents a bot can run, in the account's default order.
 var CodingAgentKinds = []string{"claude", "codex", "opencode", "pi", "fx"}
 
-// CodingAgentName is a coding agent's product name, which is not translated.
+// CodingAgentName is a coding agent's product name, which is not translated, or for `lorca`, a
+// bot's own sub agent, the word for one.
 func CodingAgentName(kind string) string {
 	switch kind {
+	case "lorca":
+		return L("Subagent")
 	case "codex":
 		return "Codex"
 	case "opencode":
@@ -1657,7 +1701,8 @@ const (
 type AgentRun struct {
 	// ID is the bot's handle for it, empty until it started (and for good when the start failed).
 	ID string
-	// Kind is `claude`, `codex`, `opencode`, or `pi`; empty before the start picked one.
+	// Kind is `claude`, `codex`, `opencode`, `pi`, `fx`, or `lorca` for the bot's own sub agent;
+	// empty before the start picked one.
 	Kind        string
 	Title       string
 	Task        string
