@@ -41,14 +41,19 @@ about the job earlier in the chat, in their words too. Add nothing of your own: 
 the fix, scope, way to build or check it, commands to run, or branch or worktree to use. The agent decides all of that, where in \
 the folder it works and whether on a branch of its own included, and it pushes its work, opens a pull request, and ends with a \
 report for the user: what it did, the commands it ran with their output, and the pull request's link. `start` returns the agent's \
-id at once: tell the user you started it and end your turn. Do not check on it or review its work. When it is done, its report \
-lands in the chat as its message to the user and you get a turn to relay it: its conclusion, its pull request, and the commands it \
-ran with their output, without checking its code, building, testing, judging its work, or sending it anything. When it ends on its \
-own, you get a turn to tell the user. `send` gives it `message`, which is what the user tells it, in their words, taken up once it \
-is done with what it does now, or at once with `interrupt: true`, which stops that first; an agent whose process stopped starts again on its session. The user \
-may also write to an agent on its page; you read that in the chat as \"[The user wrote to … directly]\", and the agent has it already, \
-so do not pass it on again. `read` \
-shows its transcript since you last read it (or its last `lines`), for when the user asks how it stands. `stop` ends it. `list` \
+id at once and the agent works in the background: tell the user you started it and end your turn. You will be notified when it \
+is done: a turn on its own, whose \"<agent-notification>\" carries its status and its report. A turn of the agent that ends while \
+it still waits on work of its own in the background (a command watching CI, a subagent) is not done; you hear only once it is. \
+Until then you know nothing of its results: do not report, assume, or predict them, do not poll it or wait on it, and when the user \
+asks how it goes, say it is still working, with where it is from `read`. Its report also lands in the chat as its message to the \
+user; in your turn for it, relay it: its conclusion, its pull request, and the commands it ran with their output, without checking \
+its code, building, testing, judging its work, or sending it anything. When it ends on its own, you get a turn to tell the user. \
+`send` gives it `message`, which is what the user tells it, in their words; it keeps its whole context and takes the message up at \
+its next step, or at once with `interrupt: true`, which stops what it does first; an agent whose process stopped starts again on \
+its session. The user may also write to an agent on its page; you read that in the chat as \"[The user wrote to … directly]\", and \
+the agent has it already, so do not pass it on again. `read` shows its history whenever the user asks about it, how it stands or \
+what it did: what is new since you last read (its end again when nothing is), its last `lines`, or any part of its whole history \
+from line `offset`. When it asks the user something, its question is a card in the chat the user answers. `stop` ends it. `list` \
 shows your agents in this chat; with `scope: \"account\"` it shows every coding agent on the account, whichever bot, chat, and \
 Runner started it, each with its bot, chat, Runner, folder, branch, state, and pull request, so you can tell whose a pull request \
 or a job is (`query` narrows it: a pull request's link, a folder, a title, a bot). Only an agent's own bot reads, messages, or \
@@ -80,7 +85,8 @@ impl Tool for CodingAgentTool {
                 "id": { "type": "string", "description": "read, send, stop: the agent's id." },
                 "message": { "type": "string", "description": "send: what the user tells the agent, in their words." },
                 "interrupt": { "type": "boolean", "description": "send: stop what it does now and take this message at once." },
-                "lines": { "type": "integer", "description": "read: its last lines instead of what is new." }
+                "lines": { "type": "integer", "description": "read: its last lines instead of what is new; with offset, how many lines from there (default 200)." },
+                "offset": { "type": "integer", "description": "read: the line of its whole history to read from, 1 for its start." }
             },
             "required": ["action"]
         })
@@ -101,12 +107,37 @@ impl Tool for CodingAgentTool {
             Some("read") => {
                 let agent = agent()?;
                 let lines = args["lines"].as_u64().map(|lines| lines.clamp(1, 2000) as usize);
-                let (text, skipped) = agent.read(lines);
+                let offset = args["offset"].as_u64().map(|offset| offset.max(1) as usize);
                 agent.record.lock().unwrap().unheard = None;
                 let record = agent.record();
-                let skipped = if skipped > 0 { format!("[{skipped} earlier lines left out]\n") } else { String::new() };
-                let text = if text.trim().is_empty() { "(nothing new)".to_string() } else { text };
-                format!("{} ({}) on “{}” is {}.\n{skipped}{text}", name(&record.kind), record.id, record.title, state_words(&record))
+                let head = format!("{} ({}) on “{}” is {}.", name(&record.kind), record.id, record.title, state_words(&record));
+                let mut transcript = agent.transcript.lock().unwrap();
+                let total = transcript.line_count();
+                // Any part of its history, from a line on.
+                if let Some(offset) = offset {
+                    let (text, first, total) = transcript.page(offset, lines.unwrap_or(super::READ_LINES));
+                    let last = first + text.lines().count().max(1) - 1;
+                    let text = if text.is_empty() { format!("(its history has {total} lines)") } else { text };
+                    format!("{head} Lines {first}–{last} of {total}:\n{text}")
+                } else {
+                    let (text, skipped) = transcript.read(lines, super::READ_LINES);
+                    // Nothing new since the last read: its end again, rather than nothing.
+                    let (text, skipped, new) = if text.trim().is_empty() && lines.is_none() {
+                        let (text, skipped) = transcript.read(Some(super::READ_LINES), super::READ_LINES);
+                        (text, total.saturating_sub(super::READ_LINES).max(skipped), false)
+                    } else {
+                        (text, skipped, lines.is_none())
+                    };
+                    let what = match (new, skipped) {
+                        (true, 0) => String::new(),
+                        (false, 0) if lines.is_none() => "Nothing new since you last read; its history:\n".into(),
+                        (false, 0) => String::new(),
+                        (true, skipped) => format!("What is new since you last read, its last lines ({skipped} earlier lines left out; offset reads them):\n"),
+                        (false, skipped) => format!("Nothing new since you last read; its last lines ({skipped} of {total} left out; offset reads them):\n"),
+                    };
+                    let text = if text.trim().is_empty() { "(no history yet)".to_string() } else { text };
+                    format!("{head}\n{what}{text}")
+                }
             }
             Some("send") => {
                 let agent = agent()?;
@@ -238,7 +269,7 @@ impl CodingAgentTool {
             None => super::home_relative(&place.folder),
         };
         let started = format!(
-            "Started {} ({id}) on “{title}” in {place}. It works on its own and reports to the user in the chat when it is done, with its pull request; then you get a turn to relay its report, or to say why if it ends on its own. Tell the user you started it and end your turn. When the user asks, coding_agent read {id} shows its transcript, send passes it what they say, and stop ends it.",
+            "Started {} ({id}) on “{title}” in {place}. It works in the background. You will be notified when it is done, with its report, which also reaches the user in the chat, or why it ended on its own; until then you know nothing of its results, so do not report, assume, or predict them, and do not poll it. Tell the user you started it and end your turn. When the user asks, coding_agent read {id} shows its history, send passes it what they say, and stop ends it.",
             name(&kind)
         );
         Ok(match crate::agent_roster::warning(&others, &self.bot.id, &self.chat_id) {

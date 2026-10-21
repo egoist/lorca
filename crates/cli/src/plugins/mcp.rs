@@ -1036,6 +1036,7 @@ pub fn post_sign_in_card(app: &Arc<App>, chat_id: &str, bot_id: &str, plugin_id:
             link: None,
             code: None,
             secret: None,
+            question: None,
         },
     );
     app.upsert_message(message.clone(), true);
@@ -2967,6 +2968,7 @@ async fn post_and_wait(
             link: None,
             code: None,
             secret: None,
+            question: None,
         },
     );
     let decision = wait_for_answer(app, chat_id, &message.id, always_rule, asker, cancel, || {
@@ -3005,7 +3007,7 @@ pub async fn await_answer(app: &Arc<App>, chat_id: &str, message_id: &str, alway
     wait_for_answer(app, chat_id, message_id, always_rule, Asker::Turn, cancel, ask).await
 }
 
-async fn wait_for_answer(app: &Arc<App>, chat_id: &str, message_id: &str, always_rule: Option<AutoReviewRule>, asker: Asker, cancel: &CancellationToken, ask: impl FnOnce()) -> Decision {
+pub(crate) async fn wait_for_answer(app: &Arc<App>, chat_id: &str, message_id: &str, always_rule: Option<AutoReviewRule>, asker: Asker, cancel: &CancellationToken, ask: impl FnOnce()) -> Decision {
     // A call stopped before its question went up puts nothing in the chat.
     if cancel.is_cancelled() {
         return Decision::Denied;

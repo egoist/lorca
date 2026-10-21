@@ -1137,6 +1137,18 @@ pub async fn serve_request(app: &Arc<App>, verb: &str, body: &Value, requested_b
                     false => Err("This request is no longer waiting for an answer.".into()),
                 };
             }
+            // An agent's question: the answers go on the card first, then the agent hears them. No
+            // is skipping it.
+            if let Some(message) = app.message(chat_id, message_id).filter(|message| matches!(&message.body, crate::model::Body::Permission { tool, .. } if tool == "question")) {
+                if decision != mcp::Decision::Denied {
+                    crate::coding::answer_question(app, &message, body["answers"].as_object())?;
+                }
+                let decision = if decision == mcp::Decision::Denied { decision } else { mcp::Decision::Allowed };
+                return match mcp::answer(app, message_id, decision) {
+                    true => Ok(json!({ "answered": true })),
+                    false => Err("This question is no longer waiting for an answer.".into()),
+                };
+            }
             // An access request is only ever dismissed: access changes in the bot's Access sheet.
             if let Some(mut message) = app.message(chat_id, message_id) {
                 if let crate::model::Body::Permission { tool, decision: current, .. } = &mut message.body {

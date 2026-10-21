@@ -408,6 +408,10 @@ pub enum Body {
         /// The answer never comes back into the card: it is sealed to the bot's Runner.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         secret: Option<SecretAsk>,
+        /// A question a coding agent asks the user (`tool` = `question`): its choices, and once
+        /// answered, what the user picked, which every Device shows on the card.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        question: Option<QuestionAsk>,
     },
     /// An email or Slack message the bot wrote in the chat, waiting for the user to send it: the
     /// chat's view of its review item (`review-status-<review id>`), rewritten as it changes.
@@ -474,6 +478,40 @@ pub struct SecretAsk {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub site: Option<String>,
     pub fields: Vec<SecretField>,
+}
+
+/// What an agent asks the user, as Claude Code's `AskUserQuestion` asks it: one to four
+/// questions, each answered with one of its options, several when `multi_select`, or the user's
+/// own words.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct QuestionAsk {
+    pub questions: Vec<Question>,
+    /// The answers, by question, once the user gave them: an option's label, labels joined with
+    /// ", " for several, or their own words. Empty when they skipped it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answers: Option<std::collections::BTreeMap<String, String>>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Question {
+    /// What the agent calls the question, for its answer: the question itself for Claude Code,
+    /// its id for Codex.
+    pub id: String,
+    /// A short label, a few words.
+    #[serde(default)]
+    pub header: String,
+    pub question: String,
+    #[serde(default)]
+    pub options: Vec<QuestionOption>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub multi_select: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct QuestionOption {
+    pub label: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
 }
 
 /// One value a secret request asks for: the name the bot uses it by, and what the card calls it.
@@ -1553,7 +1591,7 @@ mod app_view_tests {
     fn permission_cards_drop_the_reviewed_payload() {
         let permission = Message::new("c", Author::Bot { bot_id: "b".into() }, Body::Permission {
             plugin_id: "computer".into(), plugin_name: "Mac".into(), tool: "bash".into(), summary: "Run a command".into(),
-            arguments: serde_json::json!({ "command": "secret" }), decision: "pending".into(), reason: None, rule: None, command: None, link: None, code: None, secret: None,
+            arguments: serde_json::json!({ "command": "secret" }), decision: "pending".into(), reason: None, rule: None, command: None, link: None, code: None, secret: None, question: None,
         });
         let app = permission.for_app();
         let Body::Permission { arguments, summary, command, .. } = &app.body else { panic!() };

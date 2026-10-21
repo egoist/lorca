@@ -927,6 +927,10 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             if let Some(values) = params.get("values").filter(|values| values.is_object()) {
                 body["values"] = values.clone();
             }
+            // A question's answers, by question.
+            if let Some(answers) = params.get("answers").filter(|answers| answers.is_object()) {
+                body["answers"] = answers.clone();
+            }
             // Sign in on a card for a bot on another Runner: the sign-in page opens here.
             if let Body::Permission { tool, plugin_id, plugin_name, decision: current, .. } = &message.body {
                 let signs_in = tool == "connect" && current == "pending" && decision != "deny";

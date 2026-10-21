@@ -55,6 +55,36 @@ while True:
         out({"type": "assistant", "message": {"id": "a0", "content": [{"type": "text", "text": reason}]}, "parent_tool_use_id": None})
         out({"type": "result", "subtype": "success", "is_error": True, "result": reason})
         sys.exit(1)
+    if "(question)" in content:
+        out({"type": "control_request", "request_id": "q1", "request": {"subtype": "can_use_tool", "tool_name": "AskUserQuestion", "tool_use_id": "tq", "input": {"questions": [{"question": "Which database?", "header": "Database", "multiSelect": False, "options": [{"label": "Postgres", "description": "The usual"}, {"label": "SQLite", "description": "One file"}]}]}}})
+        answer = wait_for("q1")["response"]["response"]
+        said = "Picked " + json.dumps(answer["updatedInput"]["answers"]) if answer["behavior"] == "allow" else "Unanswered: " + answer["message"]
+        out({"type": "assistant", "message": {"id": "q2", "content": [{"type": "text", "text": said}]}, "parent_tool_use_id": None})
+        out({"type": "result", "subtype": "success", "is_error": False, "result": said})
+        continue
+    if "(api-error)" in content:
+        out({"type": "assistant", "message": {"id": "e1", "content": [{"type": "text", "text": "API Error: 500 Internal server error"}]}, "parent_tool_use_id": None})
+        out({"type": "result", "subtype": "success", "is_error": False, "result": "API Error: 500 Internal server error", "terminal_reason": "api_error"})
+        continue
+    if "(background)" in content:
+        # It waits on CI in the background and ends its turn; the task settles, and Claude Code
+        # takes the turn up again on its own to hear of it, as `claude -p` does.
+        out({"type": "assistant", "message": {"id": "b1", "content": [{"type": "tool_use", "id": "tb", "name": "Bash", "input": {"command": "gh pr checks 7 --watch", "run_in_background": True}}]}, "parent_tool_use_id": None})
+        out({"type": "control_request", "request_id": "hb", "request": {"subtype": "hook_callback", "callback_id": "lorca-bash", "input": {"tool_name": "Bash", "tool_use_id": "tb", "tool_input": {"command": "gh pr checks 7 --watch"}}}})
+        wait_for("hb")
+        out({"type": "system", "subtype": "background_tasks_changed", "tasks": [{"task_id": "bg1", "task_type": "local_bash", "description": "Watch the checks of #7"}]})
+        out({"type": "system", "subtype": "task_started", "task_id": "bg1", "tool_use_id": "tb", "description": "Watch the checks of #7", "is_backgrounded": True, "task_type": "local_bash"})
+        out({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "tb", "content": "Command running in background with ID: bg1."}]}, "parent_tool_use_id": None})
+        out({"type": "assistant", "message": {"id": "b2", "content": [{"type": "text", "text": "Waiting for #7's checks to finish."}]}, "parent_tool_use_id": None})
+        out({"type": "result", "subtype": "success", "is_error": False, "result": "Waiting for #7's checks to finish.", "terminal_reason": "completed"})
+        import time; time.sleep(0.4)
+        out({"type": "system", "subtype": "task_updated", "task_id": "bg1", "patch": {"status": "completed"}})
+        out({"type": "system", "subtype": "task_notification", "task_id": "bg1", "tool_use_id": "tb", "status": "completed", "summary": "Background command \"Watch the checks of #7\" completed (exit code 0)"})
+        out({"type": "system", "subtype": "background_tasks_changed", "tasks": []})
+        out({"type": "system", "subtype": "init", "session_id": "sess-1"})
+        out({"type": "assistant", "message": {"id": "b3", "content": [{"type": "text", "text": "Checks pass. https://github.com/acme/shop/pull/7 is ready."}]}, "parent_tool_use_id": None})
+        out({"type": "result", "subtype": "success", "is_error": False, "result": "Checks pass. https://github.com/acme/shop/pull/7 is ready.", "terminal_reason": "completed"})
+        continue
     if "(secret)" in content:
         token = os.environ.get("NPM_TOKEN", "missing")
         with open("received.txt", "w") as received:
@@ -430,7 +460,7 @@ async fn claude_code_works_in_the_folder_asks_in_the_chat_and_reports_to_the_use
 
     let started = call(&tool, "call-1", json!({ "action": "start", "agent": "claude", "title": "Login: fix the Safari bug", "folder": "shop", "prompt": "Fix the login bug\nwith a test" })).await.unwrap();
     assert!(started.starts_with("Started Claude Code (agent-") && started.contains("(on branch main)") && started.contains("“Login: fix the Safari bug”"), "{started}");
-    assert!(started.contains("a turn to relay its report"), "{started}");
+    assert!(started.contains("You will be notified when it is done") && started.contains("do not report, assume, or predict them"), "{started}");
     let agent = app.coding_agents.of("chat", "b1").pop().unwrap();
     let record = agent.record();
     assert_eq!((record.kind.as_str(), record.branch.as_deref(), record.task.as_str(), record.title.as_str()), ("claude", Some("main"), "Fix the login bug", "Login: fix the Safari bug"));
@@ -496,12 +526,18 @@ async fn claude_code_works_in_the_folder_asks_in_the_chat_and_reports_to_the_use
 
     // A follow-up while it waits; the bot reads what is new since it last read.
     let id = agent.id();
-    agent.read(None);
+    agent.transcript.lock().unwrap().read(None, READ_LINES);
     let sent = call(&tool, "call-2", json!({ "action": "send", "id": id, "message": "Also update the docs (follow-up)" })).await.unwrap();
     assert!(sent.starts_with("Sent."), "{sent}");
     eventually("the second message", || Some(agent_messages(app)).filter(|messages| messages.len() == 2)).await;
     let read = call(&tool, "call-3", json!({ "action": "read", "id": id })).await.unwrap();
     assert!(read.contains("> Also update the docs (follow-up)") && read.contains("Followed up.") && !read.contains("git push"), "{read}");
+    // Read again with nothing new, it shows its history rather than nothing; any part of it
+    // reads from a line on.
+    let again = call(&tool, "call-4", json!({ "action": "read", "id": id })).await.unwrap();
+    assert!(again.contains("Nothing new since you last read") && again.contains("git push origin feature") && again.contains("Followed up."), "{again}");
+    let from = call(&tool, "call-5", json!({ "action": "read", "id": id, "offset": 2, "lines": 1 })).await.unwrap();
+    assert!(from.contains("Lines 2–2 of ") && from.lines().count() == 2, "{from}");
 
     // Stop in the chat stops it; its card says so and the bot hears nothing more.
     app.coding_agents.stop_chat(app, "chat");
@@ -668,6 +704,88 @@ async fn an_agent_that_fails_during_the_bots_turn_wakes_it_once_the_turn_ends() 
     assert!(agent.record().unheard.is_none());
 }
 
+/// A turn that ends while a background task runs is not the end of the job: the agent keeps
+/// working, the task's step runs until it settles, and only the turn Claude Code takes up on its
+/// own afterwards is its report.
+#[tokio::test]
+async fn a_turn_that_ends_while_a_background_task_runs_is_not_its_report() {
+    let scratch = setup().await;
+    let app = &scratch.app;
+    auto_review_off(app);
+    let tool = tool(&scratch);
+    let row = start_row(app, "call-1");
+    let chat_lock = app.chat_lock("chat");
+    let _held = chat_lock.lock().await;
+    call(&tool, "call-1", json!({ "action": "start", "agent": "claude", "title": "CI", "folder": "shop", "prompt": "Ship it (background)" })).await.unwrap();
+    let (asked, ..) = question(app).await;
+    crate::plugins::mcp::answer(app, &asked, Decision::Allowed);
+    let agent = app.coding_agents.of("chat", "b1").pop().unwrap();
+
+    // Its first turn ends waiting: it is still at work, its command still runs, and nothing
+    // reached the chat.
+    eventually("the wait", || steps_now(&agent).into_iter().find(|item| item.kind == "status" && item.text == "Waiting on a background task: Watch the checks of #7")).await;
+    assert_eq!(agent.record().state, "working");
+    assert!(agent_messages(app).is_empty(), "a turn that waits is no report");
+    let watching = steps_now(&agent).into_iter().find_map(|item| item.tool.filter(|step| step.kind == "execute")).unwrap();
+    assert_eq!(watching.status, "running");
+
+    // The task settles, Claude Code goes on by itself, and that turn's end is the report.
+    let (_, _, text, failed) = eventually("its report", || agent_messages(app).pop()).await;
+    assert_eq!((text.as_str(), failed), ("Checks pass. https://github.com/acme/shop/pull/7 is ready.", false));
+    assert_eq!(agent_messages(app).len(), 1);
+    assert_eq!(agent.record().state, "idle");
+    let watched = steps_now(&agent).into_iter().find_map(|item| item.tool.filter(|step| step.kind == "execute")).unwrap();
+    assert_eq!(watched.status, "done");
+}
+
+/// Claude Code's `AskUserQuestion` is a card the user answers from any Device: the answers stay on
+/// the card and go back to it as the tool's input, by question.
+#[tokio::test]
+async fn an_agents_question_to_the_user_is_a_card_whose_answers_reach_it() {
+    let scratch = setup().await;
+    let app = &scratch.app;
+    let tool = tool(&scratch);
+    let row = start_row(app, "call-1");
+    let chat_lock = app.chat_lock("chat");
+    let _held = chat_lock.lock().await;
+    call(&tool, "call-1", json!({ "action": "start", "agent": "claude", "title": "Storage", "folder": "shop", "prompt": "Add storage (question)" })).await.unwrap();
+    let (card_id, ..) = question(app).await;
+    let card = app.message("chat", &card_id).unwrap();
+    let Body::Permission { tool: kind, summary, reason, question: Some(asked), .. } = &card.body else { panic!("{card:?}") };
+    assert_eq!((kind.as_str(), summary.as_str()), ("question", "Which database?"));
+    assert_eq!(reason.as_deref(), Some("Claude Code, the coding agent on “Storage”, asks you."));
+    assert_eq!(asked.questions[0].options.iter().map(|option| option.label.as_str()).collect::<Vec<_>>(), vec!["Postgres", "SQLite"]);
+    assert!(card.counts_unread());
+    card_when(app, &row, |card| card.state == "asking").await;
+
+    // No answer is no answer: the card waits.
+    let empty = crate::plugins::serve_request(app, "permission.answer", &json!({ "chat_id": "chat", "message_id": card_id, "decision": "allow", "answers": {} }), None).await;
+    assert!(empty.is_err());
+    crate::plugins::serve_request(app, "permission.answer", &json!({ "chat_id": "chat", "message_id": card_id, "decision": "allow", "answers": { "Which database?": "SQLite" } }), None).await.unwrap();
+    let (_, _, text, _) = eventually("its report", || agent_messages(app).pop()).await;
+    assert_eq!(text, r#"Picked {"Which database?": "SQLite"}"#);
+    let Body::Permission { decision, question: Some(answered), .. } = app.message("chat", &card_id).unwrap().body else { panic!() };
+    assert_eq!(decision, "allowed");
+    assert_eq!(answered.answers.unwrap().get("Which database?").map(String::as_str), Some("SQLite"));
+}
+
+/// A turn whose last request to the model failed ends `success` with `terminal_reason:
+/// "api_error"`: that is a failure, not a report.
+#[tokio::test]
+async fn a_turn_that_ends_in_an_api_error_fails() {
+    let scratch = setup().await;
+    let app = &scratch.app;
+    let tool = tool(&scratch);
+    let row = start_row(app, "call-1");
+    let chat_lock = app.chat_lock("chat");
+    let _held = chat_lock.lock().await;
+    call(&tool, "call-1", json!({ "action": "start", "agent": "claude", "title": "Login", "folder": "shop", "prompt": "Fix it (api-error)" })).await.unwrap();
+    let failed = card_when(app, &row, |card| card.state == "failed").await;
+    assert_eq!(failed.outcome.as_deref(), Some("API Error: 500 Internal server error"));
+    let (_, _, text, failed) = eventually("its message", || agent_messages(app).pop()).await;
+    assert_eq!((text.as_str(), failed), ("API Error: 500 Internal server error", true));
+}
+
 #[tokio::test]
 async fn a_restart_keeps_the_handle_and_a_follow_up_resumes_the_session() {
     let scratch = setup().await;
@@ -685,7 +803,7 @@ async fn a_restart_keeps_the_handle_and_a_follow_up_resumes_the_session() {
     // A command Lorca said no to reads as not allowed.
     let denied = steps(app, &row).await.into_iter().find_map(|item| item.tool.filter(|step| step.kind == "execute")).unwrap();
     assert_eq!(denied.status, "denied");
-    assert!(agent.read(Some(50)).0.contains("⎿ Not allowed"));
+    assert!(agent.transcript.lock().unwrap().read(Some(50), READ_LINES).0.contains("⎿ Not allowed"));
 
     // Lorca quits and starts again: the agent is done, so it waits idle with no process.
     app.coding_agents.shutdown(app).await;
@@ -767,7 +885,7 @@ async fn the_user_writes_to_an_agent_on_its_page() {
     assert!(args.lines().any(|line| line.contains("--resume sess-1")), "{args}");
     // The first prompt is the bot's, and the bot reads which one the user wrote.
     assert_eq!(steps_now(&agent).into_iter().find(|item| item.kind == "prompt").unwrap().from, None);
-    assert!(agent.read(Some(50)).0.contains("> (from the user) Now the docs (follow-up)"));
+    assert!(agent.transcript.lock().unwrap().read(Some(50), READ_LINES).0.contains("> (from the user) Now the docs (follow-up)"));
 }
 
 #[tokio::test]

@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -131,6 +132,25 @@ pub(crate) fn step(name: &str, input: &Value, folder: &Path) -> Option<ToolStep>
     Some(ToolStep { kind: kind.into(), title: transcript::title(&title), path: file, added, removed, status: "running".into(), output: None })
 }
 
+/// `AskUserQuestion`'s questions, each known by its own text, which is how its answers name it.
+pub(crate) fn questions(input: &Value) -> Vec<crate::model::Question> {
+    use crate::model::{Question, QuestionOption};
+    let text = |value: &Value| value.as_str().unwrap_or("").to_string();
+    input["questions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|question| Question {
+            id: text(&question["question"]),
+            header: text(&question["header"]),
+            question: text(&question["question"]),
+            options: question["options"].as_array().into_iter().flatten().map(|option| QuestionOption { label: text(&option["label"]), description: text(&option["description"]) }).collect(),
+            multi_select: question["multiSelect"].as_bool().unwrap_or(false),
+        })
+        .filter(|question| !question.question.is_empty())
+        .collect()
+}
+
 /// Its to-do list as a plan.
 pub(crate) fn plan(input: &Value) -> Vec<PlanEntry> {
     input["todos"]
@@ -141,6 +161,44 @@ pub(crate) fn plan(input: &Value) -> Vec<PlanEntry> {
         .collect()
 }
 
+/// How long Claude Code has, once its last background task settled after a turn that ended while
+/// it ran, to start the turn that hears of it, before the turn's last message stands as its report.
+const SETTLE: Duration = Duration::from_secs(30);
+
+/// Turn ends (`terminal_reason`) that are failures, whatever the result's `subtype` says: its
+/// last request to the model refused or failed, or it ran out of room or turns.
+const FAILED_ENDS: &[&str] = &[
+    "api_error",
+    "model_error",
+    "blocking_limit",
+    "rapid_refill_breaker",
+    "prompt_too_long",
+    "image_error",
+    "malformed_tool_use_exhausted",
+    "budget_exhausted",
+    "structured_output_retry_exhausted",
+    "turn_setup_failed",
+    "max_turns",
+];
+
+/// Why a turn's `result` failed, in words, or `None` when it did not: an interrupt's
+/// (`error_during_execution` without a failed end) is no failure.
+fn failure(result: &Value) -> Option<String> {
+    let end = result["terminal_reason"].as_str();
+    let failed_end = end.is_some_and(|end| FAILED_ENDS.contains(&end));
+    let is_error = result["is_error"].as_bool().unwrap_or(false) && result["subtype"] != "error_during_execution";
+    if !failed_end && !is_error {
+        return None;
+    }
+    let text = result["result"].as_str().into_iter().chain(result["errors"].as_array().into_iter().flatten().filter_map(Value::as_str)).find(|text| !text.trim().is_empty());
+    let reason = match (text, end) {
+        (Some(text), _) => text.trim().lines().next().unwrap_or(text).to_string(),
+        (None, Some(end)) if failed_end => format!("Claude Code's turn ended in an error ({end})"),
+        _ => result["subtype"].as_str().unwrap_or("error").to_string(),
+    };
+    Some(reason)
+}
+
 async fn read(process: Arc<Process>, mut messages: tokio::sync::mpsc::UnboundedReceiver<Value>, exit: oneshot::Receiver<process::Exit>, events: Events, pending: Arc<AtomicUsize>, send_now: Arc<AtomicBool>, folder: PathBuf) {
     let mut session_told = false;
     let mut last_said: Option<String> = None;
@@ -149,10 +207,43 @@ async fn read(process: Arc<Process>, mut messages: tokio::sync::mpsc::UnboundedR
     let denied: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
     let mut sent = 0usize;
     let mut since = Instant::now();
+    // A `result` ends a turn, not the work: Claude Code's background tasks (commands, subagents)
+    // run on past it, and when one settles Claude Code takes the turn up again on its own to hear
+    // of it. The background tasks live now, by id, with what each does (`background_tasks_changed`
+    // holds the whole set); the calls that started them, by task, and their steps, which run
+    // until the task settles.
+    let mut background: Vec<(String, String)> = Vec::new();
+    let mut calls: HashMap<String, String> = HashMap::new();
+    let mut backgrounded: HashSet<String> = HashSet::new();
+    let mut waiting: HashMap<String, ToolStep> = HashMap::new();
+    // Whether a turn is under way, what the last one said when it ended while background tasks
+    // ran, and when that stands as its report if no turn follows.
+    let mut in_turn = false;
+    let mut held: Option<Option<String>> = None;
+    let mut settle_at: Option<Instant> = None;
+    // Compactions so far, for their status lines' ids, and whether one is under way.
+    let mut compactions = 0u32;
+    let mut compacting = false;
     let item = |item: Item| {
         let _ = events.send(Event::Item(item));
     };
-    while let Some(message) = messages.recv().await {
+    loop {
+        let message = match settle_at {
+            Some(at) => tokio::select! {
+                message = messages.recv() => message,
+                _ = tokio::time::sleep_until(at) => {
+                    settle_at = None;
+                    if !in_turn && background.is_empty() {
+                        if let Some(said) = held.take() {
+                            let _ = events.send(Event::Idle(said));
+                        }
+                    }
+                    continue;
+                }
+            },
+            None => messages.recv().await,
+        };
+        let Some(message) = message else { break };
         match message["type"].as_str().unwrap_or("") {
             "system" if message["subtype"] == "init" => {
                 let capabilities = message["capabilities"].as_array().into_iter().flatten();
@@ -161,7 +252,70 @@ async fn read(process: Arc<Process>, mut messages: tokio::sync::mpsc::UnboundedR
                     session_told = true;
                     let _ = events.send(Event::Session(id.to_string()));
                 }
+                // A turn begins, one Claude Code took up on its own (a background task settled)
+                // as much as one for a message.
+                if !in_turn {
+                    in_turn = true;
+                    settle_at = None;
+                    let _ = events.send(Event::Working);
+                }
             }
+            "system" => match message["subtype"].as_str().unwrap_or("") {
+                "background_tasks_changed" => {
+                    background = message["tasks"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .map(|task| (task["task_id"].as_str().unwrap_or("").to_string(), task["description"].as_str().unwrap_or("").to_string()))
+                        .collect();
+                    // The last one settled after the turn ended: Claude Code goes on to hear of it.
+                    settle_at = (background.is_empty() && !in_turn && held.is_some()).then(|| Instant::now() + SETTLE);
+                }
+                "task_started" => {
+                    let (Some(task), Some(call)) = (message["task_id"].as_str(), message["tool_use_id"].as_str()) else { continue };
+                    calls.insert(task.to_string(), call.to_string());
+                    if message["is_backgrounded"].as_bool().unwrap_or(false) {
+                        backgrounded.insert(call.to_string());
+                    }
+                }
+                // A call under way moved to the background (`send_now`, or Claude Code's own).
+                "task_updated" if message["patch"]["is_backgrounded"] == true => {
+                    if let Some(call) = message["task_id"].as_str().and_then(|task| calls.get(task)) {
+                        backgrounded.insert(call.clone());
+                    }
+                }
+                "task_notification" => {
+                    let task = message["task_id"].as_str().unwrap_or("");
+                    let call = message["tool_use_id"].as_str().map(str::to_string).or_else(|| calls.get(task).cloned());
+                    calls.remove(task);
+                    let Some(call) = call else { continue };
+                    backgrounded.remove(&call);
+                    if let Some(mut step) = waiting.remove(&call) {
+                        step.status = if message["status"] == "completed" { "done" } else { "failed" }.into();
+                        if let Some(summary) = message["summary"].as_str().and_then(transcript::output) {
+                            step.output = Some(summary);
+                        }
+                        item(Item::tool(call, step));
+                    }
+                }
+                "status" if message["status"] == "compacting" => {
+                    compactions += 1;
+                    compacting = true;
+                    item(Item::text(format!("compact-{compactions}"), "status", "Compacting the conversation"));
+                }
+                "status" if message["compact_result"] == "failed" => {
+                    compacting = false;
+                    let error = message["compact_error"].as_str().unwrap_or("it failed");
+                    item(Item::text(format!("compact-{compactions}"), "status", &format!("Could not compact the conversation: {error}")));
+                }
+                "compact_boundary" => {
+                    if !std::mem::replace(&mut compacting, false) {
+                        compactions += 1;
+                    }
+                    item(Item::text(format!("compact-{compactions}"), "status", "Compacted the conversation"));
+                }
+                _ => {}
+            },
             "assistant" => {
                 // A subagent's steps stay inside the call that started it.
                 if !message["parent_tool_use_id"].is_null() {
@@ -213,6 +367,8 @@ async fn read(process: Arc<Process>, mut messages: tokio::sync::mpsc::UnboundedR
                     let _ = pending.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| Some(count.saturating_sub(1)));
                     sent += 1;
                     item(Item::text(format!("prompt-{}-{sent}", uuid::Uuid::new_v4()), "prompt", &text));
+                    in_turn = true;
+                    settle_at = None;
                     let _ = events.send(Event::Working);
                     since = Instant::now();
                     continue;
@@ -222,6 +378,13 @@ async fn read(process: Arc<Process>, mut messages: tokio::sync::mpsc::UnboundedR
                         let call = part["tool_use_id"].as_str().unwrap_or("").to_string();
                         let Some(mut step) = steps.remove(&call) else { continue };
                         let text = transcript::content_text(&part["content"]);
+                        // A call that went to the background runs on until its task settles.
+                        if backgrounded.remove(&call) {
+                            step.output = transcript::output(&text);
+                            waiting.insert(call.clone(), step.clone());
+                            item(Item::tool(call, step));
+                            continue;
+                        }
                         step.status = if denied.lock().unwrap().remove(&call) {
                             "denied"
                         } else if part["is_error"].as_bool().unwrap_or(false) {
@@ -238,14 +401,14 @@ async fn read(process: Arc<Process>, mut messages: tokio::sync::mpsc::UnboundedR
                 }
                 since = Instant::now();
             }
-            // The end of a turn. With a message still to take up, it goes on with that one.
+            // The end of a turn. With a message still to take up, it goes on with that one; with
+            // background tasks still running, it is waiting on them, and Claude Code takes the
+            // turn up again once one settles: only the turn that ends with none running is done.
             "result" => {
-                let mut failed = None;
-                if message["is_error"].as_bool().unwrap_or(false) && message["subtype"] != "error_during_execution" {
-                    let reason = message["result"].as_str().or(message["subtype"].as_str()).unwrap_or("error");
-                    let reason = reason.lines().next().unwrap_or(reason).to_string();
-                    item(Item::text(uuid::Uuid::new_v4().to_string(), "error", &reason));
-                    failed = Some(reason);
+                in_turn = false;
+                let failed = failure(&message);
+                if let Some(reason) = &failed {
+                    item(Item::text(uuid::Uuid::new_v4().to_string(), "error", reason));
                 }
                 // Calls the turn never finished, an interrupt's, end with it.
                 for (call, mut step) in steps.drain() {
@@ -254,12 +417,46 @@ async fn read(process: Arc<Process>, mut messages: tokio::sync::mpsc::UnboundedR
                 }
                 if pending.load(Ordering::SeqCst) == 0 {
                     if let Some(reason) = failed {
+                        held = None;
                         let _ = events.send(Event::Failed(reason));
                         continue;
                     }
                     let said = message["result"].as_str().filter(|text| !text.trim().is_empty()).map(str::to_string).or_else(|| last_said.take());
-                    let _ = events.send(Event::Idle(said));
+                    if background.is_empty() {
+                        held = None;
+                        let _ = events.send(Event::Idle(said));
+                    } else {
+                        held = Some(said);
+                        let tasks = background.iter().map(|(_, description)| description.as_str()).filter(|description| !description.is_empty()).collect::<Vec<_>>().join(", ");
+                        let line = match background.len() {
+                            1 => format!("Waiting on a background task: {tasks}"),
+                            count => format!("Waiting on {count} background tasks: {tasks}"),
+                        };
+                        item(Item::text(uuid::Uuid::new_v4().to_string(), "status", line.trim_end_matches(": ")));
+                    }
                 }
+            }
+            // Its questions to the user come as a permission check of `AskUserQuestion`: the user
+            // answers on a card, and the answers go back as the tool's input, by question.
+            "control_request" if message["request"]["subtype"] == "can_use_tool" && message["request"]["tool_name"] == "AskUserQuestion" => {
+                let Some(id) = message["request_id"].as_str().map(str::to_string) else { continue };
+                let input = message["request"]["input"].clone();
+                let (tx, rx) = oneshot::channel();
+                if events.send(Event::Ask(questions(&input), tx)).is_err() {
+                    continue;
+                }
+                let process = process.clone();
+                tokio::spawn(async move {
+                    let answer = match rx.await.unwrap_or_else(|_| Err("Lorca stopped before the user answered".into())) {
+                        Ok(answers) => {
+                            let mut input = input;
+                            input["answers"] = json!(answers);
+                            json!({ "behavior": "allow", "updatedInput": input })
+                        }
+                        Err(reason) => json!({ "behavior": "deny", "message": reason }),
+                    };
+                    let _ = process.send(&json!({ "type": "control_response", "response": { "subtype": "success", "request_id": id, "response": answer } })).await;
+                });
             }
             "control_request" => {
                 let Some(id) = message["request_id"].as_str().map(str::to_string) else { continue };

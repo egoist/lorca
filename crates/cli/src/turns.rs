@@ -2244,11 +2244,11 @@ fn transcript_bounded(app: &App, chat: &Chat, bot: &Bot, workdir: &std::path::Pa
             (Author::Bot { bot_id }, Body::Draft { state, draft, .. }) if bot_id == &bot.id => {
                 out.push(user(&crate::drafts::history_line(state, draft), timestamp));
             }
-            // What a coding agent said when it was done, or why it ended.
+            // What a coding agent said when it was done, or why it ended, as Claude Code tells its
+            // own agent of a background task's end.
             (Author::Bot { bot_id }, Body::AgentMessage { agent_id, agent_kind, title, text, failed }) => {
                 let whose = if bot_id == &bot.id { "your".to_string() } else { format!("{}'s", name_of(app, bot_id)) };
-                let what = if *failed { "ended" } else { "says" };
-                out.push(user(&format!("[{} ({agent_id}), {whose} coding agent on “{title}”, {what}]: {text}", crate::model::coding_agent_name(agent_kind)), timestamp));
+                out.push(user(&crate::coding::notification(agent_id, agent_kind, title, &whose, text, *failed), timestamp));
             }
             // What the user wrote to a coding agent on its page, which reached it without the bot.
             (Author::You, Body::AgentMessage { agent_id, agent_kind, title, text, .. }) => {

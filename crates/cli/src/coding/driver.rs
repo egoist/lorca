@@ -25,6 +25,10 @@ pub(crate) enum Event {
     /// It wants to do something that needs a decision first; the answer goes back on the
     /// channel: `Ok` lets it, `Err` says why not.
     Approve(Approval, oneshot::Sender<Result<(), String>>),
+    /// It asks the user questions (Claude Code's `AskUserQuestion`, Codex's `request_user_input`);
+    /// the answers go back on the channel, by question id, empty when the user skipped them, or
+    /// `Err` with why nobody answered.
+    Ask(Vec<crate::model::Question>, oneshot::Sender<Result<Answers, String>>),
     /// It is gone.
     Ended(Ended),
 }
@@ -47,6 +51,9 @@ pub(crate) struct Ended {
 }
 
 pub(crate) type Events = mpsc::UnboundedSender<Event>;
+
+/// The user's answers to an agent's questions, by question id.
+pub(crate) type Answers = std::collections::BTreeMap<String, String>;
 
 #[async_trait]
 pub(crate) trait Driver: Send + Sync {

@@ -283,11 +283,6 @@ impl Agent {
         }
         true
     }
-
-    /// The transcript the bot has not read, up to `READ_LINES` of its end, or its last `lines`.
-    fn read(&self, lines: Option<usize>) -> (String, usize) {
-        self.transcript.lock().unwrap().read(lines, READ_LINES)
-    }
 }
 
 /// The coding agents on this Runner.
@@ -886,6 +881,13 @@ async fn handle(app: &Arc<App>, agent: &Arc<Agent>, event: Event, generation: u6
                 let _ = reply.send(verdict);
             });
         }
+        Event::Ask(questions, reply) => {
+            let (app, agent) = (app.clone(), agent.clone());
+            tokio::spawn(async move {
+                let answers = ask_question(&app, &agent, questions).await;
+                let _ = reply.send(answers);
+            });
+        }
         Event::Ended(end) => ended(app, agent, end, generation),
     }
 }
@@ -970,6 +972,16 @@ fn tell(app: &Arc<App>, agent: &Arc<Agent>, text: &str, failed: bool) {
             crate::runtime::start_turn(&app, job);
         }
     });
+}
+
+/// How the bot reads an agent's message in its history, after Claude Code's `<task-notification>`:
+/// which agent, whose, whether it is done or ended on its own, and its report or why.
+pub fn notification(agent_id: &str, kind: &str, title: &str, whose: &str, text: &str, failed: bool) -> String {
+    let (status, what) = if failed { ("ended", "reason") } else { ("done", "report") };
+    format!(
+        "<agent-notification>\n<agent-id>{agent_id}</agent-id>\n<agent>{}, {whose} coding agent on “{title}”</agent>\n<status>{status}</status>\n<{what}>{text}</{what}>\n</agent-notification>",
+        crate::model::coding_agent_name(kind)
+    )
 }
 
 /// What an `agent` turn opens with, beside the message the bot reads in the chat. For an agent
@@ -1140,6 +1152,130 @@ async fn approve(app: &Arc<App>, agent: &Arc<Agent>, approval: Approval) -> Resu
     }
 }
 
+/// Puts the agent's questions to the user on a card at the end of the chat, as Claude Code shows
+/// `AskUserQuestion`, and waits for the answers from any Device (`chats.permission` with
+/// `answers`), which the card then shows. Its row reads `asking` meanwhile; the user's messages to
+/// the bot leave the card up, and stopping the agent dismisses it. Skipping answers nothing, which
+/// the agent hears as skipped; nobody to answer, or nobody answering in time, it hears why.
+async fn ask_question(app: &Arc<App>, agent: &Arc<Agent>, questions: Vec<crate::model::Question>) -> Result<driver::Answers, String> {
+    use crate::plugins::mcp::{self, Decision};
+    let questions: Vec<_> = questions
+        .into_iter()
+        .map(|mut question| {
+            question.header = without_secrets(app, question.header);
+            question.question = without_secrets(app, question.question);
+            question
+        })
+        .collect();
+    let Some(first) = questions.first() else { return Ok(driver::Answers::new()) };
+    let record = agent.record();
+    if record.unattended {
+        return Err("Nobody is watching the run that started you, so nobody can answer. Decide yourself, go on, and say what you chose and why in your report.".into());
+    }
+    let _one = agent.asking.lock().await;
+    if !agent.is_running() {
+        return Err("Stopped".into());
+    }
+    let who = name(&record.kind);
+    let summary = match questions.len() {
+        1 => first.question.clone(),
+        count => format!("{} (+{} more)", first.question, count - 1),
+    };
+    let message = Message::new(
+        &record.chat_id,
+        Author::Bot { bot_id: record.bot_id.clone() },
+        Body::Permission {
+            plugin_id: "coding_agent".into(),
+            plugin_name: who.to_string(),
+            tool: "question".into(),
+            summary,
+            arguments: Value::Null,
+            decision: "pending".into(),
+            reason: Some(format!("{who}, the coding agent on “{}”, asks you.", without_secrets(app, record.title.clone()))),
+            rule: None,
+            command: None,
+            link: None,
+            code: None,
+            secret: None,
+            question: Some(crate::model::QuestionAsk { questions, answers: None }),
+        },
+    );
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let watch = watch_stop(agent, &cancel);
+    agent.asks.store(true, Ordering::SeqCst);
+    app.coding_agents.sync(app, agent);
+    let decision = mcp::wait_for_answer(app, &record.chat_id, &message.id, None, mcp::Asker::Aside, &cancel, || {
+        app.upsert_message(message.clone(), true);
+        crate::push::permission(app, &message);
+    })
+    .await;
+    cancel.cancel();
+    watch.abort();
+    agent.asks.store(false, Ordering::SeqCst);
+    app.coding_agents.sync(app, agent);
+    let decision = if cancel_was_stop(agent) && decision == Decision::Denied { Decision::Dismissed } else { decision };
+    let mut answers = None;
+    if let Some(mut card) = app.message(&record.chat_id, &message.id) {
+        if let Body::Permission { decision: shown, question, .. } = &mut card.body {
+            *shown = decision.as_str().into();
+            answers = question.as_ref().and_then(|question| question.answers.clone());
+        }
+        app.upsert_message(card, true);
+    }
+    match decision {
+        Decision::Allowed | Decision::Always => Ok(answers.unwrap_or_default()),
+        Decision::Denied => Ok(driver::Answers::new()),
+        Decision::Expired => Err("Nobody answered in time. Decide yourself, go on, and say what you chose and why in your report.".into()),
+        Decision::Dismissed => Err("Stopped".into()),
+    }
+}
+
+/// Whether the agent stopped, which is what cancels a question it asked.
+fn cancel_was_stop(agent: &Agent) -> bool {
+    !agent.is_running() || !agent.is_open()
+}
+
+/// Cancels `cancel` once the agent stops, for a question it asked.
+fn watch_stop(agent: &Arc<Agent>, cancel: &tokio_util::sync::CancellationToken) -> tokio::task::JoinHandle<()> {
+    let (agent, cancel) = (agent.clone(), cancel.clone());
+    tokio::spawn(async move {
+        while !cancel.is_cancelled() {
+            if cancel_was_stop(&agent) {
+                cancel.cancel();
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    })
+}
+
+/// The user answered an agent's question card, `answers` by question id: each answer is kept on
+/// the card, before the agent hears it, so every Device shows what was picked. An option's label,
+/// several joined with ", ", or the user's own words; a question left blank stays unanswered.
+pub fn answer_question(app: &Arc<App>, message: &Message, answers: Option<&serde_json::Map<String, Value>>) -> Result<(), String> {
+    let Body::Permission { question: Some(ask), .. } = &message.body else { return Err("That is not a question.".into()) };
+    if !app.pending_permissions.lock().unwrap().contains_key(&message.id) {
+        return Err("This question is no longer waiting for an answer.".into());
+    }
+    let answers = answers.ok_or("Answer the question first.")?;
+    let mut kept = driver::Answers::new();
+    for question in &ask.questions {
+        let answer = answers.get(&question.id).and_then(Value::as_str).map(str::trim).unwrap_or_default();
+        if !answer.is_empty() {
+            kept.insert(question.id.clone(), without_secrets(app, answer.chars().take(4000).collect()));
+        }
+    }
+    if kept.is_empty() {
+        return Err("Answer the question first.".into());
+    }
+    let mut message = message.clone();
+    if let Body::Permission { question: Some(ask), .. } = &mut message.body {
+        ask.answers = Some(kept);
+    }
+    app.upsert_message(message, true);
+    Ok(())
+}
+
 /// Asks the user whether the agent may do `shown`, on a card at the end of the chat as a command
 /// of the bot's own asks, and waits for the answer from any Device (`chats.permission` names the
 /// card). The agent's row reads `asking` meanwhile. The bot's turn does not wait on the card, so
@@ -1158,18 +1294,7 @@ async fn ask_in_chat(
     let chat_id = agent.record.lock().unwrap().chat_id.clone();
     let cancel = tokio_util::sync::CancellationToken::new();
     // Stopping the agent stops the question.
-    let watch = {
-        let (agent, cancel) = (agent.clone(), cancel.clone());
-        tokio::spawn(async move {
-            while !cancel.is_cancelled() {
-                if !agent.is_running() || !agent.is_open() {
-                    cancel.cancel();
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(500)).await;
-            }
-        })
-    };
+    let watch = watch_stop(agent, &cancel);
     agent.asks.store(true, Ordering::SeqCst);
     app.coding_agents.sync(app, agent);
     let summary = crate::local_review::command_summary(shown);

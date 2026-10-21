@@ -163,6 +163,19 @@ async fn read(
                 }
                 let _ = tx.send(answer);
             }
+            // Codex asks the user (`request_user_input`): a card the user answers, its answers
+            // back by question id, none when nobody answered.
+            (Some("item/tool/requestUserInput"), Some(id)) => {
+                let (tx, rx) = oneshot::channel();
+                if events.send(Event::Ask(questions(&message["params"]), tx)).is_err() {
+                    continue;
+                }
+                let process = process.clone();
+                tokio::spawn(async move {
+                    let answers: serde_json::Map<String, Value> = rx.await.ok().and_then(Result::ok).unwrap_or_default().into_iter().map(|(id, answer)| (id, json!({ "answers": [answer] }))).collect();
+                    let _ = process.send(&json!({ "jsonrpc": "2.0", "id": id, "result": { "answers": answers } })).await;
+                });
+            }
             // Codex asks Lorca.
             (Some(method), Some(id)) => {
                 let params = &message["params"];
@@ -280,6 +293,28 @@ async fn read(
     // Whatever Lorca still waits on will not be answered.
     pending.lock().unwrap().clear();
     let _ = events.send(Event::Ended(super::driver::ended("Codex", exit.await.ok())));
+}
+
+/// `request_user_input`'s questions, each known by its id. Codex offers its own words beside the
+/// options (`isOther`) or none; the card always takes the user's own words, so either answers. A
+/// secret one (`isSecret`) is left out, unanswered: the card and its answers show on every Device.
+fn questions(params: &Value) -> Vec<crate::model::Question> {
+    use crate::model::{Question, QuestionOption};
+    let text = |value: &Value| value.as_str().unwrap_or("").to_string();
+    params["questions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|question| !question["isSecret"].as_bool().unwrap_or(false))
+        .map(|question| Question {
+            id: text(&question["id"]),
+            header: text(&question["header"]),
+            question: text(&question["question"]),
+            options: question["options"].as_array().into_iter().flatten().map(|option| QuestionOption { label: text(&option["label"]), description: text(&option["description"]) }).collect(),
+            multi_select: false,
+        })
+        .filter(|question| !question.id.is_empty())
+        .collect()
 }
 
 /// One item of a turn as steps of the transcript, its paths from `folder`: as it starts, and

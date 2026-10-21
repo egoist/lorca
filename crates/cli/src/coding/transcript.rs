@@ -305,6 +305,21 @@ impl Transcript {
         (text, skipped)
     }
 
+    /// Its whole history as the bot reads it, from line `offset` (1-based), at most `count`
+    /// lines; with the line it starts at and the lines there are in all.
+    pub fn page(&mut self, offset: usize, count: usize) -> (String, usize, usize) {
+        let all: Vec<String> = self.items.iter().flat_map(|(_, item)| item.lines()).collect();
+        let start = offset.saturating_sub(1).min(all.len());
+        let end = (start + count).min(all.len());
+        self.read = self.revision;
+        (all[start..end].join("\n"), start + 1, all.len())
+    }
+
+    /// How many lines its history runs to, as the bot reads it.
+    pub fn line_count(&self) -> usize {
+        self.items.iter().map(|(_, item)| item.lines().len()).sum()
+    }
+
     /// The last `count` lines, as the bot reads them.
     pub fn last_lines(&self, count: usize) -> String {
         let all: Vec<String> = self.items.iter().flat_map(|(_, item)| item.lines()).collect();
