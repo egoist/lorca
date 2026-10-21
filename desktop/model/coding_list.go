@@ -18,8 +18,8 @@ type ListedAgent struct {
 	Agent     *AgentRun
 }
 
-// IsLive is an agent the header's Coding agents button counts: one that has not ended and, when
-// done, changed in the last three days, as the chat's Coding section keeps it.
+// IsLive is an agent that keeps the header's Coding agents button showing: one that has not ended
+// and, when done, changed in the last three days, as the chat's Coding section keeps it.
 func (a ListedAgent) IsLive(now time.Time) bool {
 	if a.Agent == nil || !a.Agent.IsOpen() {
 		return false
@@ -74,11 +74,23 @@ func (s *Store) AccountAgents() []ListedAgent {
 	return s.coding.agents
 }
 
-// LiveAgents are the account's agents the header's button counts.
+// LiveAgents are the account's agents that keep the header's button showing.
 func (s *Store) LiveAgents(now time.Time) int {
 	count := 0
 	for _, agent := range s.AccountAgents() {
 		if agent.IsLive(now) {
+			count++
+		}
+	}
+	return count
+}
+
+// WorkingAgents are the account's agents at work now, starting, working, or asking, which the
+// header's button counts on its badge; one done and waiting for a follow-up is not.
+func (s *Store) WorkingAgents() int {
+	count := 0
+	for _, agent := range s.AccountAgents() {
+		if agent.Agent != nil && agent.Agent.IsRunning() {
 			count++
 		}
 	}

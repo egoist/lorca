@@ -71,6 +71,10 @@ func TestAccountAgentsFromCodingList(t *testing.T) {
 	if live := s.LiveAgents(time.Unix(1700000300, 0)); live != 2 {
 		t.Fatalf("%d live just after", live)
 	}
+	// Only the working one is at work; the done one waits for a follow-up.
+	if working := s.WorkingAgents(); working != 1 {
+		t.Fatalf("%d working", working)
+	}
 }
 
 // A start row's card that changes asks again; while a request is on its way, changes wait for it
