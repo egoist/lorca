@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -54,17 +55,24 @@ func listedAgentDetail(agent *model.AgentRun) string {
 }
 
 // codingAgentsButton is the account's coding agents in the header: shown while one is live, or
-// while the flyout is open. It carries no badge, which would read as unread messages.
+// while the flyout is open, with how many are at work now as a badge. One done and waiting for a
+// follow-up keeps the button but leaves the badge.
 func (m *mainWindow) codingAgentsButton(c *ui.Context) {
+	p := colors(c)
 	s := &m.coding
-	count := store.LiveAgents(model.Now())
-	if count == 0 && !s.open {
+	if store.LiveAgents(model.Now()) == 0 && !s.open {
 		return
 	}
+	working := store.WorkingAgents()
 	holder := ui.Box(c.Key("coding-agents"))
 	var button ui.Element
 	holder.Children(func() {
-		button = hoverButton(c, hoverButtonOptions{Symbol: "chevron.left.forwardslash.chevron.right", Tooltip: L("Coding agents"), Label: L("Coding agents (%d)", count), Active: s.open})
+		button = hoverButton(c, hoverButtonOptions{Symbol: "chevron.left.forwardslash.chevron.right", Tooltip: L("Coding agents"), Label: L("Coding agents (%d)", working), Active: s.open})
+		if working > 0 {
+			ui.Row(c).Absolute().Top(-2).Right(-4).MinWidth(15).Height(15).Padding(0, 4).Radius(8).Justify(ui.Center).Background(p.Accent).PassThrough().Children(func() {
+				ui.Text(c, fmt.Sprint(working)).FontSize(10).FontWeight(600).TextColor(p.White).FontFeatures("tnum")
+			})
+		}
 	})
 	if button.Clicked() {
 		if s.open {

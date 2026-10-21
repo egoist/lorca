@@ -32,8 +32,12 @@ func TestCodingAgentsFlyout(t *testing.T) {
 	m := demoWindow(t)
 	flyouts := stubFlyouts(t)
 	tt := codingAgentsFixture(m)
-	// The button counts every live agent on the account, whichever chat is on screen.
-	if err := tt.Click(L("Coding agents (%d)", 4)); err != nil {
+	// The button's badge counts the account's agents at work now, whichever chat is on screen: four
+	// are live, and the one done with a pull request waits for a follow-up.
+	if !tt.HasText("3") {
+		t.Fatalf("no badge: %q", tt.Texts())
+	}
+	if err := tt.Click(L("Coding agents (%d)", 3)); err != nil {
 		t.Fatalf("%v: %q", err, tt.Texts())
 	}
 	settle(tt)
