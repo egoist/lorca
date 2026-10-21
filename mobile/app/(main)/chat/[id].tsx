@@ -48,6 +48,7 @@ import { Symbol } from "../../../src/ui/Symbol";
 import { usePalette, withAlpha } from "../../../src/ui/theme";
 import { quoteText } from "../../../src/ui/format";
 import { AnswerSheet } from "../../../src/ui/AnswerSheet";
+import { QuestionSheet } from "../../../src/ui/QuestionSheet";
 import { SecretSheet } from "../../../src/ui/SecretSheet";
 import { alert } from "../../../src/ui/alert";
 import {
@@ -769,6 +770,10 @@ export default function ChatScreen() {
   const [fillingId, setFillingId] = useState<string | null>(null);
   const filling = fillingId ? chat?.messages.find((m) => m.id === fillingId) : undefined;
   const fillingAsk = filling?.body.kind === "permission" && filling.body.decision === "pending" ? filling.body.secret : undefined;
+  /// The coding agent's question whose sheet is up, while it still asks.
+  const [questionId, setQuestionId] = useState<string | null>(null);
+  const questioning = questionId ? chat?.messages.find((m) => m.id === questionId) : undefined;
+  const questionAsk = questioning?.body.kind === "permission" && questioning.body.decision === "pending" ? questioning.body.question : undefined;
 
   /// The message the draft answers, from a swipe on its bubble; another chat starts without one.
   const [replying, setReplying] = useState<{ messageID: string; name: string; text: string } | null>(null);
@@ -847,6 +852,13 @@ export default function ChatScreen() {
 
   const answerCommand = useCallback((message: Message) => setAnsweringId(message.id), []);
   const fillSecret = useCallback((message: Message) => setFillingId(message.id), []);
+  const answerQuestion = useCallback((message: Message) => setQuestionId(message.id), []);
+  /// The card shows the answer at once, so the sheet closes before it is sent; one that did not
+  /// reach the bot's Runner puts the question back and says why, as a card's answer does.
+  const answeredQuestion = (sent: Promise<void>) => {
+    sent.catch((error) => alert(t("Could not answer"), error instanceof Error ? error.message : String(error)));
+    return sent;
+  };
   const stopCommand = useCallback((message: Message) => engine.stopCommand(message.chat_id, message.id), []);
   /// A coding agent's page, from any of its markers. One whose start failed has no page: its
   /// marker says why in an alert. A message whose agent's row is not loaded opens in full.
@@ -893,6 +905,7 @@ export default function ChatScreen() {
               isGroup={speakers}
               onDecide={answerCard}
               onFill={fillSecret}
+              onAnswer={answerQuestion}
             />
           );
         case "draft":
@@ -915,7 +928,7 @@ export default function ChatScreen() {
           return <StatusRow text={item.text} />;
       }
     },
-    [answerCard, answerCommand, fillSecret, bots, id, isGroup, speakers, openMarker, openAgent, startReply, revealQuoted, flashId, stopCommand],
+    [answerCard, answerCommand, fillSecret, answerQuestion, bots, id, isGroup, speakers, openMarker, openAgent, startReply, revealQuoted, flashId, stopCommand],
   );
 
   if (!chat) {
@@ -1079,6 +1092,14 @@ export default function ChatScreen() {
           fields={fillingAsk.fields}
           onDismiss={() => setFillingId(null)}
           onSave={(values) => engine.answerSecret(filling.chat_id, filling.id, values)}
+        />
+      ) : null}
+      {questioning && questionAsk ? (
+        <QuestionSheet
+          ask={questionAsk}
+          onDismiss={() => setQuestionId(null)}
+          onSubmit={(answers) => answeredQuestion(engine.answerQuestion(questioning.chat_id, questioning.id, answers))}
+          onSkip={() => answeredQuestion(engine.answerPermission(questioning.chat_id, questioning.id, "deny"))}
         />
       ) : null}
     </View>

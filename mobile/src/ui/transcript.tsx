@@ -15,7 +15,7 @@ import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSequence, with
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
 import { ShimmerView } from "../../modules/lorca-core/ShimmerView";
-import { agentMessageFromUser, agentStartRow, agentTitle, agentWrote, canBeQuoted, isAgentRow, isLive, isSentMessage, showsCard, showsSpeakers, type Author, type Body, type Bot, type Chat, type CommandRun, type Message } from "../core/model";
+import { agentMessageFromUser, agentStartRow, answeredText, agentTitle, agentWrote, canBeQuoted, isAgentRow, isLive, isSentMessage, showsCard, showsSpeakers, type Author, type Body, type Bot, type Chat, type CommandRun, type Message } from "../core/model";
 import { engine } from "../core/engine";
 import { useStore } from "../core/store";
 import { language, t, useLanguage } from "../i18n";
@@ -462,10 +462,54 @@ export const NoticeRow = memo(function NoticeRow({ row }: { row: Extract<Row, { 
 /// call; an Always allow keeps its rule. A bot's Access refusing a call asks for more access: Edit
 /// Access… opens the bot's Access, and Dismiss puts the request away; neither runs the call. In a
 /// group the card sits in the bubbles' column, the bot's avatar beside its bottom edge.
-export const PermissionRow = memo(function PermissionRow({ row, isGroup, onDecide, onFill }: { row: Extract<Row, { type: "permission" }>; isGroup: boolean; onDecide: (message: Message, decision: "allow" | "always" | "deny") => void; onFill: (message: Message) => void }) {
+export const PermissionRow = memo(function PermissionRow({ row, isGroup, onDecide, onFill, onAnswer }: { row: Extract<Row, { type: "permission" }>; isGroup: boolean; onDecide: (message: Message, decision: "allow" | "always" | "deny") => void; onFill: (message: Message) => void; onAnswer: (message: Message) => void }) {
   if (row.body.tool === "secret" && row.body.secret) return <SecretRow row={row} isGroup={isGroup} onDecide={onDecide} onFill={onFill} />;
+  if (row.body.tool === "question" && row.body.question) return <QuestionRow row={row} isGroup={isGroup} onAnswer={onAnswer} />;
   return <AskRow row={row} isGroup={isGroup} onDecide={onDecide} />;
 });
+
+/// A coding agent asking the user: who asks ("Claude Code, the coding agent on “Title”, asks
+/// you."), the first question, and Answer, which opens `QuestionSheet` with every question and
+/// Submit and Skip there. Once decided, what was answered ("Answered: SQLite"), or Skipped, or
+/// how it ended. In a group the card sits in the bubbles' column, the bot's avatar beside its
+/// bottom edge.
+function QuestionRow({ row, isGroup, onAnswer }: { row: Extract<Row, { type: "permission" }>; isGroup: boolean; onAnswer: (message: Message) => void }) {
+  useLanguage();
+  const p = usePalette();
+  const showsAvatar = isGroup && row.message.author.kind === "bot";
+  const body = row.body;
+  const pending = body.decision === "pending";
+  const answered = body.question ? answeredText(body.question) : "";
+  const decided: Record<string, string> = { denied: t("Skipped"), expired: t("No answer in time"), dismissed: t("Dismissed") };
+  const outcome = body.decision === "allowed" && answered ? t("Answered: {answer}", { answer: answered }) : `${decided[body.decision] ?? body.decision} · ${body.summary}`;
+  return (
+    <View style={[styles.messageRow, { paddingTop: row.groupStart ? 14 : 6 }]}>
+      {showsAvatar && (
+        <View style={{ width: AVATAR + GUTTER, alignSelf: "flex-end" }}>
+          <BotAvatar bot={row.bot} size={AVATAR} />
+        </View>
+      )}
+      <View style={[styles.permission, { backgroundColor: p.cell, borderColor: p.separator }]}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <Symbol name="questionmark.circle" size={16} color={pending ? p.tint : p.secondaryLabel} />
+          <Text style={[styles.permissionTitle, { color: p.label }]} numberOfLines={2}>
+            {body.reason || body.plugin_name}
+          </Text>
+        </View>
+        <Text style={[pending ? styles.reasonText : styles.caption, { color: pending ? p.label : p.secondaryLabel }]} numberOfLines={pending ? 4 : 3}>
+          {pending ? body.summary : outcome}
+        </Text>
+        {pending ? (
+          <View style={{ flexDirection: "row", gap: 8, marginTop: 4 }}>
+            <Pressable onPress={() => onAnswer(row.message)} style={({ pressed }) => [styles.permissionButton, { backgroundColor: pressed ? p.separator : p.fill }]} accessibilityRole="button">
+              <Text style={{ color: p.tint, fontSize: 13, fontWeight: "600" }}>{t("Answer")}</Text>
+            </Pressable>
+          </View>
+        ) : null}
+      </View>
+    </View>
+  );
+}
 
 /// A bot asking for a secret, as the Mac's card: who asks and where it goes, why, Fill In, which
 /// opens `SecretSheet` with a field for each value, and Not now, then that the value stays on the

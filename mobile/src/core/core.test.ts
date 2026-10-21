@@ -12,6 +12,13 @@ import {
   agentStarted,
   agentTitle,
   agentWrote,
+  answeredText,
+  pickOption,
+  questionAnswer,
+  questionAnswers,
+  writeOther,
+  type Question,
+  type QuestionPick,
   isAgentRow,
   pullRequestLabel,
   readyCodingAgent,
@@ -138,6 +145,8 @@ describe("model", () => {
     expect(agentName("opencode")).toBe("OpenCode");
     expect(agentName("pi")).toBe("pi");
     expect(agentName("fx")).toBe("fx");
+    // A bot's own sub agent is no product: it is named in the user's language.
+    expect(agentName("lorca")).toBe("Subagent");
     expect(agentTitle(agent("working"))).toBe("Fix the login");
     expect(agentTitle(agent("working", { title: "" }))).toBe("Fix it");
     for (const state of ["starting", "working", "asking"] as const) expect(agentIsRunning(agent(state))).toBe(true);
@@ -161,6 +170,36 @@ describe("model", () => {
     const messages = [start, sent].map((body, i) => ({ id: `m${i}`, chat_id: "c", author: { kind: "bot" as const, bot_id: "b" }, body, state: { kind: "complete" as const }, created_at: i }));
     expect(agentStartRow(messages, "agent-1")?.id).toBe("m0");
     expect(agentStartRow(messages, "")).toBeUndefined();
+  });
+
+  test("a coding agent's questions take an option, several, or the user's own words", () => {
+    const database: Question = { id: "Which database?", header: "Database", question: "Which database?", options: [{ label: "Postgres", description: "The usual" }, { label: "SQLite" }] };
+    const extras: Question = { id: "extras", header: "", question: "Which extras?", options: [{ label: "Auth" }, { label: "Billing" }, { label: "Search" }], multi_select: true };
+    const name: Question = { id: "name", header: "", question: "What should it be called?", options: [] };
+    const after = (...changes: ((pick: QuestionPick) => QuestionPick)[]) => changes.reduce((pick, change) => change(pick), { picked: [], other: "" } as QuestionPick);
+
+    // One answer: the last option tapped, and the user's words in its place.
+    expect(questionAnswer(database, after(pickOption(database, "Postgres"), pickOption(database, "SQLite")))).toBe("SQLite");
+    expect(questionAnswer(database, after(pickOption(database, "SQLite"), writeOther(database, " MySQL ")))).toBe("MySQL");
+    expect(after(pickOption(database, "SQLite"), writeOther(database, "MySQL")).picked).toEqual([]);
+    expect(after(writeOther(database, "MySQL"), pickOption(database, "SQLite"))).toEqual({ picked: ["SQLite"], other: "" });
+    // Blank words leave the option picked.
+    expect(questionAnswer(database, after(pickOption(database, "SQLite"), writeOther(database, "  ")))).toBe("SQLite");
+    expect(questionAnswer(database, undefined)).toBe("");
+
+    // Several: in the options' order, the user's words last, joined with ", "; a second tap takes one out.
+    const several = after(pickOption(extras, "Search"), pickOption(extras, "Auth"), pickOption(extras, "Billing"), pickOption(extras, "Billing"), writeOther(extras, "Email"));
+    expect(questionAnswer(extras, several)).toBe("Auth, Search, Email");
+    expect(questionAnswer(extras, after(writeOther(extras, "Email")))).toBe("Email");
+
+    // Submit waits for every question.
+    const picks = { [database.id]: after(pickOption(database, "SQLite")), extras: several };
+    expect(questionAnswers([database, extras, name], picks)).toBeNull();
+    const answers = questionAnswers([database, extras, name], { ...picks, name: after(writeOther(name, "Shop")) });
+    expect(answers).toEqual({ "Which database?": "SQLite", extras: "Auth, Search, Email", name: "Shop" });
+    // The answered card says what was answered, in the questions' order; a skipped one has none.
+    expect(answeredText({ questions: [database, extras, name], answers: answers! })).toBe("SQLite; Auth, Search, Email; Shop");
+    expect(answeredText({ questions: [database] })).toBe("");
   });
 
   test("a command runs in its terminal from its session's start to its end", () => {
@@ -641,6 +680,9 @@ describe("format", () => {
     expect(preview(chat("dm", [started, said, wrote]), bots)).toBe("You messaged Login fix: Also check the signup form");
     expect(agentMessageFromUser(wrote)).toBe(true);
     expect(agentMessageFromUser(said)).toBe(false);
+    // A coding agent's question, by the agent's name and its first question.
+    const asks = msg({ kind: "bot", bot_id: "b1" }, { kind: "permission", plugin_id: "coding_agent", plugin_name: "Claude Code", tool: "question", summary: "Which database? (+1 more)", decision: "pending", question: { questions: [] } });
+    expect(preview(chat("dm", [started, asks]), bots)).toBe("Claude Code asks: Which database? (+1 more)");
   });
 
   test("the working row reads what the one bot at work is doing", () => {

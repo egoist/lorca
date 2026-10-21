@@ -184,7 +184,9 @@ export function preview(chat: Chat, bots: Map<string, Bot>): string {
       const who = shown.author.kind === "bot" ? (bots.get(shown.author.bot_id)?.name ?? t("A bot")) : t("A bot");
       const plugin = shown.body.plugin_name;
       body =
-        shown.body.tool === "connect"
+        shown.body.tool === "question"
+          ? t("{agent} asks: {question}", { agent: plugin, question: shown.body.summary })
+          : shown.body.tool === "connect"
           ? t("{who} needs a sign-in to {plugin}", { who, plugin })
           : shown.body.tool === "install"
             ? t("{who} wants to install {plugin}", { who, plugin })

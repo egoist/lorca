@@ -103,7 +103,7 @@ impl Tool for CodingAgentTool {
             agents.find(&self.chat_id, &self.bot.id, id).ok_or_else(|| ToolError(format!("You have no coding agent {id} in this chat. coding_agent list shows yours.")))
         };
         let text = match args["action"].as_str() {
-            Some("start") => self.start_unless_stopped(call_id, &args, &cancel).await.map_err(ToolError)?,
+            Some("start") => self.start_unless_stopped(call_id, &args, &cancel, false).await.map_err(ToolError)?,
             Some("read") => {
                 let agent = agent()?;
                 let lines = args["lines"].as_u64().map(|lines| lines.clamp(1, 2000) as usize);
@@ -171,6 +171,7 @@ impl Tool for CodingAgentTool {
                 let rows: Vec<String> = agents
                     .of(&self.chat_id, &self.bot.id)
                     .iter()
+                    .filter(|agent| agent.record.lock().unwrap().kind != super::SUBAGENT)
                     .map(|agent| {
                         let record = agent.record();
                         let place = match &record.branch {
@@ -197,7 +198,7 @@ impl CodingAgentTool {
     /// Starts the agent in a task of its own, since getting one ready can take a while and a call
     /// Stop cuts off is dropped: a start stopped part way finishes, and its agent stops as soon
     /// as it runs, so nothing is left running with no one following it.
-    pub(super) async fn start_unless_stopped(&self, call_id: &str, args: &Value, cancel: &CancellationToken) -> Result<String, String> {
+    pub(super) async fn start_unless_stopped(&self, call_id: &str, args: &Value, cancel: &CancellationToken, subagent: bool) -> Result<String, String> {
         let tool = CodingAgentTool {
             app: self.app.clone(),
             bot: self.bot.clone(),
@@ -209,7 +210,7 @@ impl CodingAgentTool {
         };
         let (call_id, args) = (call_id.to_string(), args.clone());
         let row = self.app.coding_agents.row(&self.chat_id, &call_id);
-        let mut starting = tokio::spawn(async move { tool.start(&call_id, &args).await });
+        let mut starting = tokio::spawn(async move { if subagent { tool.start_subagent(&call_id, &args).await } else { tool.start(&call_id, &args).await } });
         tokio::select! {
             started = &mut starting => started.map_err(|error| error.to_string())?,
             _ = cancel.cancelled() => {
@@ -261,6 +262,7 @@ impl CodingAgentTool {
             secrets,
             event: self.event.as_ref().map(|event| crate::event_triggers::EventTask { data: String::new(), ..event.clone() }),
             unattended: self.unattended,
+            read_only: false,
         };
         let agent = super::start(app, start).await?;
         let id = agent.id();
@@ -276,6 +278,119 @@ impl CodingAgentTool {
             Some(warning) => format!("{started}\n\n{warning}"),
             None => started,
         })
+    }
+}
+
+impl CodingAgentTool {
+    /// Starts a subagent on the bot's own task, in `folder` (default: the bot's working
+    /// directory), only reading there when its `type` is `explore`.
+    async fn start_subagent(&self, call_id: &str, args: &Value) -> Result<String, String> {
+        let app = &self.app;
+        let prompt = args["prompt"].as_str().map(str::trim).filter(|prompt| !prompt.is_empty()).ok_or("start needs a prompt")?;
+        let task: String = prompt.lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or(prompt).chars().take(TASK_CHARS).collect();
+        let title = args["title"].as_str().map(super::transcript::title).filter(|title| !title.is_empty()).unwrap_or_else(|| task.clone());
+        let title: String = title.chars().take(TITLE_CHARS).collect();
+        let message_id = app.coding_agents.row(&self.chat_id, call_id).ok_or("This call has no row in the chat")?;
+        let read_only = args["type"].as_str() == Some("explore");
+        if !read_only {
+            if let Err(denied) = crate::permissions::check_tool(app, &self.bot, "bash") {
+                return Err(format!("{denied}. A general subagent runs commands, so it needs Shell commands too; an explore one only reads."));
+            }
+        }
+        let place = workspace::prepare(&self.workdir, args["folder"].as_str()).await?;
+        let start = Start {
+            chat_id: self.chat_id.clone(),
+            bot_id: self.bot.id.clone(),
+            message_id,
+            trigger_message_id: self.trigger_message_id.clone(),
+            kind: super::SUBAGENT.into(),
+            program: PathBuf::new(),
+            place: place.clone(),
+            title: title.clone(),
+            task,
+            prompt: prompt.to_string(),
+            secrets: Vec::new(),
+            event: self.event.as_ref().map(|event| crate::event_triggers::EventTask { data: String::new(), ..event.clone() }),
+            unattended: self.unattended,
+            read_only,
+        };
+        let agent = super::start(app, start).await?;
+        let id = agent.id();
+        Ok(format!(
+            "Started subagent {id} on “{title}” in {}. It works in the background with a context of its own. You will be notified with its report when it is done; until then you know nothing of its results, so do not report, assume, or predict them, do not poll it, and do not do its task yourself meanwhile. Go on with other work or end your turn. subagent send {id} gives it a follow-up with its context, read shows its history, and stop ends it.",
+            super::home_relative(&place.folder)
+        ))
+    }
+}
+
+const SUBAGENT_DESCRIPTION: &str = "Hand a task to a subagent of yours: your own agent loop on your Runner, with a context of its own, your \
+model, and the file and shell tools in `folder` (default: your working directory), every command and change reviewed as yours \
+are. Use one for work that would fill your context or that runs while you go on: researching a codebase, a search across many \
+files, a long check, independent pieces of work in parallel (several starts in one turn). `start` runs one on `prompt` under a short \
+`title`; `type: \"explore\"` only reads and searches, `general` (default) also runs commands and changes files. It sees nothing of \
+this chat, so brief it like a smart colleague who just walked in: the goal and why, what you know already, what to leave alone, \
+and what to bring back (\"report in under 200 words\", \"list the files with line numbers\"). It answers only you, never the user, \
+and asks nobody anything. `start` returns its id at once and it works in the background: you are notified with its report when it \
+is done, as an \"<agent-notification>\" on a turn of its own, and its report never reaches the user unless you tell them. Until \
+then you know nothing of its results: do not report, assume, or predict them, do not poll it, and do not do its task yourself \
+meanwhile. `send` gives it a follow-up, taken up at its next step with its whole context, or at once with `interrupt: true`; one \
+that is done starts again on its context. `read` shows its history (what is new, its last `lines`, or from line `offset`). `stop` \
+ends it. `list` shows your subagents in this chat.";
+
+/// `subagent`: the bot's handle on its own subagents, which run on the coding agents' machinery.
+pub struct SubagentTool(pub CodingAgentTool);
+
+#[async_trait]
+impl Tool for SubagentTool {
+    fn name(&self) -> &str {
+        "subagent"
+    }
+    fn description(&self) -> &str {
+        SUBAGENT_DESCRIPTION
+    }
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "action": { "type": "string", "enum": ["start", "read", "send", "stop", "list"] },
+                "title": { "type": "string", "description": "start: a short title for its task, a few words." },
+                "prompt": { "type": "string", "description": "start: the task, briefed in full: it sees nothing of this chat." },
+                "type": { "type": "string", "enum": ["general", "explore"], "description": "start: explore only reads and searches; general (default) also runs commands and changes files." },
+                "folder": { "type": "string", "description": "start: where it works, absolute, ~/…, or relative to your working directory." },
+                "id": { "type": "string", "description": "read, send, stop: the subagent's id." },
+                "message": { "type": "string", "description": "send: your follow-up." },
+                "interrupt": { "type": "boolean", "description": "send: stop what it does now and take this at once." },
+                "lines": { "type": "integer", "description": "read: its last lines instead of what is new; with offset, how many lines from there (default 200)." },
+                "offset": { "type": "integer", "description": "read: the line of its whole history to read from, 1 for its start." }
+            },
+            "required": ["action"]
+        })
+    }
+
+    async fn execute(&self, call_id: &str, args: Value, cancel: CancellationToken, on_update: ToolUpdateFn) -> Result<ToolResult, ToolError> {
+        let tool = &self.0;
+        match args["action"].as_str() {
+            Some("start") => {
+                if cancel.is_cancelled() {
+                    return Err(ToolError("Stopped".into()));
+                }
+                let text = tool.start_unless_stopped(call_id, &args, &cancel, true).await.map_err(ToolError)?;
+                Ok(ToolResult::text(text))
+            }
+            Some("list") => {
+                let rows: Vec<String> = tool
+                    .app
+                    .coding_agents
+                    .of(&tool.chat_id, &tool.bot.id)
+                    .iter()
+                    .map(|agent| agent.record())
+                    .filter(|record| record.kind == super::SUBAGENT)
+                    .map(|record| format!("- {} “{}”: {} in {}", record.id, record.title, state_words(&record), super::home_relative(&record.folder)))
+                    .collect();
+                Ok(ToolResult::text(if rows.is_empty() { "You have started no subagents in this chat.".into() } else { rows.join("\n") }))
+            }
+            _ => tool.execute(call_id, args, cancel, on_update).await,
+        }
     }
 }
 

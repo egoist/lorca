@@ -334,8 +334,10 @@ export type Body =
   | { kind: "notice"; text: string; routine_id?: string }
   /// The bot asks before a plugin or shell action, or before installing a plugin (`tool` is `install`).
   /// `rule` is the rule Always allow adds, which Auto-review proposed for a shell command (`plugin_id` is `computer`);
-  /// `command` is that command in full, where `summary` is its first line.
-  | { kind: "permission"; plugin_id: string; plugin_name: string; tool: string; summary: string; decision: "pending" | "allowed" | "always" | "denied" | "expired" | "dismissed" | "connected" | "failed"; reason?: string; rule?: string; command?: string; link?: string; code?: string; secret?: SecretAsk }
+  /// `command` is that command in full, where `summary` is its first line. A coding agent asking
+  /// the user (`tool` `question`, `plugin_id` `coding_agent`, `plugin_name` the agent's name)
+  /// carries its `question`; `denied` is a Skip.
+  | { kind: "permission"; plugin_id: string; plugin_name: string; tool: string; summary: string; decision: "pending" | "allowed" | "always" | "denied" | "expired" | "dismissed" | "connected" | "failed"; reason?: string; rule?: string; command?: string; link?: string; code?: string; secret?: SecretAsk; question?: QuestionAsk }
   /// An email or Slack message the bot wrote in the chat, waiting for the user to send it: the
   /// chat's view of its review item, whose `version` Send and Discard name. `note` says why it
   /// was not sent or needs another look; `direct` is whether, with drafts off, the bot sends such
@@ -366,6 +368,79 @@ export interface SecretAsk {
   use: "browser" | "command" | "plugin";
   site?: string;
   fields: { name: string; label: string }[];
+}
+
+/// What a coding agent asks the user, as Claude Code's `AskUserQuestion` asks it: one to four
+/// questions, each answered with one of its options, several when `multi_select`, or the user's
+/// own words. The card takes the answers by question id (`chats.permission`, `answers`).
+export interface QuestionAsk {
+  questions: Question[];
+  /** Once answered: an option's label, labels joined with ", ", or the user's own words. None when skipped. */
+  answers?: Record<string, string>;
+}
+
+export interface Question {
+  /** What the agent calls it, for its answer: the question itself for Claude Code, its id for Codex. */
+  id: string;
+  /** A short label, a few words; may be empty. */
+  header: string;
+  question: string;
+  /** May be empty: the user answers in their own words. */
+  options: QuestionOption[];
+  multi_select?: boolean;
+}
+
+export interface QuestionOption {
+  label: string;
+  description?: string;
+}
+
+/// What the user picked for one question: option labels, and their own words ("Other").
+export interface QuestionPick {
+  picked: string[];
+  other: string;
+}
+
+/// What a tap on an option does: a question that takes one answer takes the option in place of
+/// the pick and the user's own words; one that takes several adds it or takes it out.
+export function pickOption(question: Question, label: string): (pick: QuestionPick) => QuestionPick {
+  return (pick) =>
+    question.multi_select
+      ? { ...pick, picked: pick.picked.includes(label) ? pick.picked.filter((picked) => picked !== label) : [...pick.picked, label] }
+      : { picked: [label], other: "" };
+}
+
+/// Typing in Other: for a question that takes one answer, the words replace the option picked.
+export function writeOther(question: Question, text: string): (pick: QuestionPick) => QuestionPick {
+  return (pick) => (question.multi_select || !text.trim() ? { ...pick, other: text } : { picked: [], other: text });
+}
+
+/// The answer a pick gives: the user's own words, else the option picked; for several, the
+/// labels in the options' order and the user's words after them, joined with ", ". Empty while
+/// there is none.
+export function questionAnswer(question: Question, pick: QuestionPick | undefined): string {
+  if (!pick) return "";
+  const other = pick.other.trim();
+  if (!question.multi_select) return other || (pick.picked[0] ?? "");
+  const labels = question.options.map((option) => option.label).filter((label) => pick.picked.includes(label));
+  return [...labels, other].filter(Boolean).join(", ");
+}
+
+/// The answers by question id, once every question has one; `null` until then.
+export function questionAnswers(questions: Question[], picks: Record<string, QuestionPick>): Record<string, string> | null {
+  const answers: Record<string, string> = {};
+  for (const question of questions) {
+    const answer = questionAnswer(question, picks[question.id]);
+    if (!answer) return null;
+    answers[question.id] = answer;
+  }
+  return answers;
+}
+
+/// What an answered card says it answered: each question's answer, in the questions' order.
+export function answeredText(ask: QuestionAsk): string {
+  const answers = ask.answers ?? {};
+  return ask.questions.map((question) => answers[question.id]).filter(Boolean).join("; ");
 }
 
 /// A secret kept on a Runner for one of its bots, as Settings lists it: never its value.
@@ -420,7 +495,7 @@ export interface CommandRun {
 export interface AgentRun {
   /** The bot's handle for it, `agent-3f9a2c1d`; empty until it started, and for good when the start failed. */
   id: string;
-  /** `claude`, `codex`, `opencode`, or `pi`; empty before the start picked one. */
+  /** `claude`, `codex`, `opencode`, `pi`, `fx`, or `lorca` (the bot's own sub agent); empty before the start picked one. */
   kind: string;
   /** What the bot calls the job, which names the agent wherever it shows. */
   title: string;
@@ -455,9 +530,12 @@ export function readyCodingAgent(agents: CodingAgent[]): CodingAgent | undefined
   return agents.find((agent) => agent.enabled && agent.installed);
 }
 
-/// A coding agent's product name, which is not translated.
+/// A coding agent's product name, which is not translated; Lorca's own sub agent (`lorca`) is a
+/// Subagent, in the user's language.
 export function agentName(kind: string): string {
   switch (kind) {
+    case "lorca":
+      return t("Subagent");
     case "codex":
       return "Codex";
     case "opencode":

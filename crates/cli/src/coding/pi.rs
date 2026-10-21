@@ -136,8 +136,8 @@ impl Driver for Pi {
     }
 }
 
-/// One of pi's tool calls as a step, its paths from `folder`.
-fn step(name: &str, args: &Value, folder: &Path) -> ToolStep {
+/// One of pi's tool calls as a step, its paths from `folder`; Lorca's own tools are pi's.
+pub(crate) fn step(name: &str, args: &Value, folder: &Path) -> ToolStep {
     let field = |key: &str| args[key].as_str().unwrap_or("").to_string();
     let path = || Some(field("path")).filter(|path| !path.is_empty()).map(|path| transcript::path(&path, folder));
     let (kind, title, file) = match name {

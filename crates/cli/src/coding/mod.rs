@@ -18,6 +18,7 @@ pub(crate) mod acp;
 pub(crate) mod claude;
 pub(crate) mod codex;
 pub(crate) mod driver;
+pub(crate) mod lorca;
 pub(crate) mod pi;
 pub(crate) mod process;
 pub mod pull;
@@ -41,7 +42,7 @@ use crate::model::{AgentChanges, AgentRun, Author, Body, Message};
 use driver::{Approval, Driver, Event};
 use transcript::{Item, Transcript};
 
-pub use tool::CodingAgentTool;
+pub use tool::{CodingAgentTool, SubagentTool};
 
 pub use crate::model::CODING_AGENT_KINDS as KINDS;
 /// An agent that is done with its work and hears nothing for this long stops; a follow-up starts
@@ -57,6 +58,14 @@ const MESSAGE_CHARS: usize = 4000;
 const FORGET_AFTER: f64 = 30.0 * 24.0 * 3600.0;
 
 pub use crate::model::coding_agent_name as name;
+
+/// The kind of Lorca's own subagents, which run on the coding agents' rows and transcripts.
+pub const SUBAGENT: &str = "lorca";
+
+/// What an agent of `kind` is to its bot: "coding agent", or "subagent".
+pub(crate) fn role(kind: &str) -> &'static str {
+    if kind == SUBAGENT { "subagent" } else { "coding agent" }
+}
 
 /// `~/dev/lorca` for a folder in the home folder.
 pub(crate) fn home_relative(path: &Path) -> String {
@@ -123,6 +132,9 @@ pub(crate) struct Record {
     /// goes back to it at once, as an unattended turn's does, instead of waiting on a card.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unattended: bool,
+    /// A subagent that only reads and searches.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub read_only: bool,
 }
 
 impl Record {
@@ -543,6 +555,8 @@ pub(crate) struct Start {
     pub secrets: Vec<String>,
     pub event: Option<crate::event_triggers::EventTask>,
     pub unattended: bool,
+    /// A subagent that only reads and searches.
+    pub read_only: bool,
 }
 
 /// Starts an agent and follows it. It returns once the agent runs; its work goes on.
@@ -575,6 +589,7 @@ pub(crate) async fn start(app: &Arc<App>, start: Start) -> Result<Arc<Agent>, St
         secrets: start.secrets.clone(),
         event: start.event.clone(),
         unattended: start.unattended,
+        read_only: start.read_only,
     };
     let agent = Agent::new(record, Transcript::default());
     *agent.budget.lock().unwrap() = crate::budgets::current();
@@ -614,6 +629,12 @@ async fn launch(app: &Arc<App>, agent: &Arc<Agent>, program: &Path, prompt: &str
     tokio::spawn(supervise(app.clone(), agent.clone(), rx, generation));
     let folder = &record.folder;
     let driver = match record.kind.as_str() {
+        SUBAGENT => {
+            let context = record.session.clone().map(PathBuf::from).unwrap_or_else(|| app.config.home.join("agents").join(format!("{}.context.json", record.id)));
+            let budget = agent.budget.lock().unwrap().clone();
+            let launch = lorca::Launch { app, bot_id: &record.bot_id, folder, context, read_only: record.read_only, budget };
+            lorca::start(launch, &prompt, session.is_some(), tx).await?
+        }
         "codex" => codex::start(program, folder, &prompt, session, &variables, tx).await?,
         "opencode" => {
             let mut variables = variables;
@@ -954,8 +975,9 @@ fn tell(app: &Arc<App>, agent: &Arc<Agent>, text: &str, failed: bool) {
     agent.record.lock().unwrap().unheard = Some(message_id.clone());
     app.coding_agents.sync(app, agent);
     save(app);
-    // Done: the user reviews the work from its report, which alerts on its own.
-    if !failed {
+    // Done: the user reviews the work from its report, which alerts on its own. A subagent's
+    // report is the bot's, whose reply alerts.
+    if !failed && record.kind != SUBAGENT {
         if let (Some(chat), Some(bot)) = (app.chat(&record.chat_id), app.bot(&record.bot_id)) {
             crate::push::reply(app, &chat, &bot, &notice);
         }
@@ -979,8 +1001,9 @@ fn tell(app: &Arc<App>, agent: &Arc<Agent>, text: &str, failed: bool) {
 pub fn notification(agent_id: &str, kind: &str, title: &str, whose: &str, text: &str, failed: bool) -> String {
     let (status, what) = if failed { ("ended", "reason") } else { ("done", "report") };
     format!(
-        "<agent-notification>\n<agent-id>{agent_id}</agent-id>\n<agent>{}, {whose} coding agent on “{title}”</agent>\n<status>{status}</status>\n<{what}>{text}</{what}>\n</agent-notification>",
-        crate::model::coding_agent_name(kind)
+        "<agent-notification>\n<agent-id>{agent_id}</agent-id>\n<agent>{}, {whose} {} on “{title}”</agent>\n<status>{status}</status>\n<{what}>{text}</{what}>\n</agent-notification>",
+        crate::model::coding_agent_name(kind),
+        role(kind)
     )
 }
 
@@ -1006,6 +1029,9 @@ pub fn wake_cue(app: &App, job: &crate::model::Job) -> Option<String> {
 /// What the bot hears about the agent, from the message that woke it: its report when done,
 /// why it ended when `failed`.
 pub(crate) fn heard_cue(app: &App, record: &Record, agent: &Agent, failed: bool) -> String {
+    if record.kind == SUBAGENT {
+        return without_secrets(app, subagent_cue(record, agent, failed));
+    }
     let who = format!("{} ({}), the coding agent you started on “{}”", name(&record.kind), record.id, record.title);
     // Why it ended, unless a message started it again before a turn heard it.
     if failed && record.state != "failed" {
@@ -1040,6 +1066,29 @@ pub(crate) fn heard_cue(app: &App, record: &Record, agent: &Agent, failed: bool)
         )
     };
     without_secrets(app, cue)
+}
+
+/// What the bot hears about its subagent, whose report reached it alone, as Claude Code tells its
+/// agent of a subagent's end: it goes on with the user's request with what the subagent found.
+fn subagent_cue(record: &Record, agent: &Agent, failed: bool) -> String {
+    let who = format!("Your subagent ({}) on “{}”", record.id, record.title);
+    if failed && record.state != "failed" {
+        return format!("[{who} ended on its own, and has been started again since. Do not start it again.]");
+    }
+    if failed {
+        let tail = agent.transcript.lock().unwrap().last_lines(12);
+        let tail = if tail.trim().is_empty() { String::new() } else { format!(" Its last lines:\n{tail}\n") };
+        return format!(
+            "[{who} ended on its own: {}.{tail} Go on with what the user asked: send it a message asking it to go on when it ended \
+             for a passing reason, do the work another way, or tell the user what stands in the way.]",
+            record.outcome.as_deref().unwrap_or("it stopped")
+        );
+    }
+    format!(
+        "[{who} is done. Its report above reached only you, not the user. Go on with what the user asked: tell them what matters from \
+         it in your own words, or carry on with the work. subagent read shows its whole history and subagent send gives it a \
+         follow-up, which it takes up with its context. Claim nothing its report and history do not show.]"
+    )
 }
 
 /// What Auto-review hears about an agent's environment: the saved secrets in it.
@@ -1079,9 +1128,13 @@ async fn approve(app: &Arc<App>, agent: &Arc<Agent>, approval: Approval) -> Resu
                 return Ok(());
             }
             let mut description = format!(
-                "{who}, a coding agent this bot started, wants to run this shell command as the user on {runner_name}, with full filesystem, process, credential, and network access. Working directory: {}. Lorca asks every coding agent to push its work and open a pull request when it is done, unless the user's request says otherwise.",
+                "{who}, a {} this bot started, wants to run this shell command as the user on {runner_name}, with full filesystem, process, credential, and network access. Working directory: {}.",
+                role(&record.kind),
                 home_relative(&folder)
             );
+            if record.kind != SUBAGENT {
+                description.push_str(" Lorca asks every coding agent to push its work and open a pull request when it is done, unless the user's request says otherwise.");
+            }
             if !record.secrets.is_empty() {
                 description.push_str(&format!(" {}", holds_secrets(&record.secrets)));
             }
@@ -1096,12 +1149,12 @@ async fn approve(app: &Arc<App>, agent: &Arc<Agent>, approval: Approval) -> Resu
             if !paths.is_empty() && paths.iter().all(inside) {
                 return Ok(());
             }
-            let description = format!("{who}, a coding agent this bot started in {}, wants to change files outside that folder, as the user on {runner_name}.", home_relative(&folder));
+            let description = format!("{who}, a {} this bot started in {}, wants to change files outside that folder, as the user on {runner_name}.", role(&record.kind), home_relative(&folder));
             let shown = paths.iter().map(|path| home_relative(Path::new(path))).collect::<Vec<_>>().join("\n");
             ("edit", description, json!({ "paths": paths }), format!("Change {shown}"))
         }
         Approval::Tool { name: tool, input } => {
-            let description = format!("{who}, a coding agent this bot started in {}, wants to use its tool {tool} as the user on {runner_name}.", home_relative(&folder));
+            let description = format!("{who}, a {} this bot started in {}, wants to use its tool {tool} as the user on {runner_name}.", role(&record.kind), home_relative(&folder));
             let detail = input.as_object().and_then(|fields| fields.values().find_map(|value| value.as_str().filter(|text| text.len() < 120).map(str::to_string))).unwrap_or_default();
             let shown = if detail.is_empty() { tool.clone() } else { format!("{tool}({detail})") };
             ("coding_agent_tool", description, json!({ "tool": tool, "input": input }), shown)
@@ -1138,7 +1191,7 @@ async fn approve(app: &Arc<App>, agent: &Arc<Agent>, approval: Approval) -> Resu
     let always_rule = rule.map(|text| crate::model::AutoReviewRule { id: uuid::Uuid::new_v4().to_string(), text, behavior: "allow".into(), tool: None });
     // The card is the bot's, so it says which of its agents asks.
     let asks = if tool == "bash" { "asks to run this." } else { "asks for this." };
-    let who_asks = format!("{who}, the coding agent on “{}”, {asks}", without_secrets(app, record.title.clone()));
+    let who_asks = format!("{who}, the {} on “{}”, {asks}", role(&record.kind), without_secrets(app, record.title.clone()));
     let reason = Some(match reason {
         Some(reason) => format!("{who_asks} {reason}"),
         None => who_asks,
@@ -1191,7 +1244,7 @@ async fn ask_question(app: &Arc<App>, agent: &Arc<Agent>, questions: Vec<crate::
             summary,
             arguments: Value::Null,
             decision: "pending".into(),
-            reason: Some(format!("{who}, the coding agent on “{}”, asks you.", without_secrets(app, record.title.clone()))),
+            reason: Some(format!("{who}, the {} on “{}”, asks you.", role(&record.kind), without_secrets(app, record.title.clone()))),
             rule: None,
             command: None,
             link: None,

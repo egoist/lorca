@@ -713,7 +713,7 @@ async fn a_turn_that_ends_while_a_background_task_runs_is_not_its_report() {
     let app = &scratch.app;
     auto_review_off(app);
     let tool = tool(&scratch);
-    let row = start_row(app, "call-1");
+    start_row(app, "call-1");
     let chat_lock = app.chat_lock("chat");
     let _held = chat_lock.lock().await;
     call(&tool, "call-1", json!({ "action": "start", "agent": "claude", "title": "CI", "folder": "shop", "prompt": "Ship it (background)" })).await.unwrap();
@@ -767,6 +767,93 @@ async fn an_agents_question_to_the_user_is_a_card_whose_answers_reach_it() {
     let Body::Permission { decision, question: Some(answered), .. } = app.message("chat", &card_id).unwrap().body else { panic!() };
     assert_eq!(decision, "allowed");
     assert_eq!(answered.answers.unwrap().get("Which database?").map(String::as_str), Some("SQLite"));
+}
+
+/// A model that answers each request with the next scripted reply, over OpenAI's chat completions:
+/// a tool call (`name {json}`) or text. It keeps each request's body.
+async fn scripted_model(app: &App, replies: Vec<&'static str>) -> Arc<Mutex<Vec<Value>>> {
+    use axum::{routing::post, Json, Router};
+    let replies = Arc::new(Mutex::new(replies.into_iter().collect::<std::collections::VecDeque<_>>()));
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let kept = seen.clone();
+    let server = Router::new().route(
+        "/v1/chat/completions",
+        post(move |Json(body): Json<Value>| {
+            let (replies, kept) = (replies.clone(), kept.clone());
+            async move {
+                kept.lock().unwrap().push(body);
+                let reply = replies.lock().unwrap().pop_front().unwrap_or("Nothing more.");
+                let (delta, finish) = match reply.split_once(' ').filter(|(name, _)| !name.contains(char::is_uppercase) && !name.ends_with('.')) {
+                    Some((name, args)) => (json!({ "role": "assistant", "tool_calls": [{ "index": 0, "id": format!("call-{}", uuid::Uuid::new_v4()), "type": "function", "function": { "name": name, "arguments": args } }] }), "tool_calls"),
+                    None => (json!({ "role": "assistant", "content": reply }), "stop"),
+                };
+                let chunk = json!({ "id": "m", "object": "chat.completion.chunk", "model": "scripted", "choices": [{ "index": 0, "delta": delta, "finish_reason": null }] });
+                let done = json!({ "id": "m", "object": "chat.completion.chunk", "model": "scripted", "choices": [{ "index": 0, "delta": {}, "finish_reason": finish }], "usage": { "prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15 } });
+                ([("content-type", "text/event-stream")], format!("data: {chunk}\n\ndata: {done}\n\ndata: [DONE]\n\n"))
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, server).await.unwrap() });
+    let custom = crate::credentials::CustomProvider {
+        name: "Scripted".into(),
+        api: crate::credentials::CustomApi::ChatCompletions,
+        base_url: format!("http://{addr}/v1"),
+        api_key: String::new(),
+        models: vec![serde_json::from_value(json!({ "id": "scripted", "context_window": 64000 })).unwrap()],
+        created_at: 0,
+    };
+    app.credentials.lock().unwrap().custom.insert("custom:scripted".into(), custom);
+    app.state.lock().unwrap().bots[0].provider = "custom:scripted".into();
+    seen
+}
+
+/// The bot's own subagent runs its loop in the folder with a context of its own; its report
+/// reaches the bot alone, as a notification, and a follow-up goes on with its context.
+#[tokio::test]
+async fn a_subagent_reports_to_its_bot_alone_and_goes_on_with_its_context() {
+    let scratch = setup().await;
+    let app = &scratch.app;
+    let requests = scripted_model(app, vec![r#"read {"path":"README.md"}"#, "The README says shop.", "Still shop."]).await;
+    let tool = SubagentTool(tool(&scratch));
+    let row = start_row(app, "call-1");
+    let chat_lock = app.chat_lock("chat");
+    let _held = chat_lock.lock().await;
+    let started = tool.execute("call-1", json!({ "action": "start", "type": "explore", "title": "README", "folder": "shop", "prompt": "What does the README say?" }), CancellationToken::new(), Arc::new(|_| {})).await.unwrap();
+    let started = transcript::content_text(&serde_json::to_value(&started.content).unwrap());
+    assert!(started.starts_with("Started subagent agent-") && started.contains("You will be notified with its report"), "{started}");
+
+    let (message_id, _, text, failed) = eventually("its report", || agent_messages(app).pop()).await;
+    assert_eq!((text.as_str(), failed), ("The README says shop.", false));
+    let message = app.message("chat", &message_id).unwrap();
+    assert!(!message.counts_unread(), "its report is the bot's, not the user's");
+    let agent = app.coding_agents.of("chat", "b1").pop().unwrap();
+    let record = agent.record();
+    assert_eq!((record.kind.as_str(), record.read_only, record.state.as_str()), (SUBAGENT, true, "idle"));
+    assert_eq!(card(app, &row).kind, SUBAGENT);
+    // It read the file, and had only the reading tools.
+    let read = steps_now(&agent).into_iter().find_map(|item| item.tool).unwrap();
+    assert_eq!((read.kind.as_str(), read.title.as_str(), read.status.as_str()), ("read", "README.md", "done"));
+    let first = requests.lock().unwrap()[0].clone();
+    let mut names: Vec<&str> = first["tools"].as_array().unwrap().iter().map(|tool| tool["function"]["name"].as_str().unwrap()).collect();
+    names.sort();
+    assert_eq!(names, vec!["find", "grep", "ls", "read"]);
+    assert!(first["messages"][0]["content"].as_str().unwrap().contains("You are a subagent of Chef"));
+
+    // The bot wakes to a notification of it, which says the report reached it alone.
+    let history = notification(&record.id, SUBAGENT, &record.title, "your", &text, false);
+    assert!(history.contains("<agent>Subagent, your subagent on “README”</agent>") && history.contains("<report>The README says shop.</report>"), "{history}");
+    let cue = wake_cue(app, &crate::runtime::agent_job(app, "chat", "b1", &message_id)).unwrap();
+    assert!(cue.contains("reached only you, not the user") && cue.contains("subagent read"), "{cue}");
+
+    // A follow-up goes on with its context.
+    let sent = tool.execute("call-2", json!({ "action": "send", "id": record.id, "message": "And now?" }), CancellationToken::new(), Arc::new(|_| {})).await.unwrap();
+    assert!(transcript::content_text(&serde_json::to_value(&sent.content).unwrap()).starts_with("Sent."));
+    eventually("its second report", || Some(agent_messages(app)).filter(|messages| messages.len() == 2)).await;
+    let third = requests.lock().unwrap()[2].clone();
+    let said: Vec<String> = third["messages"].as_array().unwrap().iter().filter_map(|message| message["content"].as_str().map(str::to_string)).collect();
+    assert!(said.iter().any(|text| text == "What does the README say?") && said.iter().any(|text| text == "And now?"), "{said:?}");
 }
 
 /// A turn whose last request to the model failed ends `success` with `terminal_reason:
@@ -1025,7 +1112,7 @@ async fn an_agent_whose_start_stop_cut_off_stops_as_soon_as_it_runs() {
     // Stop lands while the start is under way, which the call does not wait out.
     let stopped = CancellationToken::new();
     stopped.cancel();
-    let result = tool.start_unless_stopped("call-1", &json!({ "action": "start", "agent": "claude", "title": "Fix", "folder": scratch.repo.to_str().unwrap(), "prompt": "Fix it" }), &stopped).await;
+    let result = tool.start_unless_stopped("call-1", &json!({ "action": "start", "agent": "claude", "title": "Fix", "folder": scratch.repo.to_str().unwrap(), "prompt": "Fix it" }), &stopped, false).await;
     assert_eq!(result.unwrap_err(), "Stopped");
     // Nothing is left running with no one following it.
     let card = card_when(app, &row, |card| card.state == "stopped").await;
@@ -1073,6 +1160,7 @@ async fn a_bot_without_shell_access_starts_no_agent_and_its_agent_runs_nothing()
             secrets: Vec::new(),
             event: None,
             unattended: false,
+            read_only: false,
         },
         Transcript::default(),
     );

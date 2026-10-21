@@ -1072,4 +1072,10 @@ export const zh: Record<string, string> = {
   "{name} can't take a message now": "{name} 现在无法接收消息",
   "Queued": "排队中",
   "Lorca app": "Lorca 应用",
+  "Subagent": "子智能体",
+  "Other": "其他",
+  "Submit": "提交",
+  "Skipped": "已跳过",
+  "Answered: {answer}": "已回答：{answer}",
+  "{agent} asks: {question}": "{agent} 问：{question}",
 };

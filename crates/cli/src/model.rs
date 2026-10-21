@@ -637,6 +637,7 @@ pub fn coding_agent_name(kind: &str) -> &'static str {
         "opencode" => "OpenCode",
         "pi" => "pi",
         "fx" => "fx",
+        "lorca" => "Subagent",
         _ => "Claude Code",
     }
 }
@@ -872,7 +873,7 @@ impl Message {
 
     /// A reply, failure, or pending confirmation the user has not seen, or a coding agent's
     /// report to the user. Tool activity and updates to an answered question do not add to the
-    /// count, nor does why an agent ended, which its bot's reply tells.
+    /// count, nor does why an agent ended, or a subagent's report, which its bot's reply tells.
     pub fn counts_unread(&self) -> bool {
         if !matches!(self.author, Author::Bot { .. }) || self.notification == Some(crate::attention::Notification::Quiet) {
             return false;
@@ -881,7 +882,7 @@ impl Message {
             Body::Text { .. } => matches!(self.state, MessageState::Complete | MessageState::Failed { .. }),
             Body::Permission { .. } => self.is_complete() && self.confirmation().is_some(),
             Body::Tool { .. } => self.confirmation().is_some(),
-            Body::AgentMessage { failed, .. } => !failed,
+            Body::AgentMessage { failed, agent_kind, .. } => !failed && agent_kind != "lorca",
             _ => false,
         }
     }

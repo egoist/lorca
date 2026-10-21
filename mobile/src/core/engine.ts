@@ -1001,6 +1001,31 @@ class Engine {
     }));
   }
 
+  /// Answers a coding agent's questions with an answer for each, by question id. The card shows
+  /// the answers at once and asks again if they did not reach the Runner; rejects with why, such
+  /// as it being offline. Skip is `answerPermission(…, "deny")`.
+  async answerQuestion(chatId: string, messageId: string, answers: Record<string, string>) {
+    const asked = chatById(chatId)?.messages.find((m) => m.id === messageId);
+    const shown: Message | undefined =
+      asked?.body.kind === "permission" && asked.body.question
+        ? { ...asked, body: { ...asked.body, decision: "allowed", question: { ...asked.body.question, answers } } }
+        : undefined;
+    // Puts back what the card showed, unless the core changed it meanwhile.
+    const replace = (from: Message | undefined, to: Message | undefined) => {
+      if (!from || !to) return;
+      useStore.setState((s) => ({
+        chats: s.chats.map((c) => (c.id === chatId ? { ...c, messages: c.messages.map((m) => (m === from ? to : m)) } : c)),
+      }));
+    };
+    replace(asked, shown);
+    try {
+      await core.request("chats.permission", { chat_id: chatId, message_id: messageId, decision: "allow", answers });
+    } catch (error) {
+      replace(shown, asked);
+      throw error;
+    }
+  }
+
   /// The secrets a Runner keeps for its bots, asked of it through the relay.
   async secrets(runnerId: string): Promise<SavedSecret[]> {
     const { secrets } = await core.request<{ secrets: SavedSecret[] }>("secrets.list", { runner_id: runnerId });

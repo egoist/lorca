@@ -233,9 +233,10 @@ async fn run_budgeted_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) 
     if browser && bot.permissions.as_ref().is_none_or(|policy| policy.allows_connection(crate::browser::PLUGIN_ID)) {
         tools.push(Arc::new(crate::browser::SessionTool { app: app.clone(), bot: bot.clone(), chat_id: chat.meta.id.clone() }));
     }
-    // A coding agent on this Runner, which the bot hands the user's request to.
+    // A coding agent on this Runner, which the bot hands the user's request to, and its own
+    // subagents, which it hands tasks of its own to.
     if job.kind != crate::workflows::SAMPLE_JOB {
-        tools.push(Arc::new(crate::coding::CodingAgentTool {
+        let coding = || crate::coding::CodingAgentTool {
             app: app.clone(),
             bot: bot.clone(),
             chat_id: chat.meta.id.clone(),
@@ -243,7 +244,9 @@ async fn run_budgeted_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) 
             trigger_message_id: trigger.message_id.clone(),
             event: trigger.event.clone(),
             unattended,
-        }));
+        };
+        tools.push(Arc::new(coding()));
+        tools.push(Arc::new(crate::coding::SubagentTool(coding())));
     }
     tools.extend(memory_tools(app, &store, &chat));
     tools.extend(crate::playbook_tools::tools(app, &bot.id, &chat.meta.id));
@@ -1364,11 +1367,16 @@ impl TurnState {
                 });
                 // A coding agent's start carries the agent from the start: the apps show it as
                 // "Messaged ⬢ Title", and its card follows it from there. A message to one names it.
-                let starts_agent = tool_name == "coding_agent" && args["action"] == "start";
+                let agents = matches!(tool_name.as_str(), "coding_agent" | "subagent");
+                let starts_agent = agents && args["action"] == "start";
                 let agent = starts_agent.then(|| {
                     let task: String = args["prompt"].as_str().unwrap_or("").lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or("").chars().take(200).collect();
+                    let kind = match tool_name.as_str() {
+                        "subagent" => crate::coding::SUBAGENT,
+                        _ => args["agent"].as_str().filter(|kind| crate::coding::KINDS.contains(kind)).unwrap_or(""),
+                    };
                     crate::model::AgentRun {
-                        kind: args["agent"].as_str().filter(|kind| crate::coding::KINDS.contains(kind)).unwrap_or("").to_string(),
+                        kind: kind.to_string(),
                         title: args["title"].as_str().map(|title| title.split_whitespace().collect::<Vec<_>>().join(" ")).filter(|title| !title.is_empty()).unwrap_or_else(|| task.clone()),
                         task,
                         state: "starting".into(),
@@ -1377,7 +1385,7 @@ impl TurnState {
                         ..crate::model::AgentRun::default()
                     }
                 });
-                let target_agent_id = (tool_name == "coding_agent" && args["action"] == "send")
+                let target_agent_id = (agents && args["action"] == "send")
                     .then(|| args["id"].as_str().map(str::trim).filter(|id| !id.is_empty()).map(str::to_string))
                     .flatten();
                 let target_bot_id =
@@ -1487,7 +1495,7 @@ impl TurnState {
                 if tool_name == "bash" {
                     // With the command's card, in the same write.
                     self.app.shell_sessions.call_ended(&self.app, &self.chat_id, &tool_call_id, &message_id, is_error, &text, finish);
-                } else if tool_name == "coding_agent" && self.app.coding_agents.row(&self.chat_id, &tool_call_id).is_some() {
+                } else if matches!(tool_name.as_str(), "coding_agent" | "subagent") && self.app.coding_agents.row(&self.chat_id, &tool_call_id).is_some() {
                     self.app.coding_agents.call_ended(&self.app, &self.chat_id, &tool_call_id, &message_id, is_error, &text, finish);
                 } else if let Some(mut message) = self.app.message(&self.chat_id, &message_id) {
                     finish(&mut message);
@@ -1630,7 +1638,7 @@ impl TurnState {
             if let Some(mut message) = self.app.message(&self.chat_id, &message_id) {
                 if let Body::Tool { is_running, summary, name, .. } = &mut message.body {
                     if *is_running {
-                        let (bash, coding) = (name == "bash", name == "coding_agent");
+                        let (bash, coding) = (name == "bash", name == "coding_agent" || name == "subagent");
                         *is_running = false;
                         *summary = "Stopped".into();
                         message.state = MessageState::Complete;
@@ -1885,7 +1893,10 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
              request's link, and the commands and their output. The user reviews the work, so in that turn and after, do not check \
              its code, build or test it, judge it, or send it instructions of your own. What the \
              user then says about the job, pass on to it with coding_agent send, in their words. Its commands go through \
-             Auto-review as yours do.\n",
+             Auto-review as yours do.\n\nFor work of your own that would fill your context or can run while you go on \
+             (researching a codebase, searching many files, a long check, independent pieces in parallel), hand it to a \
+             subagent with subagent: brief it in full, since it sees nothing of this chat. Its report reaches only you, as \
+             a notification; you tell the user what matters from it.\n",
         );
     }
     if let Some(runner) = runner {
