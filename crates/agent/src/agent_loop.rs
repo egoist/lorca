@@ -530,6 +530,7 @@ async fn stream_assistant_response(
     let hooks = &config.hooks;
     let policy = config.retry.as_ref().filter(|p| p.enabled);
     let mut attempt = 0u32;
+    let mut rebound = false;
 
     loop {
         let transformed = hooks.transform_context(context.messages.clone(), cancel).await;
@@ -579,6 +580,25 @@ async fn stream_assistant_response(
         }
 
         let mut final_message = acc.finish(cancel.is_cancelled());
+
+        // A thinking block the provider will not take back, because what preceded it changed
+        // since it was made, would fail every request that carries it: the transcript goes on
+        // without its thinking and the request is asked again, once.
+        if !rebound
+            && final_message.content.is_empty()
+            && !cancel.is_cancelled()
+            && final_message.error_message.as_deref().is_some_and(crate::providers::anthropic::is_bound_thinking_error)
+        {
+            // The failed attempt's own message is empty, so it has no thinking to drop.
+            if crate::providers::anthropic::drop_bound_thinking(provider.model_id(), &mut context.messages) {
+                rebound = true;
+                if added_partial {
+                    context.messages.pop();
+                }
+                tracing::warn!(error = final_message.error_message.as_deref().unwrap_or_default(), "thinking refused; asking again without it");
+                continue;
+            }
+        }
 
         let retryable = policy.is_some_and(|p| attempt < p.max_retries)
             && crate::retry::is_retryable_assistant_error(&final_message)
@@ -1081,7 +1101,7 @@ mod tests {
     use super::*;
     use crate::provider::{channel_stream, AssistantEventStream};
     use crate::tool::{ToolError, ToolUpdateFn};
-    use crate::types::Usage;
+    use crate::types::{AssistantPart, Usage};
     use serde_json::json;
     use std::sync::Mutex;
 
@@ -1486,6 +1506,61 @@ mod tests {
         let AgentMessage::Assistant(last) = messages.last().unwrap() else { panic!() };
         assert_eq!((last.stop_reason, last.text().as_str()), (StopReason::Stop, "finally"));
         assert_eq!(provider.requests.lock().unwrap().len(), 2);
+    }
+
+    /// Fails its first request as Anthropic does for a thinking block replayed after what
+    /// preceded it changed, then answers.
+    struct Binds(Mutex<Vec<ModelRequest>>);
+
+    #[async_trait]
+    impl Provider for Binds {
+        fn provider_id(&self) -> &str {
+            "anthropic"
+        }
+        fn model_id(&self) -> &str {
+            "claude-opus-5-5"
+        }
+        async fn stream(&self, request: ModelRequest, _cancel: CancellationToken) -> AssistantEventStream {
+            let first = {
+                let mut requests = self.0.lock().unwrap();
+                requests.push(request);
+                requests.len() == 1
+            };
+            let (tx, rx) = mpsc::channel(16);
+            tokio::spawn(async move {
+                if first {
+                    let message = "400 Bad Request: messages.1.content.0: Invalid signature in thinking block. The block is bound to a different conversation.";
+                    let _ = tx.send(AssistantEvent::Error { message: message.into(), aborted: false }).await;
+                    return;
+                }
+                let _ = tx.send(AssistantEvent::Start).await;
+                let _ = tx.send(AssistantEvent::TextStart { index: 0 }).await;
+                let _ = tx.send(AssistantEvent::TextDelta { index: 0, delta: "again".into() }).await;
+                let _ = tx.send(AssistantEvent::TextEnd { index: 0 }).await;
+                let _ = tx.send(AssistantEvent::Done { stop_reason: StopReason::Stop, usage: Usage::default() }).await;
+            });
+            channel_stream(rx)
+        }
+    }
+
+    #[tokio::test]
+    async fn refused_thinking_is_dropped_and_the_request_asked_again_once() {
+        let provider = Arc::new(Binds(Mutex::new(Vec::new())));
+        let mut earlier = AssistantMessage::empty("anthropic", "claude-opus-5-5");
+        earlier.content = vec![AssistantPart::Thinking { thinking: "hm".into(), signature: Some("sig".into()) }, AssistantPart::Text { text: "Earlier.".into() }];
+        let context = AgentContext { system_prompt: String::new(), messages: vec![AgentMessage::user("hi"), AgentMessage::Assistant(earlier)], tools: vec![], cache_points: Vec::new() };
+        let config = AgentLoopConfig::new(provider.clone()).with_retry(crate::retry::RetryPolicy::default());
+        let (tx, mut rx) = mpsc::channel(256);
+        let run = tokio::spawn(async move { run_agent_loop(vec![AgentMessage::user("go")], context, &config, &tx, CancellationToken::new()).await });
+        while rx.recv().await.is_some() {}
+        let messages = run.await.unwrap();
+        let AgentMessage::Assistant(last) = messages.last().unwrap() else { panic!() };
+        assert_eq!((last.stop_reason, last.text().as_str()), (StopReason::Stop, "again"));
+        let requests = provider.0.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        let LlmMessage::Assistant(replayed) = &requests[1].messages[1] else { panic!() };
+        assert!(!replayed.content.iter().any(|part| matches!(part, AssistantPart::Thinking { .. })));
+        assert_eq!(replayed.text(), "Earlier.");
     }
 
     #[tokio::test]
