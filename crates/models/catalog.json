@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated": "2026-10-15T14:07:31Z",
+  "updated": "2026-10-24T03:52:18Z",
   "review": {
     "deepseek": "deepseek-flash",
     "anthropic": "claude-haiku-4-5",
@@ -14,7 +14,7 @@
       "provider": "deepseek",
       "id": "deepseek-flash",
       "name": "DeepSeek V4.1 Flash",
-      "context_window": 1000000,
+      "context_window": 1048576,
       "max_output": 384000,
       "reasoning": true,
       "images": true,
@@ -26,7 +26,7 @@
       "provider": "deepseek",
       "id": "deepseek-v4-pro",
       "name": "DeepSeek V4 Pro",
-      "context_window": 1000000,
+      "context_window": 1048576,
       "max_output": 384000,
       "reasoning": true,
       "images": false,
@@ -219,7 +219,7 @@
       "images": true,
       "rates": { "input": 0.3, "output": 1.2, "cache_read": 0.006, "cache_write": 0.0 },
       "thinking": "effort",
-      "levels": ["low", "high", "max"],
+      "levels": ["off", "low", "high", "max"],
       "wire": "chat-completions"
     },
     {
@@ -352,7 +352,7 @@
       "max_output": 384000,
       "reasoning": true,
       "images": false,
-      "rates": { "input": 1.74, "output": 3.84, "cache_read": 0.145, "cache_write": 0.0 },
+      "rates": { "input": 1.74, "output": 3.48, "cache_read": 0.145, "cache_write": 0.0 },
       "thinking": "effort",
       "levels": ["off", "high", "max"],
       "wire": "chat-completions"
@@ -365,9 +365,9 @@
       "max_output": 131072,
       "reasoning": true,
       "images": true,
-      "rates": { "input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 0.0 },
+      "rates": { "input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.0 },
       "thinking": "effort",
-      "levels": ["max"],
+      "levels": ["off", "low", "high", "max"],
       "wire": "chat-completions"
     },
     {
@@ -406,7 +406,7 @@
       "images": true,
       "rates": { "input": 2.0, "output": 6.0, "cache_read": 0.25, "cache_write": 2.5 },
       "thinking": "effort",
-      "levels": ["off"],
+      "levels": ["off", "low", "medium", "xhigh"],
       "wire": "chat-completions"
     },
     {
@@ -419,7 +419,7 @@
       "images": true,
       "rates": { "input": 0.3, "output": 1.2, "cache_read": 0.06, "cache_write": 0.0 },
       "thinking": "effort",
-      "levels": [],
+      "levels": ["off"],
       "wire": "chat-completions"
     },
     {
@@ -439,7 +439,7 @@
       "provider": "opencode",
       "id": "cat-jam-free",
       "name": "Cat Jam Free",
-      "context_window": 262144,
+      "context_window": 1048576,
       "max_output": 131072,
       "reasoning": true,
       "images": false,
@@ -497,7 +497,7 @@
       "images": true,
       "rates": { "input": 0.0, "output": 0.0, "cache_read": 0.0, "cache_write": 0.0 },
       "thinking": "effort",
-      "levels": ["low", "high", "max"],
+      "levels": ["off", "low", "high", "max"],
       "wire": "chat-completions"
     },
     {
@@ -632,7 +632,7 @@
       "max_output": 131072,
       "reasoning": true,
       "images": true,
-      "rates": { "input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 0.0 },
+      "rates": { "input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.0 },
       "thinking": "effort",
       "levels": ["max"],
       "wire": "chat-completions"
@@ -747,7 +747,7 @@
       "provider": "opencode-go",
       "id": "cat-jam-free",
       "name": "Cat Jam Free",
-      "context_window": 262144,
+      "context_window": 1048576,
       "max_output": 131072,
       "reasoning": true,
       "images": false,
