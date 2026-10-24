@@ -668,7 +668,7 @@ async fn an_agent_that_goes_on_by_itself_reports_when_done_again() {
     assert!(app.message("chat", &report).unwrap().counts_unread());
     assert_eq!(agent.record().unheard.as_deref(), Some(report.as_str()));
     let cue = wake_cue(app, &crate::runtime::agent_job(app, "chat", "b1", &report)).expect("the bot wakes to relay it");
-    assert!(cue.contains("8 of 8 workloads agree"), "{cue}");
+    assert!(cue.contains("“Bench”, is done") && cue.contains("its report to the user"), "{cue}");
     assert_eq!(card(app, &row).state, "idle");
     let read = steps_now(&agent).into_iter().find_map(|item| item.tool.filter(|step| step.kind == "read")).unwrap();
     assert_eq!(read.status, "done");
