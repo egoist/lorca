@@ -149,6 +149,10 @@ async fn read(process: Arc<Process>, mut messages: tokio::sync::mpsc::UnboundedR
     let denied: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
     let mut sent = 0usize;
     let mut since = Instant::now();
+    // Its last turn ended with nothing of Lorca's left to take up. It may still go on by itself,
+    // as when a background command it started finishes: that is a turn of its own, with no
+    // message of Lorca's to begin it.
+    let mut settled = false;
     let item = |item: Item| {
         let _ = events.send(Event::Item(item));
     };
@@ -166,6 +170,9 @@ async fn read(process: Arc<Process>, mut messages: tokio::sync::mpsc::UnboundedR
                 // A subagent's steps stay inside the call that started it.
                 if !message["parent_tool_use_id"].is_null() {
                     continue;
+                }
+                if std::mem::take(&mut settled) {
+                    let _ = events.send(Event::Working);
                 }
                 let id = message["message"]["id"].as_str().map(str::to_string).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
                 for (index, part) in message["message"]["content"].as_array().into_iter().flatten().enumerate() {
@@ -213,6 +220,7 @@ async fn read(process: Arc<Process>, mut messages: tokio::sync::mpsc::UnboundedR
                     let _ = pending.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| Some(count.saturating_sub(1)));
                     sent += 1;
                     item(Item::text(format!("prompt-{}-{sent}", uuid::Uuid::new_v4()), "prompt", &text));
+                    settled = false;
                     let _ = events.send(Event::Working);
                     since = Instant::now();
                     continue;
@@ -253,6 +261,7 @@ async fn read(process: Arc<Process>, mut messages: tokio::sync::mpsc::UnboundedR
                     item(Item::tool(call, step));
                 }
                 if pending.load(Ordering::SeqCst) == 0 {
+                    settled = true;
                     if let Some(reason) = failed {
                         let _ = events.send(Event::Failed(reason));
                         continue;

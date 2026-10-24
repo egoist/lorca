@@ -14,10 +14,12 @@ use tokio_util::sync::CancellationToken;
 /// edits a file, names a pull request, and is done; a "(follow-up)" is answered at once; a
 /// "(crash)" job exits mid-turn, and an "(auth)" job ends its turn in an error, as a signed-out
 /// Claude Code does, and exits; a message that arrives while it waits on Lorca is taken up after.
+/// A "(background)" job answers that it is not done yet, and once `finished.txt` is in its folder
+/// goes on by itself, as when a background command it started ends, and reports.
 /// A "(secret)" job keeps what it was sent and writes out, runs,
 /// and says `$NPM_TOKEN`. Every run appends its arguments to `args.log` beside it.
 const FAKE_CLAUDE: &str = r#"#!/usr/bin/env python3
-import json, os, sys
+import json, os, sys, time
 here = os.path.dirname(os.path.abspath(__file__))
 with open(os.path.join(here, "args.log"), "a") as log:
     log.write(" ".join(sys.argv[1:]) + "\n")
@@ -66,6 +68,15 @@ while True:
         out({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t2", "content": "+ shop@1.0.0 with " + token}]}, "parent_tool_use_id": None})
         out({"type": "assistant", "message": {"id": "a3", "content": [{"type": "text", "text": "Published with " + token}]}, "parent_tool_use_id": None})
         out({"type": "result", "subtype": "success", "is_error": False, "result": "Published with " + token})
+    elif "(background)" in content:
+        out({"type": "assistant", "message": {"id": "a7", "content": [{"type": "text", "text": "Not yet: the benchmark runs in the background."}]}, "parent_tool_use_id": None})
+        out({"type": "result", "subtype": "success", "is_error": False, "result": "Not yet: the benchmark runs in the background."})
+        while not os.path.exists("finished.txt"):
+            time.sleep(0.05)
+        out({"type": "assistant", "message": {"id": "a8", "content": [{"type": "tool_use", "id": "t4", "name": "Read", "input": {"file_path": os.path.abspath("finished.txt")}}]}, "parent_tool_use_id": None})
+        out({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t4", "content": "8 of 8"}]}, "parent_tool_use_id": None})
+        out({"type": "assistant", "message": {"id": "a9", "content": [{"type": "text", "text": "The benchmark is done: 8 of 8 workloads agree."}]}, "parent_tool_use_id": None})
+        out({"type": "result", "subtype": "success", "is_error": False, "result": "The benchmark is done: 8 of 8 workloads agree."})
     elif "(follow-up)" not in content:
         out({"type": "assistant", "message": {"id": "a1", "content": [{"type": "thinking", "thinking": "Push first."}, {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "git push origin feature"}}]}, "parent_tool_use_id": None})
         out({"type": "control_request", "request_id": "h1", "request": {"subtype": "hook_callback", "callback_id": "lorca-bash", "input": {"tool_name": "Bash", "tool_use_id": "t1", "tool_input": {"command": "git push origin feature"}}}})
@@ -631,6 +642,36 @@ async fn an_agent_that_ends_on_its_own_says_why_in_the_chat() {
     assert!(!app.message("chat", &message_id).unwrap().counts_unread(), "the bot's reply tells the user");
     let cue = wake_cue(app, &crate::runtime::agent_job(app, "chat", "b1", &message_id)).unwrap();
     assert!(cue.contains("has ended on its own: Claude Code exited with code 3") && cue.contains("Tell the user"), "{cue}");
+}
+
+/// An agent that goes on by itself after its turn ended, as Claude Code does when a background
+/// command it started finishes, works again, and what it says when done reaches the chat as its
+/// report, for the bot to relay.
+#[tokio::test]
+async fn an_agent_that_goes_on_by_itself_reports_when_done_again() {
+    let scratch = setup().await;
+    let app = &scratch.app;
+    let tool = tool(&scratch);
+    let row = start_row(app, "call-1");
+    let chat_lock = app.chat_lock("chat");
+    let _held = chat_lock.lock().await;
+    call(&tool, "call-1", json!({ "action": "start", "agent": "claude", "title": "Bench", "folder": "shop", "prompt": "Run the benchmark (background)" })).await.unwrap();
+    let (first, _, text, _) = eventually("its first message", || agent_messages(app).pop()).await;
+    assert_eq!(text, "Not yet: the benchmark runs in the background.");
+    card_when(app, &row, |card| card.state == "idle").await;
+
+    // Its background command ends, and it goes on with no message of Lorca's.
+    let agent = app.coding_agents.of("chat", "b1").pop().unwrap();
+    std::fs::write(agent.record().folder.join("finished.txt"), "8 of 8").unwrap();
+    let (report, _, text, failed) = eventually("its report", || agent_messages(app).pop().filter(|(id, ..)| *id != first)).await;
+    assert_eq!((text.as_str(), failed), ("The benchmark is done: 8 of 8 workloads agree.", false));
+    assert!(app.message("chat", &report).unwrap().counts_unread());
+    assert_eq!(agent.record().unheard.as_deref(), Some(report.as_str()));
+    let cue = wake_cue(app, &crate::runtime::agent_job(app, "chat", "b1", &report)).expect("the bot wakes to relay it");
+    assert!(cue.contains("8 of 8 workloads agree"), "{cue}");
+    assert_eq!(card(app, &row).state, "idle");
+    let read = steps_now(&agent).into_iter().find_map(|item| item.tool.filter(|step| step.kind == "read")).unwrap();
+    assert_eq!(read.status, "done");
 }
 
 /// An agent whose first turn fails, as a signed-out Claude Code's does in milliseconds, fails
