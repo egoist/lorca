@@ -87,6 +87,9 @@ pub struct State {
     /// The machine pubkeys of Devices unpaired from this account, from the roster and kept for
     /// good: no `machine` blob makes one a Device again and no envelope from one is opened.
     pub unpaired: std::collections::BTreeSet<String>,
+    /// The ids of the bots, chats, and routines deleted on any Device, from the roster and kept
+    /// for good: a roster that still lists one does not bring it back.
+    pub deleted: std::collections::BTreeSet<String>,
     pub last_seq: i64,
     /// Chats deleted here whose blobs the relay still has to drop.
     pub group_deletes: Vec<String>,
@@ -802,6 +805,7 @@ impl App {
                 shared_links: state.shared_links.clone(),
                 device_names: state.device_names.clone(),
                 unpaired: state.unpaired.clone(),
+                deleted: state.deleted.clone(),
                 updated_at: config::now_secs(),
             }
         };
@@ -1341,7 +1345,10 @@ impl App {
             let deleted_bot = state.bots.iter().find(|bot| bot.id == id).cloned().ok_or_else(|| anyhow::anyhow!("Unknown bot"))?;
 
             state.bots.retain(|bot| bot.id != id);
+            let routines: Vec<String> = state.routines.iter().filter(|routine| routine.bot_id == id).map(|routine| routine.id.clone()).collect();
             state.routines.retain(|routine| routine.bot_id != id);
+            state.deleted.insert(id.to_string());
+            state.deleted.extend(routines);
             if let Some(avatar) = &deleted_bot.avatar {
                 self.drop_avatar(&mut state, &avatar.id);
             }
@@ -1368,6 +1375,7 @@ impl App {
             }
 
             state.chats.retain(|chat| !removed.contains(&chat.meta.id));
+            state.deleted.extend(removed.iter().cloned());
             queue_chat_deletes(&mut state, &removed);
             removed
         };
@@ -1512,6 +1520,7 @@ impl App {
         {
             let mut state = self.state.lock().unwrap();
             state.chats.retain(|c| c.meta.id != chat_id);
+            state.deleted.insert(chat_id.to_string());
             // The relay drops the chat's messages, read marks, and attachments in one call,
             // made by the sync cycle and retried until it lands. What was still waiting to go
             // up goes nowhere.
@@ -1742,6 +1751,7 @@ impl App {
             if state.routines.len() == before {
                 anyhow::bail!("Unknown routine");
             }
+            state.deleted.insert(id.to_string());
         }
         self.roster_changed(true);
         Ok(())

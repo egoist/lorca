@@ -1111,7 +1111,7 @@ pub struct CheckReport {
 // MARK: - Blob payloads
 
 /// `kind = roster`: bots, chat metadata, routines, and the names the account gives its Devices.
-/// Latest wins.
+/// Latest wins for each one it lists; one it leaves out is gone only when `deleted` names it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct RosterBlob {
     /// Workflow setups, merged one by one (`workflows::merge`); a build that does not know
@@ -1138,6 +1138,11 @@ pub struct RosterBlob {
     /// reads here, and puts the ones a roster left out back in its own.
     #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
     pub unpaired: std::collections::BTreeSet<String>,
+    /// The ids of the bots, chats, and routines deleted on any Device. A Device keeps every id
+    /// it reads here and keeps what a roster leaves out that no Device deleted, so a roster
+    /// from a Device that had not heard of a new bot yet does not delete it.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub deleted: std::collections::BTreeSet<String>,
     pub updated_at: f64,
 }
 

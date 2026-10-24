@@ -132,6 +132,9 @@ impl LocalStore {
              CREATE TABLE IF NOT EXISTS unpaired_machines (
                  id TEXT PRIMARY KEY NOT NULL
              );
+             CREATE TABLE IF NOT EXISTS roster_deleted (
+                 id TEXT PRIMARY KEY NOT NULL
+             );
              CREATE TABLE IF NOT EXISTS held_blobs (
                  id         TEXT PRIMARY KEY NOT NULL,
                  kind       TEXT NOT NULL,
@@ -264,6 +267,7 @@ impl LocalStore {
             shared_links: load_json_table(&connection, "shared_links")?,
             device_names: load_device_names(&connection)?,
             unpaired: load_id_set(&connection, "unpaired_machines")?,
+            deleted: load_id_set(&connection, "roster_deleted")?,
             last_seq,
             group_deletes: load_ordered_ids(&connection, "group_deletes")?,
             blob_deletes: load_ordered_ids(&connection, "blob_deletes")?,
@@ -1340,6 +1344,7 @@ impl LocalStore {
             "device_seen",
             "device_names",
             "unpaired_machines",
+            "roster_deleted",
             "opened_envelopes",
             "held_blobs",
             "cancelled_jobs",
@@ -1522,6 +1527,9 @@ fn save_state_tx(tx: &Transaction<'_>, state: &State) -> anyhow::Result<()> {
     sync_device_names(tx, &state.device_names)?;
     for id in &state.unpaired {
         tx.execute("INSERT OR IGNORE INTO unpaired_machines (id) VALUES (?1)", [id])?;
+    }
+    for id in &state.deleted {
+        tx.execute("INSERT OR IGNORE INTO roster_deleted (id) VALUES (?1)", [id])?;
     }
     Ok(())
 }
