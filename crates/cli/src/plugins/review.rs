@@ -1143,7 +1143,7 @@ mod tests {
             box_pubkey: String::new(), plugins: Vec::new(), channels: Vec::new(), version: String::new(), update: None, app: None, updated_at: 0,
         });
         let bot = |id: &str, name: &str| Bot {
-            id: id.into(), name: name.into(), description: String::new(), symbol_name: String::new(), accent: String::new(), avatar: None,
+            id: id.into(), name: name.into(), description: String::new(), shape: String::new(), accent: String::new(), avatar: None,
             runner_id: "runner".into(), provider: "deepseek".into(), model: None, thinking: None, legacy_instructions: String::new(), workdir: None, permissions: None, created_at: 0.0,
         };
         let (devops, dm) = app.create_bot_with_dm(bot("bot-devops", "DevOps"), None).unwrap();

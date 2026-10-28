@@ -71,7 +71,7 @@ func TestRenderBotSheets(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			st := &lookState{botID: "bot-nova", symbolName: "globe", accent: "teal", change: lookImageSet, file: file}
+			st := &lookState{botID: "bot-nova", shape: "cloud", accent: "teal", change: lookImageSet, file: file}
 			m.present(func(c *ui.Context, s *sheet) { st.view(c, s, &m.appWindow) }, nil)
 			// The app reads images off the main thread and lands them on it, which a test has not.
 			data, _ := os.ReadFile(file.Path)
@@ -131,7 +131,7 @@ func TestNewBotSheet(t *testing.T) {
 	if !tt.Focused(L("Name")) {
 		t.Error("the name field does not have the focus")
 	}
-	if err := tt.Click("binoculars.fill"); err != nil {
+	if err := tt.Click(L("Cloud")); err != nil {
 		t.Fatal(err)
 	}
 	settle(tt)
@@ -150,7 +150,7 @@ func TestNewBotSheet(t *testing.T) {
 		t.Fatalf("Return did not create the bot (sheet up: %v)", m.hasSheet())
 	}
 	bot := store.Bot(created)
-	if bot == nil || bot.Name != "Analyst" || bot.Description != "Reads the numbers." || bot.SymbolName != "binoculars.fill" || bot.Accent != "teal" {
+	if bot == nil || bot.Name != "Analyst" || bot.Description != "Reads the numbers." || bot.Shape != "cloud" || bot.Accent != "teal" {
 		t.Errorf("bot %+v", bot)
 	}
 	if bot != nil && (bot.RunnerID != "dev-workbench" || bot.Provider != model.ProviderKinds[0] || bot.Model != "" || bot.Thinking != "") {
@@ -184,7 +184,7 @@ func TestBotLookSheet(t *testing.T) {
 	if tt.HasText(L("Remove Image")) {
 		t.Error("Remove Image without an image")
 	}
-	if err := tt.Click("flask.fill"); err != nil {
+	if err := tt.Click(L("Star")); err != nil {
 		t.Fatal(err)
 	}
 	if err := tt.Click(L("Green")); err != nil {
@@ -197,8 +197,8 @@ func TestBotLookSheet(t *testing.T) {
 	}
 	settle(tt)
 	bot := store.Bot("bot-quill")
-	if m.hasSheet() || bot.SymbolName != "flask.fill" || bot.Accent != "green" {
-		t.Errorf("look %q %q, sheet up %v", bot.SymbolName, bot.Accent, m.hasSheet())
+	if m.hasSheet() || bot.Shape != "star" || bot.Accent != "green" {
+		t.Errorf("look %q %q, sheet up %v", bot.Shape, bot.Accent, m.hasSheet())
 	}
 }
 

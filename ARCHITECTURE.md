@@ -61,7 +61,7 @@ Identity 1──* Task         (durable work; an owning Bot, assigned Runner, an
 
 Where each entity is kept on a Device, and what the relay holds of it: [Relay surface](docs/architecture/identity.md#relay-surface).
 
-Bots carry a name, description, provider/model settings, and an SF Symbol or encrypted avatar attachment. The apps edit these profiles through the local CLI ([Bot profiles](docs/architecture/bots.md#bot-profiles)).
+Bots carry a name, description, provider/model settings, and a character (a shape in an accent) or an encrypted avatar attachment. The apps edit these profiles through the local CLI ([Bot profiles](docs/architecture/bots.md#bot-profiles)).
 
 A bot made from one Device runs on its Runner, which can be offline: [A bot on another Runner](docs/architecture/bots.md#a-bot-on-another-runner).
 

@@ -1,45 +1,12 @@
 import { Link } from '@tanstack/react-router'
 import { xchacha20poly1305 } from '@noble/ciphers/chacha.js'
-import {
-  Activity,
-  Binoculars,
-  Book,
-  Brain,
-  Calendar,
-  ChartColumnBig,
-  ClipboardList,
-  CodeXml,
-  Eye,
-  FileText,
-  Flame,
-  FlaskConical,
-  Globe,
-  Hammer,
-  Inbox,
-  Leaf,
-  ListChecks,
-  Lock,
-  type LucideIcon,
-  Mail,
-  Paintbrush,
-  Search,
-  Server,
-  Shield,
-  Signature,
-  Sparkles,
-  SquareTerminal,
-  Sun,
-  TrendingUp,
-  TriangleAlert,
-  User,
-  WandSparkles,
-  Zap,
-} from 'lucide-react'
+import { Lock } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { I18nextProvider, Trans, useTranslation } from 'react-i18next'
 
 import { Button } from '#/components/ui/button'
 import { i18nFor, type Language, names, paths } from '#/i18n'
+import { BOT_SHAPES, type BotShape, EYE_LENGTH, EYE_TILT, EYE_WIDTH, SHAPE_EYES, SHAPE_PATHS } from './characters'
 import { Logo } from './logo'
 import { downloadPath } from './nav'
 
@@ -53,7 +20,7 @@ const DEFAULT_RELAY = 'https://relay.lorca.app'
 const ENVELOPE_KIND = 'template'
 const NONCE_BYTES = 24
 
-type Profile = { name: string; description?: string; symbol_name?: string; accent?: string }
+type Profile = { name: string; description?: string; shape?: string; accent?: string }
 export type Template = {
   format: string
   version: number
@@ -88,7 +55,7 @@ export function openTemplate(envelope: Uint8Array, key: Uint8Array): unknown {
 
 function isTemplate(value: unknown): value is Template {
   const template = value as Template
-  return typeof template === 'object' && template !== null && template.format === 'lorca.bot-template' && template.version === 1
+  return typeof template === 'object' && template !== null && template.format === 'lorca.bot-template' && template.version === 2
 }
 
 /// The relay a link names, or Lorca's.
@@ -133,39 +100,16 @@ function appLink(id: string, search: string, fragment: string): string {
 
 // MARK: - The bot's look
 
-/// The SF Symbols a bot's look offers, as the Windows and Linux app draws them (Lucide).
-const SYMBOLS: Record<string, LucideIcon> = {
-  sparkles: Sparkles,
-  'wand.and.stars': WandSparkles,
-  'hammer.fill': Hammer,
-  'book.fill': Book,
-  'paintbrush.fill': Paintbrush,
-  'chart.bar.fill': ChartColumnBig,
-  'terminal.fill': SquareTerminal,
-  globe: Globe,
-  'brain.head.profile': Brain,
-  magnifyingglass: Search,
-  'envelope.fill': Mail,
-  calendar: Calendar,
-  'flask.fill': FlaskConical,
-  'bolt.fill': Zap,
-  'leaf.fill': Leaf,
-  'shield.fill': Shield,
-  'binoculars.fill': Binoculars,
-  'chevron.left.forwardslash.chevron.right': CodeXml,
-  'pencil.and.scribble': Signature,
-  'bolt.horizontal.fill': Activity,
-  'flame.fill': Flame,
-  'list.bullet.clipboard.fill': ClipboardList,
-  'server.rack': Server,
-  checklist: ListChecks,
-  'doc.text.fill': FileText,
-  'tray.full.fill': Inbox,
-  'sun.max.fill': Sun,
-  'eye.fill': Eye,
-  'exclamationmark.triangle.fill': TriangleAlert,
-  'chart.line.uptrend.xyaxis': TrendingUp,
-  'person.fill': User,
+/// The shape the apps draw for a profile: its own, or one its name picks (FNV-1a, as the apps'
+/// `shapeFor` does with a bot's id).
+function shapeFor(shape: string | undefined, key: string): BotShape {
+  if (shape && (BOT_SHAPES as readonly string[]).includes(shape)) return shape as BotShape
+  let hash = 2166136261
+  for (let i = 0; i < key.length; i++) {
+    hash ^= key.charCodeAt(i)
+    hash = Math.imul(hash, 16777619) >>> 0
+  }
+  return BOT_SHAPES[hash % BOT_SHAPES.length]
 }
 
 /// The apps' accent colors, as Apple's system colors.
@@ -180,17 +124,20 @@ const ACCENTS: Record<string, string> = {
   red: '#ff3b30',
 }
 
+/// The bot's character, as the apps draw it: its shape flat in its accent, with two white eyes.
 function Avatar({ profile }: { profile?: Profile }) {
-  const Icon = SYMBOLS[profile?.symbol_name ?? ''] ?? Sparkles
+  const shape = shapeFor(profile?.shape, profile?.name ?? '')
   const color = ACCENTS[profile?.accent ?? ''] ?? ACCENTS.indigo
+  const reach = ((EYE_LENGTH - EYE_WIDTH) / 2) * 50
+  const [dx, dy] = [reach * Math.sin((EYE_TILT * Math.PI) / 180), reach * Math.cos((EYE_TILT * Math.PI) / 180)]
   return (
-    <div
-      className="flex size-20 items-center justify-center rounded-full text-white shadow-lg"
-      style={{ backgroundImage: `linear-gradient(to bottom, color-mix(in srgb, ${color} 72%, white), ${color})` }}
-      aria-hidden="true"
-    >
-      <Icon className="size-9" strokeWidth={2} />
-    </div>
+    <svg className="size-20 drop-shadow-lg" viewBox="0 0 100 100" aria-hidden="true">
+      <path d={SHAPE_PATHS[shape]} fill={color} />
+      {SHAPE_EYES[shape].map(([x, y]) => {
+        const [cx, cy] = [50 + x * 50, 50 + y * 50]
+        return <line key={x} x1={cx - dx} y1={cy - dy} x2={cx + dx} y2={cy + dy} stroke="white" strokeWidth={EYE_WIDTH * 50} strokeLinecap="round" />
+      })}
+    </svg>
   )
 }
 

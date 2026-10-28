@@ -23,7 +23,7 @@ func (s settingsPane) sharedLinks(c *ui.Context) {
 				shown := bot
 				if shown == nil {
 					// A deleted bot's link still works until it is revoked.
-					shown = &model.Bot{ID: link.BotID, Name: link.Name, SymbolName: "link", Accent: "indigo"}
+					shown = &model.Bot{ID: link.BotID, Name: link.Name, Accent: "indigo"}
 				}
 				updated := model.Stamp(time.Unix(int64(link.UpdatedAt), 0))
 				row, result := botRow(c, k, shown, botRowOptions{Detail: L("Updated %@", updated), Clickable: bot != nil})

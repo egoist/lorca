@@ -18,7 +18,8 @@ export interface TemplateItem<T> {
 export interface TemplateProfile {
   name: string;
   description: string;
-  symbol_name: string;
+  /** Absent for the one the new bot's id picks. */
+  shape?: string;
   accent: string;
 }
 

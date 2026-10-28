@@ -6,7 +6,7 @@ mock.module("./prefs", () => ({ loadPrefs: () => ({}), savePrefs: () => {}, core
 mock.module("expo-localization", () => ({ getLocales: () => [{ languageCode: "en", languageTag: "en-US" }] }));
 const { applyRoster, useStore } = await import("./store");
 
-const bot: Bot = { id: "bot", name: "Chef", symbol_name: "sparkles", accent: "indigo" } as Bot;
+const bot: Bot = { id: "bot", name: "Chef", accent: "indigo" } as Bot;
 
 function meta(id: string, extra: Partial<Chat> = {}) {
   return { id, kind: "dm" as const, title: id, bot_ids: ["bot"], is_pinned: false, created_at: 0, unread_count: 0, usage: { input_tokens: 1 } as any, ...extra };

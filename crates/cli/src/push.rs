@@ -286,7 +286,7 @@ mod tests {
         });
         app.settings.lock().unwrap().relay_url = Some(url.into());
         let bot = Bot {
-            id: "bot".into(), name: "Chef".into(), description: String::new(), symbol_name: "sparkles".into(),
+            id: "bot".into(), name: "Chef".into(), description: String::new(), shape: String::new(),
             accent: "indigo".into(), avatar: None, runner_id: "runner".into(), provider: "deepseek".into(),
             model: None, thinking: None, legacy_instructions: String::new(), workdir: None, permissions: None, created_at: 1.0,
         };

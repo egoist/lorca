@@ -114,7 +114,7 @@ type WireBot struct {
 	ID          string          `json:"id"`
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
-	SymbolName  string          `json:"symbol_name"`
+	Shape       string          `json:"shape"`
 	Accent      string          `json:"accent"`
 	RunnerID    string          `json:"runner_id"`
 	Provider    string          `json:"provider"`
@@ -575,7 +575,7 @@ type WireBotTemplate struct {
 	Name        string                `json:"name"`
 	Summary     *string               `json:"summary"`
 	Description string                `json:"description"`
-	SymbolName  *string               `json:"symbol_name"`
+	Shape       *string               `json:"shape"`
 	Accent      *string               `json:"accent"`
 	Category    *string               `json:"category"`
 	Featured    *bool                 `json:"featured"`
@@ -832,7 +832,7 @@ func ToBot(wire WireBot) *Bot {
 		ID:          wire.ID,
 		Name:        wire.Name,
 		Description: wire.Description,
-		SymbolName:  wire.SymbolName,
+		Shape:       wire.Shape,
 		Accent:      "indigo",
 		RunnerID:    wire.RunnerID,
 		Provider:    "deepseek",
@@ -1263,7 +1263,7 @@ func ToBotTemplate(wire WireBotTemplate) BotTemplate {
 		Name:        wire.Name,
 		Summary:     str(wire.Summary),
 		Description: wire.Description,
-		SymbolName:  cmp.Or(str(wire.SymbolName), "sparkles"),
+		Shape:       str(wire.Shape),
 		Accent:      "indigo",
 		Category:    str(wire.Category),
 		IsFeatured:  flag(wire.Featured),

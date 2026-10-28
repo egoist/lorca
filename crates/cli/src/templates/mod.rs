@@ -130,7 +130,7 @@ pub async fn contents(app: &Arc<App>, bot_id: &str) -> Result<Contents, String> 
     let profile = Profile {
         name: bot.name,
         description: bot.description,
-        symbol_name: bot.symbol_name,
+        shape: bot.shape,
         accent: bot.accent,
     };
     let mut contents = Contents {
@@ -561,7 +561,7 @@ pub async fn import_text(app: &Arc<App>, text: &str, params: &Value) -> Result<V
     let profile = template.profile.unwrap_or(Profile {
         name: String::new(),
         description: String::new(),
-        symbol_name: "sparkles".into(),
+        shape: String::new(),
         accent: "indigo".into(),
     });
     let provider = params["provider"]
@@ -572,7 +572,7 @@ pub async fn import_text(app: &Arc<App>, text: &str, params: &Value) -> Result<V
         id: format!("bot-{}", uuid::Uuid::new_v4().simple()),
         name,
         description: profile.description,
-        symbol_name: profile.symbol_name,
+        shape: profile.shape,
         accent: profile.accent,
         avatar: None,
         runner_id: runner_id.into(),
@@ -842,7 +842,7 @@ mod tests {
             profile: Some(Profile {
                 name: "New".into(),
                 description: "".into(),
-                symbol_name: "sparkles".into(),
+                shape: String::new(),
                 accent: "indigo".into()
             }),
             ..Template::default()

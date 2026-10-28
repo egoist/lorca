@@ -2,13 +2,14 @@ import { Stack, useRouter } from "expo-router";
 import { useMemo, useState } from "react";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { Pressable } from "../src/ui/Pressable";
-import { LinearGradient } from "expo-linear-gradient";
 import { engine } from "../src/core/engine";
 import { connectedProviders, isRunner, providerLabel, providerModels, PROVIDER_KINDS, thinkingLabel, thinkingLevels, withCustomModels } from "../src/core/model";
 import { deviceIsOnline, useStore } from "../src/core/store";
 import { t, useLanguage } from "../src/i18n";
 import { CheckRow, FieldRow, Section } from "../src/ui/forms";
-import { BOT_SYMBOLS, Symbol } from "../src/ui/Symbol";
+import { Symbol } from "../src/ui/Symbol";
+import { LookAvatar, ShapePicker } from "../src/ui/Avatar";
+import type { BotShape } from "../src/ui/characters";
 import { ACCENTS, accentColors, usePalette } from "../src/ui/theme";
 import { deviceSymbol } from "../src/ui/devices";
 import { FormToolbar } from "../src/ui/navigation";
@@ -22,7 +23,7 @@ export default function NewBotScreen() {
   const runners = useMemo(() => devices.filter(isRunner), [devices]);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [symbol, setSymbol] = useState("sparkles");
+  const [shape, setShape] = useState<BotShape>("blob");
   const [accent, setAccent] = useState("indigo");
   const [runnerId, setRunnerId] = useState<string>(() => runners.find((r) => deviceIsOnline(r.id))?.id ?? runners[0]?.id ?? "");
   const runner = runners.find((r) => r.id === runnerId);
@@ -47,7 +48,7 @@ export default function NewBotScreen() {
 
   async function save() {
     try {
-      const { chatId } = await engine.createBot({ name, description, symbol_name: symbol, accent, runner_id: runnerId, provider: effectiveProvider, model, thinking });
+      const { chatId } = await engine.createBot({ name, description, shape, accent, runner_id: runnerId, provider: effectiveProvider, model, thinking });
       router.dismiss();
       router.push(`/chat/${chatId}`);
     } catch (error) {
@@ -61,9 +62,7 @@ export default function NewBotScreen() {
       <FormToolbar cancelLabel={t("Cancel")} saveLabel={t("Create")} saveDisabled={!canSave} onCancel={() => router.dismiss()} onSave={() => void save()} />
       <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ paddingBottom: 40 }} keyboardDismissMode="on-drag" keyboardShouldPersistTaps="handled">
         <View style={styles.hero}>
-          <LinearGradient colors={accentColors(accent, p.dark)} start={{ x: 0.3, y: 0 }} end={{ x: 0.7, y: 1 }} style={styles.heroAvatar}>
-            <Symbol name={symbol} size={36} color="#FFFFFF" weight="semibold" />
-          </LinearGradient>
+          <LookAvatar shape={shape} accent={accent} size={76} />
         </View>
         <Section>
           <FieldRow label={t("Name")} value={name} onChangeText={setName} placeholder="Scout" autoFocus autoCapitalize="words" returnKeyType="next" />
@@ -72,13 +71,7 @@ export default function NewBotScreen() {
           <FieldRow value={description} onChangeText={setDescription} placeholder={t("Finds and summarizes sources")} multiline autoCapitalize="sentences" />
         </Section>
         <Section title={t("Look")}>
-          <View style={styles.grid}>
-            {BOT_SYMBOLS.map((s) => (
-              <Pressable key={s} onPress={() => setSymbol(s)} style={[styles.symbolCell, { backgroundColor: s === symbol ? p.tint : p.fill }]} accessibilityLabel={s}>
-                <Symbol name={s} size={20} color={s === symbol ? p.userBubbleText : p.label} />
-              </Pressable>
-            ))}
-          </View>
+          <ShapePicker shape={shape} accent={accent} onPick={setShape} />
           <View style={styles.grid}>
             {(Object.keys(ACCENTS) as (keyof typeof ACCENTS)[]).map((a) => (
               <Pressable key={a} onPress={() => setAccent(a)} style={styles.swatchCell} accessibilityLabel={a}>
@@ -130,9 +123,7 @@ export default function NewBotScreen() {
 
 const styles = StyleSheet.create({
   hero: { alignItems: "center", paddingTop: 8 },
-  heroAvatar: { width: 76, height: 76, borderRadius: 38, alignItems: "center", justifyContent: "center" },
   grid: { flexDirection: "row", flexWrap: "wrap", gap: 10, padding: 14 },
-  symbolCell: { width: 40, height: 40, borderRadius: 10, alignItems: "center", justifyContent: "center" },
   swatchCell: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
   swatch: { width: 28, height: 28, borderRadius: 14, borderWidth: 2.5 },
 });

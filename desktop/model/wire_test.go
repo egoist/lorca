@@ -74,7 +74,7 @@ func TestListedModelKeepsWhatItsServerSaid(t *testing.T) {
 }
 
 func TestBotKeepsItsCustomProvider(t *testing.T) {
-	wire := `{"id": "bot-lab", "name": "Lab", "description": "", "symbol_name": "sparkles", "accent": "blue", "runner_id": "dev-workbench", "provider": %q, "model": %s, "thinking": %q, "created_at": 1}`
+	wire := `{"id": "bot-lab", "name": "Lab", "description": "", "shape": "blob", "accent": "blue", "runner_id": "dev-workbench", "provider": %q, "model": %s, "thinking": %q, "created_at": 1}`
 	bot := ToBot(decodeJSON[WireBot](t, sprintf(wire, "custom:openrouter", `"qwen3:8b"`, "low")))
 	expect(t, []string{bot.Provider, bot.Model, bot.Thinking}, []string{"custom:openrouter", "qwen3:8b", "low"})
 	gone := ToBot(decodeJSON[WireBot](t, sprintf(wire, "custom:gone", "null", "")))

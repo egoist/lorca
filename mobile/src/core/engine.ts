@@ -617,7 +617,7 @@ class Engine {
     await core.request("projects.asset", { chat_id: chatId, file: { path: pathOf(file.uri), name: file.name, mime: file.mime } });
   }
 
-  async createBot(input: { name: string; description: string; symbol_name: string; accent: string; runner_id: string; provider: string; model?: string; thinking?: string }): Promise<{ bot: Bot; chatId: string }> {
+  async createBot(input: { name: string; description: string; shape?: string; accent: string; runner_id: string; provider: string; model?: string; thinking?: string }): Promise<{ bot: Bot; chatId: string }> {
     const { bot, chat_id } = await core.request<{ bot: Bot; chat_id: string }>("bots.create", input);
     return { bot, chatId: chat_id };
   }
@@ -641,8 +641,8 @@ class Engine {
     });
   }
 
-  /// The bot's symbol and accent, the look under and behind its image.
-  async setBotLook(id: string, look: { symbol_name?: string; accent?: string }): Promise<void> {
+  /// The bot's shape and accent, the look under and behind its image.
+  async setBotLook(id: string, look: { shape?: string; accent?: string }): Promise<void> {
     await core.request("bots.update", { id, ...look });
   }
 

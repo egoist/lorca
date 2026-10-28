@@ -7,22 +7,41 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// How a bot looks, after the macOS app's BotLookViewController: a symbol on an accent gradient, or an
-// image of the user's own. The image wins while it is set; the symbol and accent stay underneath
-// for when it is removed and for Devices that have not fetched it yet.
+// How a bot looks: its character, a shape in an accent (characters.go), or an image of the user's
+// own. The image wins while it is set; the shape and accent stay underneath for when it is removed
+// and for Devices that have not fetched it yet.
 
-// lookSymbols are the symbols offered, the same list the phone app shows.
-var lookSymbols = []string{
-	"sparkles", "wand.and.stars", "hammer.fill", "book.fill",
-	"paintbrush.fill", "chart.bar.fill", "terminal.fill", "globe",
-	"brain.head.profile", "magnifyingglass", "envelope.fill", "calendar",
-	"flask.fill", "bolt.fill", "leaf.fill", "shield.fill",
-	"binoculars.fill", "chevron.left.forwardslash.chevron.right", "pencil.and.scribble", "bolt.horizontal.fill",
-	"flame.fill",
+// lookShapesPerRow is the shape grid's columns.
+const lookShapesPerRow = 6
+
+// shapeTitle is a shape's name, as its tile's tooltip says it.
+func shapeTitle(shape string) string {
+	switch shape {
+	case "blob":
+		return L("Blob")
+	case "pebble":
+		return L("Pebble")
+	case "squircle":
+		return L("Squircle")
+	case "cloud":
+		return L("Cloud")
+	case "drop":
+		return L("Drop")
+	case "sparkle":
+		return L("Sparkle")
+	case "clover":
+		return L("Clover")
+	case "flower":
+		return L("Flower")
+	case "heart":
+		return L("Heart")
+	case "hex":
+		return L("Hexagon")
+	case "star":
+		return L("Star")
+	}
+	return L("Cushion")
 }
-
-// lookSymbolsPerRow is the symbol grid's columns.
-const lookSymbolsPerRow = 8
 
 // accentTitle is an accent's name, as its swatch's tooltip says it.
 func accentTitle(accent model.Accent) string {
@@ -54,19 +73,20 @@ const (
 )
 
 type lookState struct {
-	botID      string
-	symbolName string
-	accent     model.Accent
-	change     lookImageChange
+	botID  string
+	shape  string
+	accent model.Accent
+	change lookImageChange
 	// file is the prepared image while change is lookImageSet.
 	file model.AvatarFile
 }
 
-// presentBotLook is a bot's look: its symbol, accent, and image.
+// presentBotLook is a bot's look: its shape, accent, and image. A bot whose shape its id picks
+// starts on that one; saving keeps it picked by the id until another is chosen.
 func (w *appWindow) presentBotLook(botID string) {
-	st := &lookState{botID: botID, symbolName: "sparkles", accent: "indigo"}
+	st := &lookState{botID: botID, shape: shapeFor("", botID), accent: "indigo"}
 	if bot := store.Bot(botID); bot != nil {
-		st.symbolName, st.accent = bot.SymbolName, bot.Accent
+		st.shape, st.accent = shapeFor(bot.Shape, bot.ID), bot.Accent
 	}
 	w.present(func(c *ui.Context, s *sheet) { st.view(c, s, w) }, nil)
 }
@@ -95,7 +115,7 @@ func (st *lookState) preview() avatarContent {
 			}
 		}
 	}
-	return avatarContent{Kind: avatarBot, SymbolName: st.symbolName, Accent: st.accent}
+	return avatarContent{Kind: avatarBot, Shape: st.shape, Accent: st.accent}
 }
 
 // chooseImage asks for a picture and prepares it off the main thread; the sheet shows it once it
@@ -124,8 +144,8 @@ func (st *lookState) save() {
 	if bot == nil {
 		return
 	}
-	if st.symbolName != bot.SymbolName || st.accent != bot.Accent {
-		store.SetBotLook(bot.ID, st.symbolName, st.accent)
+	if st.shape != shapeFor(bot.Shape, bot.ID) || st.accent != bot.Accent {
+		store.SetBotLook(bot.ID, st.shape, st.accent)
 	}
 	switch st.change {
 	case lookImageRemove:
@@ -140,7 +160,7 @@ func (st *lookState) view(c *ui.Context, s *sheet, w *appWindow) {
 	p := colors(c)
 	result := sheetFrame(c, sheetOptions{
 		Title:    L("Look"),
-		Subtitle: L("Pick a symbol and a color, or use an image of your own. Paired Devices see the same look."),
+		Subtitle: L("Pick a shape and a color, or use an image of your own. Paired Devices see the same look."),
 		Width:    400,
 		Confirm:  L("Save"),
 	}, func() {
@@ -148,21 +168,22 @@ func (st *lookState) view(c *ui.Context, s *sheet, w *appWindow) {
 			ui.Row(c).Justify(ui.Center).Margin(0, 0, 18, 0).Children(func() {
 				avatar(c, st.preview(), 72, false)
 			})
-			lookHeading(c, L("Symbol"))
+			lookHeading(c, L("Shape"))
 			ui.Column(c).Gap(6).Margin(0, 0, 16, 0).Children(func() {
-				for start := 0; start < len(lookSymbols); start += lookSymbolsPerRow {
-					names := lookSymbols[start:min(start+lookSymbolsPerRow, len(lookSymbols))]
+				for start := 0; start < len(botShapes); start += lookShapesPerRow {
+					shapes := botShapes[start:min(start+lookShapesPerRow, len(botShapes))]
 					ui.Row(c).Gap(6).Children(func() {
-						for _, name := range names {
-							selected := name == st.symbolName
-							tile := ui.ButtonBase(c).Size(38, 34).Radius(8).Center().Background(p.Chip).TextColor(p.Label).
-								Cursor(ui.CursorPointer).Tooltip(name).Label(name).Role(ui.RoleToggleButton).Checked(selected)
+						for _, shape := range shapes {
+							title := shapeTitle(shape)
+							selected := shape == st.shape
+							tile := ui.ButtonBase(c.Key(shape)).Size(52, 44).Radius(8).Center().Background(p.Chip).
+								Cursor(ui.CursorPointer).Tooltip(title).Label(title).Role(ui.RoleToggleButton).Checked(selected)
 							if selected {
-								tile.Background(p.accentColor(st.accent)).TextColor(p.White)
+								tile.Border(2, p.accentColor(st.accent))
 							}
-							tile.Children(func() { symbol(c, name, 16, 2.2) })
+							tile.Children(func() { characterView(c, shape, p.accentColor(st.accent), 30) })
 							if tile.Clicked() {
-								st.symbolName = name
+								st.shape = shape
 							}
 						}
 					})
@@ -193,7 +214,7 @@ func (st *lookState) view(c *ui.Context, s *sheet, w *appWindow) {
 			})
 			text := L("Images are resized to %d px and shared encrypted, like an attachment.", avatarSide)
 			if st.hasImage() {
-				text = L("The image shows in place of the symbol and color. It is resized to %d px and shared encrypted, like an attachment.", avatarSide)
+				text = L("The image shows in place of the shape and color. It is resized to %d px and shared encrypted, like an attachment.", avatarSide)
 			}
 			ui.Text(c, text).FontSize(textCaption).LineHeight(1.4).TextColor(p.Label3)
 		})

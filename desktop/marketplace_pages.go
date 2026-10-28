@@ -492,7 +492,7 @@ func (mk *marketplace) botPage(c *ui.Context, page *marketPage) {
 	ui.Column(c).Gap(20).Children(func() {
 		ui.Column(c).Gap(12).Padding(0, 12).Children(func() {
 			ui.Row(c).Children(func() {
-				avatar(c, avatarContent{Kind: avatarBot, SymbolName: template.SymbolName, Accent: template.Accent}, 64, false)
+				avatar(c, templateAvatar(*template), 64, false)
 			})
 			ui.Row(c).Gap(12).Margin(2, 0, 0, 0).Children(func() {
 				ui.Column(c).Gap(3).Grow(1).Shrink(1).MinWidth(0).Children(func() {

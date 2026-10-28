@@ -1448,7 +1448,7 @@ mod tests {
         std::fs::create_dir_all(&own_workspace).unwrap();
         let app = App::load(crate::config::Config { home: home.clone(), port: 0 }).unwrap();
         let bot = Bot {
-            id: "bot".into(), name: "Bot".into(), description: String::new(), symbol_name: String::new(), accent: String::new(), avatar: None,
+            id: "bot".into(), name: "Bot".into(), description: String::new(), shape: String::new(), accent: String::new(), avatar: None,
             runner_id: "runner".into(), provider: "deepseek".into(), model: None, thinking: None, legacy_instructions: String::new(), workdir: Some(work.display().to_string()), permissions: None, created_at: 0.0,
         };
         let assistant = AssistantMessage::empty("test", "test");
@@ -1495,7 +1495,7 @@ mod tests {
         std::fs::create_dir_all(&work).unwrap();
         let app = App::load(crate::config::Config { home: scratch.join("lorca"), port: 0 }).unwrap();
         let bot: Bot = serde_json::from_value(serde_json::json!({
-            "id": "bot", "name": "Bot", "description": "", "symbol_name": "", "accent": "", "runner_id": "runner", "provider": "deepseek", "created_at": 0.0
+            "id": "bot", "name": "Bot", "description": "", "accent": "", "runner_id": "runner", "provider": "deepseek", "created_at": 0.0
         }))
         .unwrap();
         app.state.lock().unwrap().chats.push(serde_json::from_value(serde_json::json!({ "id": "chat", "kind": "dm", "bot_ids": ["bot"], "created_at": 0.0 })).unwrap());

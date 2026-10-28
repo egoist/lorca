@@ -20,6 +20,16 @@ fn opt_string(params: &Value, key: &str) -> Option<String> {
     params[key].as_str().map(str::to_string).filter(|s| !s.is_empty())
 }
 
+/// A bot's `shape` when the request names one: one of `BOT_SHAPES`, or empty for the one its id
+/// picks.
+fn parse_shape(params: &Value) -> Result<Option<String>, String> {
+    let Some(shape) = params["shape"].as_str() else { return Ok(None) };
+    if !shape.is_empty() && !crate::model::BOT_SHAPES.contains(&shape) {
+        return Err(format!("unknown shape {shape}"));
+    }
+    Ok(Some(shape.to_string()))
+}
+
 fn parse_permissions(params: &Value) -> Result<Option<crate::permissions::BotPermissions>, String> {
     let Some(value) = params.get("permissions") else { return Ok(None) };
     let policy: crate::permissions::BotPermissions = serde_json::from_value(value.clone())
@@ -278,7 +288,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                 id: opt_string(&params, "id").unwrap_or_default(),
                 name: opt_string(&params, "name").or_else(|| from_template(|t| &t.name)).ok_or("missing name")?,
                 description: opt_string(&params, "description").or_else(|| from_template(|t| &t.description)).unwrap_or_default(),
-                symbol_name: opt_string(&params, "symbol_name").or_else(|| from_template(|t| &t.symbol_name)).unwrap_or_else(|| "sparkles".into()),
+                shape: parse_shape(&params)?.filter(|s| !s.is_empty()).or_else(|| from_template(|t| &t.shape)).unwrap_or_default(),
                 accent: opt_string(&params, "accent").or_else(|| from_template(|t| &t.accent)).unwrap_or_else(|| "indigo".into()),
                 avatar: store_avatar(app, &params)?.flatten(),
                 runner_id: string(&params, "runner_id")?,
@@ -306,9 +316,10 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             // The image is copied and queued before the roster names it, so every Device can
             // fetch the blob by the time it reads the profile.
             let avatar = store_avatar(app, &params)?;
+            let shape = parse_shape(&params)?;
             let bot = app.update_bot(&id, |bot| {
                 if let Some(v) = opt_string(&params, "name") { bot.name = v; }
-                if let Some(v) = opt_string(&params, "symbol_name") { bot.symbol_name = v; }
+                if let Some(v) = shape.clone() { bot.shape = v; }
                 if let Some(v) = opt_string(&params, "accent") { bot.accent = v; }
                 if let Some(v) = avatar { bot.avatar = v; }
                 if let Some(v) = params["description"].as_str() {

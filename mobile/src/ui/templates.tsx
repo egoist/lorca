@@ -6,7 +6,7 @@ import { Checkbox, Host as ComposeHost } from "@expo/ui/jetpack-compose";
 import { Platform, PlatformColor, StyleSheet, Text, View } from "react-native";
 import { flagWords, memoryLines, routineLine, type TemplateDocument, type TemplateProfile } from "../core/templates";
 import { t } from "../i18n";
-import { AvatarDisc } from "./Avatar";
+import { LookAvatar, shapeFor } from "./Avatar";
 import { Section } from "./forms";
 import { Pressable } from "./Pressable";
 import { Symbol } from "./Symbol";
@@ -58,14 +58,15 @@ export function TemplateItemRow({ title, detail, flags = [], titleLines = 1, lea
   );
 }
 
-/// The profile, which every template holds: the look, the name, and what the bot is for.
+/// The profile, which every template holds: the look, the name, and what the bot is for. A
+/// profile without a shape shows the one its name picks; the bot made from it gets its own id's.
 export function TemplateProfileRow({ profile, flags }: { profile: TemplateProfile; flags?: readonly string[] }) {
   return (
     <TemplateItemRow
       title={profile.name}
       detail={profile.description}
       flags={flags}
-      leading={<AvatarDisc symbol={profile.symbol_name || "sparkles"} accent={profile.accent || "indigo"} size={36} />}
+      leading={<LookAvatar shape={shapeFor(profile.shape, profile.name)} accent={profile.accent || "indigo"} size={36} />}
     />
   );
 }

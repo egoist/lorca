@@ -64,7 +64,7 @@ func (transport *templateUITransport) methodCalls(method string) []templateUICal
 }
 
 var templateProfileFixture = map[string]any{
-	"name": "Project Manager", "symbol_name": "list.bullet.clipboard.fill", "accent": "indigo",
+	"name": "Project Manager", "shape": "hex", "accent": "indigo",
 	"description": "Plans the work and delegates it to the team. Breaks work down, hands it off with message_bot, and summarizes what came back.",
 }
 
@@ -144,7 +144,7 @@ func newTemplateUIFixture(t *testing.T) *templateUIFixture {
 		case "templates.import.preview":
 			return templateImportFixture(call, f.linearReady.Load()), nil
 		case "templates.import":
-			return map[string]any{"bot": map[string]any{"id": "bot-imported", "name": call.params["name"], "description": "Plans the work.", "symbol_name": "list.bullet.clipboard.fill", "accent": "indigo", "provider": call.params["provider"], "runner_id": call.params["runner_id"], "created_at": 1}, "chat_id": "dm-imported"}, nil
+			return map[string]any{"bot": map[string]any{"id": "bot-imported", "name": call.params["name"], "description": "Plans the work.", "shape": "hex", "accent": "indigo", "provider": call.params["provider"], "runner_id": call.params["runner_id"], "created_at": 1}, "chat_id": "dm-imported"}, nil
 		case "chats.mark_read", "bots.memory":
 			return map[string]any{}, nil
 		}
@@ -527,7 +527,7 @@ func TestTemplateUpdateKeepsTheLinkAndStartsFromWhatItHolds(t *testing.T) {
 			return next(call)
 		}
 		return map[string]any{
-			"profile": map[string]any{"id": "profile", "content": map[string]any{"name": "Writer", "symbol_name": "pencil.and.scribble", "accent": "pink",
+			"profile": map[string]any{"id": "profile", "content": map[string]any{"name": "Writer", "shape": "heart", "accent": "pink",
 				"description": "Writes docs, copy, and release notes in plain language: short sentences, no filler, and no exclamation marks."}},
 			"memories": []any{map[string]any{"id": "memory-voice", "content": "- Plain words, short sentences, no exclamation marks."},
 				map[string]any{"id": "memory-launch", "content": "- The launch post goes out Friday morning."}},

@@ -6,6 +6,10 @@ when it offers the update.
 
 ## [Unreleased]
 
+- Bots are little characters now, as in Grok Bot: one of twelve shapes in the bot's color, with two
+  eyes. Look and New Bot offer the shapes where they offered symbols; a bot you haven't given one
+  gets its own.
+
 ## [1.0.10]
 
 - Opening a chat from Bots on iOS slides it in under the list's bar: the buttons fade into the

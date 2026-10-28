@@ -1154,7 +1154,7 @@ func (s *Store) CreateChat(kind ChatKind, botIDs []string, title string) string 
 type NewBot struct {
 	Name        string
 	Description string
-	SymbolName  string
+	Shape       string
 	Accent      Accent
 	RunnerID    string
 	Provider    ProviderKind
@@ -1169,7 +1169,7 @@ func (s *Store) CreateBot(options NewBot) string {
 		ID:          ShortID("bot"),
 		Name:        options.Name,
 		Description: options.Description,
-		SymbolName:  options.SymbolName,
+		Shape:       options.Shape,
 		Accent:      options.Accent,
 		RunnerID:    options.RunnerID,
 		Provider:    options.Provider,
@@ -1191,7 +1191,7 @@ func (s *Store) CreateBot(options NewBot) string {
 			"id":          bot.ID,
 			"name":        options.Name,
 			"description": options.Description,
-			"symbol_name": options.SymbolName,
+			"shape":       options.Shape,
 			"accent":      string(options.Accent),
 			"runner_id":   options.RunnerID,
 			"provider":    options.Provider,
@@ -1215,7 +1215,7 @@ func (s *Store) AddBotFromTemplate(template BotTemplate, runnerID string) string
 	botID := s.CreateBot(NewBot{
 		Name:        template.Name,
 		Description: template.Description,
-		SymbolName:  template.SymbolName,
+		Shape:       template.Shape,
 		Accent:      template.Accent,
 		RunnerID:    runnerID,
 		Provider:    s.PreferredProvider(),
@@ -1288,15 +1288,15 @@ func (s *Store) UpdateBotProfile(id, name string, description *string) {
 	s.perform("bots.update", params)
 }
 
-// SetBotLook is the bot's symbol and accent, the look under and behind its image.
-func (s *Store) SetBotLook(id, symbolName string, accent Accent) {
+// SetBotLook is the bot's shape and accent, the look under and behind its image.
+func (s *Store) SetBotLook(id, shape string, accent Accent) {
 	bot := s.Bot(id)
 	if bot == nil {
 		return
 	}
-	bot.SymbolName, bot.Accent = symbolName, accent
+	bot.Shape, bot.Accent = shape, accent
 	s.rosterTouched("")
-	s.perform("bots.update", map[string]any{"id": id, "symbol_name": symbolName, "accent": string(accent)})
+	s.perform("bots.update", map[string]any{"id": id, "shape": shape, "accent": string(accent)})
 }
 
 // AvatarFile is a picture on this computer for SetBotAvatar: a prepared square PNG.

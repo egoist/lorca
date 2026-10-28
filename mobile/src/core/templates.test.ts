@@ -28,7 +28,7 @@ type TemplateImportPreview = import("./templates").TemplateImportPreview;
 const KEY = "-xMo1zlzI63iQ_tY2ATkxlkle7thq-OfylCF-jFDqYw";
 const item = <T,>(id: string, content: T, flags: string[] = []) => ({ id, content, flags });
 const contents: TemplateContents = {
-  profile: item("profile", { name: "Scout", description: "Finds sources", symbol_name: "sparkles", accent: "indigo" }),
+  profile: item("profile", { name: "Scout", description: "Finds sources", accent: "indigo" }),
   skills: [item("s1", { name: "review", description: "Review code" })],
   memories: [item("m1", "- Likes tea"), item("m2", "## Work\nShips on Fridays", ["email"])],
   routines: [item("r1", { name: "Morning", schedule: "0 9 * * *", prompt: "Read the inbox" })],

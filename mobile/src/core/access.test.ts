@@ -69,7 +69,7 @@ test("files and shell keep the plugins as they are", () => {
 });
 
 test("a save shows at once, goes to the core, and a failed one puts the old Access back", async () => {
-  useStore.setState({ bots: [{ id: "b", name: "Writer", description: "", symbol_name: "pencil", accent: "pink", runner_id: "r", provider: "deepseek", created_at: 0 }] });
+  useStore.setState({ bots: [{ id: "b", name: "Writer", description: "", accent: "pink", runner_id: "r", provider: "deepseek", created_at: 0 }] });
   await access.setBotPermissions("b", { shell: false });
   expect(useStore.getState().bots[0].permissions).toEqual({ shell: false });
   expect(sent.at(-1)).toEqual({ method: "bots.update", params: { id: "b", permissions: { shell: false } } });

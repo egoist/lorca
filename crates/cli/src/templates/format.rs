@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const FORMAT: &str = "lorca.bot-template";
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 pub const MAX_BYTES: usize = 1024 * 1024;
 pub const MAX_ITEMS: usize = 100;
 
@@ -34,7 +34,9 @@ pub struct Template {
 pub struct Profile {
     pub name: String,
     pub description: String,
-    pub symbol_name: String,
+    /// One of `BOT_SHAPES`; empty picks one from the new bot's id.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub shape: String,
     pub accent: String,
 }
 
@@ -147,7 +149,9 @@ impl Template {
                 256 * 1024,
                 false,
             )?;
-            text_field("profile.symbol_name", &profile.symbol_name, 100, true)?;
+            if !profile.shape.is_empty() && !crate::model::BOT_SHAPES.contains(&profile.shape.as_str()) {
+                return Err(format!("Unsupported profile.shape {:?}.", profile.shape));
+            }
             if ![
                 "indigo", "blue", "teal", "green", "orange", "red", "pink", "purple",
             ]
@@ -388,7 +392,7 @@ impl Template {
 
 impl Profile {
     pub fn texts_mut(&mut self) -> Vec<&mut String> {
-        vec![&mut self.name, &mut self.description, &mut self.symbol_name]
+        vec![&mut self.name, &mut self.description]
     }
 }
 
@@ -523,10 +527,15 @@ mod tests {
             assert!(Template::parse(&v.to_string()).unwrap_err().contains(field));
         }
         let mut v = value();
-        v["version"] = json!(2);
+        v["version"] = json!(1);
         assert!(Template::parse(&v.to_string())
             .unwrap_err()
-            .contains("version 2"));
+            .contains("version 1"));
+        v = value();
+        v["profile"] = json!({ "name": "A", "description": "", "shape": "triangle", "accent": "indigo" });
+        assert!(Template::parse(&v.to_string())
+            .unwrap_err()
+            .contains("profile.shape"));
         v = value();
         v["requirements"] = json!([{ "service_id": "github", "token": "secret" }]);
         assert!(Template::parse(&v.to_string())

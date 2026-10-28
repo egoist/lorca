@@ -3066,12 +3066,12 @@ impl Tool for CreateBot {
             Some(_) => caller.permissions.as_ref().map(crate::permissions::BotPermissions::on_another_runner),
             None => caller.permissions.clone(),
         };
-        let (symbol_name, accent) = look_for(&name);
+        let accent = accent_for(&name);
         let bot = Bot {
             id: String::new(),
             name: name.clone(),
             description,
-            symbol_name,
+            shape: String::new(),
             accent,
             avatar: None,
             runner_id: runner.as_ref().map_or_else(|| caller.runner_id.clone(), |runner| runner.id.clone()),
@@ -3736,21 +3736,12 @@ impl Tool for ConnectPlugin {
     }
 }
 
-/// A stable look for a bot the model named, so teammates are told apart in the sidebar.
-fn look_for(name: &str) -> (String, String) {
-    const LOOKS: &[(&str, &str)] = &[
-        ("chevron.left.forwardslash.chevron.right", "blue"),
-        ("binoculars.fill", "teal"),
-        ("pencil.and.scribble", "pink"),
-        ("bolt.horizontal.fill", "orange"),
-        ("leaf.fill", "green"),
-        ("wand.and.stars", "purple"),
-        ("flame.fill", "red"),
-        ("sparkles", "indigo"),
-    ];
+/// A stable accent for a bot the model named, so teammates are told apart in the sidebar; its
+/// shape comes from its id.
+fn accent_for(name: &str) -> String {
+    const ACCENTS: &[&str] = &["blue", "teal", "pink", "orange", "green", "purple", "red", "indigo"];
     let hash = name.to_lowercase().bytes().fold(7u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
-    let (symbol, accent) = LOOKS[(hash as usize) % LOOKS.len()];
-    (symbol.to_string(), accent.to_string())
+    ACCENTS[(hash as usize) % ACCENTS.len()].to_string()
 }
 
 #[cfg(test)]
@@ -4065,7 +4056,7 @@ mod tests {
             id: id.into(),
             name: name.into(),
             description: String::new(),
-            symbol_name: String::new(),
+            shape: String::new(),
             accent: String::new(),
             avatar: None,
             runner_id: "dev".into(),

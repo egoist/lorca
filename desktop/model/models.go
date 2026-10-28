@@ -804,10 +804,12 @@ type Bot struct {
 	// Name and Description: what the bot does and how it should work.
 	Name        string
 	Description string
-	SymbolName  string
-	Accent      Accent
-	RunnerID    string
-	Provider    ProviderKind
+	// Shape is the character's body, one of the shapes the app draws; empty or unknown, the
+	// bot's id picks one.
+	Shape    string
+	Accent   Accent
+	RunnerID string
+	Provider ProviderKind
 	// Model is empty for the provider's default model.
 	Model string
 	// Thinking is empty for the provider's default.
@@ -1000,14 +1002,15 @@ type BotTemplate struct {
 	Summary string
 	// Description is what the bot does and how it should work: the new bot's description.
 	Description string
-	SymbolName  string
-	Accent      Accent
-	Category    string
-	IsFeatured  bool
-	Author      string
-	Plugins     []string
-	Routines    []TemplateRoutine
-	Memory      []string
+	// Shape is empty for the one the new bot's id picks.
+	Shape      string
+	Accent     Accent
+	Category   string
+	IsFeatured bool
+	Author     string
+	Plugins    []string
+	Routines   []TemplateRoutine
+	Memory     []string
 }
 
 // Marketplace is what the marketplace offers, in the index's order.

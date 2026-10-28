@@ -67,7 +67,7 @@ func (s settingsPane) secrets(c *ui.Context, m *mainWindow) {
 				for _, secret := range state.list {
 					bot := store.Bot(secret.BotID)
 					owner := L("A deleted bot")
-					shown := &model.Bot{ID: secret.BotID, Name: owner, SymbolName: "lock", Accent: "indigo"}
+					shown := &model.Bot{ID: secret.BotID, Name: owner, Accent: "indigo"}
 					if bot != nil {
 						owner, shown = bot.Name, bot
 					}

@@ -165,10 +165,11 @@ export interface Bot {
   name: string;
   /** What the bot does and how it should work. */
   description: string;
-  /** SF Symbol on the accent gradient: the look when there is no image. */
-  symbol_name: string;
+  /** The character's body, one of BOT_SHAPES, flat in the accent with two eyes: the look when
+   *  there is no image. Absent, the bot's id picks one (`shapeFor`). */
+  shape?: string;
   accent: Accent | string;
-  /** A custom profile image, a `file` blob like a message attachment; shown in place of the symbol and accent. */
+  /** A custom profile image, a `file` blob like a message attachment; shown in place of the shape and accent. */
   avatar?: Attachment;
   runner_id: string;
   provider: string;

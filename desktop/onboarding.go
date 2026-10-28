@@ -707,7 +707,7 @@ func (o *onboardingWindow) botStep(c *ui.Context) *onboardingButton {
 		o.card(c, func() {
 			o.form(c, func() {
 				o.formRow(c, "", false, func() {
-					content := avatarContent{Kind: avatarBot, SymbolName: "sparkles", Accent: "indigo"}
+					content := avatarContent{Kind: avatarBot, Shape: "blob", Accent: "indigo"}
 					if bot := o.firstBot(); bot != nil {
 						content = botAvatar(bot)
 					}

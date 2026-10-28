@@ -171,28 +171,3 @@ export function Symbol({ name, size = 17, color, weight = "medium", style, type 
     />
   );
 }
-
-/// Symbols offered when creating a bot, a subset the Mac app also knows.
-export const BOT_SYMBOLS = [
-  "sparkles",
-  "wand.and.stars",
-  "hammer.fill",
-  "book.fill",
-  "paintbrush.fill",
-  "chart.bar.fill",
-  "terminal.fill",
-  "globe",
-  "brain.head.profile",
-  "magnifyingglass",
-  "envelope.fill",
-  "calendar",
-  "flask.fill",
-  "bolt.fill",
-  "leaf.fill",
-  "shield.fill",
-  "binoculars.fill",
-  "chevron.left.forwardslash.chevron.right",
-  "pencil.and.scribble",
-  "bolt.horizontal.fill",
-  "flame.fill",
-];

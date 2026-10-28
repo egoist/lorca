@@ -17,7 +17,7 @@ import { deviceIsOnline, useStore } from "../src/core/store";
 import { connectionTitle, importNote, templateAddress, type TemplateImportPreview } from "../src/core/templates";
 import { t, useLanguage } from "../src/i18n";
 import { alert } from "../src/ui/alert";
-import { AvatarDisc } from "../src/ui/Avatar";
+import { LookAvatar, shapeFor } from "../src/ui/Avatar";
 import { deviceSymbol } from "../src/ui/devices";
 import { CheckRow, FieldRow, Row, Section } from "../src/ui/forms";
 import { FormToolbar } from "../src/ui/navigation";
@@ -164,7 +164,7 @@ export default function TemplateImportScreen() {
         {preview && template ? (
           <>
             <View style={styles.hero}>
-              <AvatarDisc symbol={template.profile?.symbol_name || "sparkles"} accent={template.profile?.accent || "indigo"} size={76} />
+              <LookAvatar shape={shapeFor(template.profile?.shape, template.profile?.name ?? "")} accent={template.profile?.accent || "indigo"} size={76} />
             </View>
             <Section>
               <FieldRow

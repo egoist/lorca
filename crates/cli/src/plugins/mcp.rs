@@ -3821,7 +3821,7 @@ for line in sys.stdin:
         let scratch = scratch_app();
         let app = &scratch.0;
         let bot = |id: &str, runner_id: &str| -> Bot {
-            serde_json::from_value(json!({ "id": id, "name": id, "description": "", "symbol_name": "", "accent": "", "runner_id": runner_id, "provider": "deepseek", "created_at": 0.0 })).unwrap()
+            serde_json::from_value(json!({ "id": id, "name": id, "description": "", "accent": "", "runner_id": runner_id, "provider": "deepseek", "created_at": 0.0 })).unwrap()
         };
         {
             let mut state = app.state.lock().unwrap();
@@ -3863,7 +3863,7 @@ for line in sys.stdin:
         crate::identity::create(app, Some("Workbench".into())).unwrap();
         let here = app.this_device_id().unwrap();
         let bot = |id: &str, runner_id: &str| -> Bot {
-            serde_json::from_value(json!({ "id": id, "name": id, "description": "", "symbol_name": "", "accent": "", "runner_id": runner_id, "provider": "deepseek", "created_at": 0.0 })).unwrap()
+            serde_json::from_value(json!({ "id": id, "name": id, "description": "", "accent": "", "runner_id": runner_id, "provider": "deepseek", "created_at": 0.0 })).unwrap()
         };
         {
             let mut state = app.state.lock().unwrap();

@@ -5,6 +5,12 @@ use serde::{Deserialize, Serialize};
 
 pub const MAX_GROUP_BOTS: usize = 6;
 
+/// The bodies a bot's character takes, after Grok Bot's. The apps draw each one and pick one from
+/// the bot's id when `Bot::shape` is empty.
+pub const BOT_SHAPES: [&str; 12] = [
+    "blob", "pebble", "squircle", "cloud", "drop", "sparkle", "clover", "flower", "heart", "hex", "star", "cushion",
+];
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ProviderStatus {
     pub kind: String,
@@ -152,11 +158,13 @@ pub struct Bot {
     pub name: String,
     /// What the bot does and how it should work, shown in its profile and used in its prompt.
     pub description: String,
-    /// SF Symbol drawn on the accent gradient; the look when there is no image.
-    pub symbol_name: String,
+    /// The character's body, one of `BOT_SHAPES`, drawn flat in the accent with two eyes; the
+    /// look when there is no image. Empty picks one from the id (`shape_for` in the apps).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub shape: String,
     pub accent: String,
     /// A custom profile image, a `file` blob like a message attachment, shown in place of the
-    /// symbol and accent wherever the bot's avatar appears.
+    /// shape and accent wherever the bot's avatar appears.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avatar: Option<Attachment>,
     pub runner_id: String,
@@ -1527,7 +1535,7 @@ mod app_view_tests {
     fn old_bot_instructions_become_part_of_the_description_once() {
         let mut bot: Bot = serde_json::from_value(serde_json::json!({
             "id": "bot", "name": "Scout", "description": "Find sources.",
-            "symbol_name": "binoculars", "accent": "teal", "runner_id": "runner",
+            "shape": "cloud", "accent": "teal", "runner_id": "runner",
             "provider": "deepseek", "instructions": "Cite every claim.", "created_at": 1.0
         }))
         .unwrap();

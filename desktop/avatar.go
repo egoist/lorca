@@ -20,8 +20,8 @@ import (
 	"golang.org/x/image/draw"
 )
 
-// Avatars, after the macOS app's AvatarView: a bot's SF-named symbol on its accent gradient, or its
-// own image aspect-filled in the circle, the gray "you" and system discs, and the breathing green
+// Avatars: a bot's character (characters.go), its shape flat in its accent with two eyes, or its
+// own image aspect-filled in a circle, the gray "you" and system discs, and the breathing green
 // dot while the bot has a turn running, sitting on a ring of the background around it.
 
 type avatarKind int
@@ -36,9 +36,10 @@ const (
 )
 
 type avatarContent struct {
-	Kind       avatarKind
-	SymbolName string
-	Accent     model.Accent
+	Kind avatarKind
+	// Shape is a bot's body, one of botShapes.
+	Shape  string
+	Accent model.Accent
 	// Path is an image's file on this computer.
 	Path string
 	// Name is a contact's name.
@@ -46,14 +47,20 @@ type avatarContent struct {
 }
 
 // botAvatar is the bot's image when this computer has the bytes (the store fetches them and
-// redraws otherwise), else its symbol on its accent.
+// redraws otherwise), else its character.
 func botAvatar(bot *model.Bot) avatarContent {
 	if path := store.AvatarPath(bot); path != "" {
 		if bitmap := loadBitmap(path); bitmap != nil {
 			return avatarContent{Kind: avatarImage, Path: path}
 		}
 	}
-	return avatarContent{Kind: avatarBot, SymbolName: bot.SymbolName, Accent: bot.Accent}
+	return avatarContent{Kind: avatarBot, Shape: shapeFor(bot.Shape, bot.ID), Accent: bot.Accent}
+}
+
+// templateAvatar is the character a marketplace bot starts with; one without a shape shows the
+// one its id picks, standing in for the id the new bot gets.
+func templateAvatar(template model.BotTemplate) avatarContent {
+	return avatarContent{Kind: avatarBot, Shape: shapeFor(template.Shape, template.ID), Accent: template.Accent}
 }
 
 func authorAvatar(author model.Author) avatarContent {
@@ -110,14 +117,30 @@ func avatar(c *ui.Context, content avatarContent, size float32, working bool) ui
 
 // avatarOn is an avatar whose working dot rings itself in `backdrop`, the color behind the avatar.
 func avatarOn(c *ui.Context, content avatarContent, size float32, working bool, backdrop ui.Color) ui.Element {
+	return avatarRinged(c, content, size, working, backdrop, 0)
+}
+
+// avatarRinged is avatarOn standing off what is behind it by `ring` of `backdrop`: around a
+// character's outline, or around the circle.
+func avatarRinged(c *ui.Context, content avatarContent, size float32, working bool, backdrop ui.Color, ring float32) ui.Element {
 	p := colors(c)
 	box := ui.Box(c).Size(size, size)
+	if content.Kind == avatarBot {
+		body := p.accentColor(content.Accent)
+		box.Draw(func(painter *ui.Painter, r ui.Rect) {
+			drawCharacter(painter, r, content.Shape, body, ring, backdrop)
+		})
+		if working {
+			drawPresence(c, box, size, false, backdrop)
+		}
+		return box
+	}
+	if ring > 0 {
+		box.Radius(size/2).Shadow(0, 0, 0, ring, backdrop)
+	}
 	box.Children(func() {
 		disc := ui.Box(c).Size(size, size).Radius(size / 2).Clip().Center().TextColor(p.White)
 		switch content.Kind {
-		case avatarBot:
-			tint := p.accentColor(content.Accent)
-			disc.Gradient(tint.Mix(p.White, 0.28), tint, 180)
 		case avatarYou:
 			disc.Background(p.Label3)
 		case avatarContact:
@@ -139,18 +162,15 @@ func avatarOn(c *ui.Context, content avatarContent, size float32, working bool, 
 				}
 				ui.Text(c, initial).FontSize(float32(math.Round(float64(size * 0.46)))).FontWeight(600).SingleLine()
 			default:
-				name, scale := "gearshape.fill", float32(0.5)
-				switch content.Kind {
-				case avatarBot:
-					name, scale = content.SymbolName, 0.52
-				case avatarYou:
+				name := "gearshape.fill"
+				if content.Kind == avatarYou {
 					name = "person.fill"
 				}
 				stroke := float32(2.4)
 				if size >= 40 {
 					stroke = 2
 				}
-				symbol(c, name, float32(math.Round(float64(size*scale))), stroke)
+				symbol(c, name, float32(math.Round(float64(size*0.5))), stroke)
 			}
 		})
 	})
@@ -187,15 +207,16 @@ func avatarCluster(c *ui.Context, contents []avatarContent, slot float32, workin
 			if i >= len(contents) {
 				break
 			}
-			cell := ui.Box(c).Absolute().Left(b.x).Top(b.y).Size(b.size, b.size).Radius(b.size / 2)
+			cell := ui.Box(c).Absolute().Left(b.x).Top(b.y).Size(b.size, b.size)
+			// The front avatars stand off those behind by a ring of the backdrop.
+			ring := float32(0)
 			if i > 0 {
-				// The front circles stand off those behind by a ring of the backdrop.
-				cell.Shadow(0, 0, 0, 1, backdrop)
+				ring = 1
 			}
 			front := i == len(boxes)-1
 			marked := front && service != ""
 			cell.Children(func() {
-				avatarOn(c, contents[i], b.size, working && front && !marked, backdrop)
+				avatarRinged(c, contents[i], b.size, working && front && !marked, backdrop, ring)
 				if mark := pluginMark(service); marked && mark != nil {
 					serviceBadge(c, mark, service, b.size, backdrop)
 				}
@@ -229,11 +250,12 @@ func avatarStack(c *ui.Context, bots []*model.Bot, size, overlap float32, backdr
 	stack := ui.Box(c).Size(width, size)
 	stack.Children(func() {
 		for i, bot := range shown {
-			cell := ui.Box(c).Absolute().Top(0).Left(float32(i)*(size-overlap)).Size(size, size).Radius(size / 2)
+			cell := ui.Box(c).Absolute().Top(0).Left(float32(i)*(size-overlap)).Size(size, size)
+			ring := float32(0)
 			if len(shown) > 1 {
-				cell.Shadow(0, 0, 0, 1.5, backdrop)
+				ring = 1.5
 			}
-			cell.Children(func() { avatar(c, botAvatar(bot), size, false) })
+			cell.Children(func() { avatarRinged(c, botAvatar(bot), size, false, backdrop, ring) })
 		}
 	})
 	return stack

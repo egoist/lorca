@@ -746,7 +746,7 @@ func (mk *marketplace) itemRow(c *ui.Context, item marketItem) {
 		byline = L("by %@", template.Author)
 	}
 	media := func() {
-		avatar(c, avatarContent{Kind: avatarBot, SymbolName: template.SymbolName, Accent: template.Accent}, 40, false)
+		avatar(c, templateAvatar(*template), 40, false)
 	}
 	accessory := func() {
 		on := mk.runner()

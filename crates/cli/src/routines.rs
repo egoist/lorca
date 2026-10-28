@@ -1042,7 +1042,7 @@ mod tests {
                 id: "b1".into(),
                 name: "Chef".into(),
                 description: String::new(),
-                symbol_name: String::new(),
+                shape: String::new(),
                 accent: String::new(),
                 avatar: None,
                 runner_id,
