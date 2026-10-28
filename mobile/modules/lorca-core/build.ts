@@ -1,6 +1,8 @@
 // Builds the Rust core for the phone and drops it where the Expo module picks it up: an
 // xcframework plus Swift bindings under ios/, shared libraries plus Kotlin bindings under
 // android/. Run from mobile/: `bun run core` (or `bun run core ios` / `bun run core android`).
+// `bun run core ios-device` leaves the simulator out of the xcframework, for an archive that
+// never runs on one.
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -8,8 +10,9 @@ import { join, resolve } from "node:path";
 const MODULE = import.meta.dir;
 const ROOT = resolve(MODULE, "../../..");
 const TARGET = join(ROOT, "target");
-const platforms = process.argv.slice(2).filter((a) => a === "ios" || a === "android");
-const wantIos = platforms.length === 0 || platforms.includes("ios");
+const platforms = process.argv.slice(2).filter((a) => a === "ios" || a === "ios-device" || a === "android");
+const wantIos = platforms.length === 0 || platforms.includes("ios") || platforms.includes("ios-device");
+const wantSimulator = platforms.length === 0 || platforms.includes("ios");
 const wantAndroid = platforms.length === 0 || platforms.includes("android");
 
 async function run(cmd: string[], env: Record<string, string> = {}) {
@@ -38,7 +41,7 @@ const bindgen = ["cargo", "run", "-q", "-p", "lorca-mobile", "--features", "bind
 
 if (wantIos) {
   await run(["cargo", "build", "-p", "lorca-mobile", "--release", "--target", "aarch64-apple-ios"]);
-  await run(["cargo", "build", "-p", "lorca-mobile", "--release", "--target", "aarch64-apple-ios-sim"]);
+  if (wantSimulator) await run(["cargo", "build", "-p", "lorca-mobile", "--release", "--target", "aarch64-apple-ios-sim"]);
   const generated = join(MODULE, "ios/generated");
   rmSync(generated, { recursive: true, force: true });
   await run([...bindgen, "--language", "swift", "--out-dir", generated]);
@@ -57,10 +60,10 @@ if (wantIos) {
   writeFileSync(join(include, "module.modulemap"), maps.join("\n"));
   const xcframework = join(MODULE, "ios/LorcaCore.xcframework");
   rmSync(xcframework, { recursive: true, force: true });
+  const slices = wantSimulator ? ["aarch64-apple-ios", "aarch64-apple-ios-sim"] : ["aarch64-apple-ios"];
   await run([
     "xcodebuild", "-create-xcframework",
-    "-library", join(TARGET, "aarch64-apple-ios/release/liblorca_mobile.a"), "-headers", include,
-    "-library", join(TARGET, "aarch64-apple-ios-sim/release/liblorca_mobile.a"), "-headers", include,
+    ...slices.flatMap((target) => ["-library", join(TARGET, target, "release/liblorca_mobile.a"), "-headers", include]),
     "-output", xcframework,
   ]);
 }

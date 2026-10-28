@@ -101,7 +101,8 @@ log(`${color.bold("building")} ${color.dim(`${ABIS}, signed with ${keystore}`)}`
 // /bin/sh that runs gradlew on Ubuntu, drops: the APK came out with the debug key.
 //
 // The heap goes there too, after Expo's 2 GiB, which the release's dex merge outgrew; a
-// repeated key takes the last value.
+// repeated key takes the last value. The build cache lets a release take the Kotlin and Java
+// compiles of unchanged modules from the last one (~/.gradle, which the workflow caches).
 const properties = join(ANDROID, "gradle.properties")
 const unsigned = await Bun.file(properties).text()
 // A .properties value takes a backslash as an escape.
@@ -110,6 +111,7 @@ await Bun.write(
   properties,
   `${unsigned}
 org.gradle.jvmargs=-Xmx6g -XX:MaxMetaspaceSize=1g
+org.gradle.caching=true
 android.injected.signing.store.file=${value(keystore)}
 android.injected.signing.store.password=${value(password)}
 android.injected.signing.key.alias=lorca

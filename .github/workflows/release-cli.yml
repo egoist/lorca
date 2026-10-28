@@ -92,9 +92,12 @@ jobs:
           tool: cargo-zigbuild
       # The registry and the built dependencies, kept between runs. The cache key names the
       # runner's OS but not the target, and three of the builds run on Linux.
+      # No other tag can read a tag's cache, so a run on a tag saves none: it would only push the
+      # caches of main, which every run reads, out of the repository's 10 GB.
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+          save-if: ${{ github.ref_type != 'tag' }}
       - name: Build
         # A release build replaces itself with later releases (`lorca update`).
         env:

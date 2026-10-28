@@ -133,9 +133,12 @@ jobs:
         if: runner.os == 'Linux'
         with:
           tool: cargo-zigbuild
+      # No other tag can read a tag's cache, so a run on a tag saves none: it would only push the
+      # caches of main, which every run reads, out of the repository's 10 GB.
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+          save-if: ${{ github.ref_type != 'tag' }}
       - uses: actions/setup-go@v6
         with:
           go-version-file: desktop/go.mod

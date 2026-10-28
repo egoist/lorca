@@ -170,6 +170,31 @@ gh workflow run release-mobile.yml -f platforms=Android
 
 The iOS job runs on the `xcode-27` image, a preview, so Xcode matches the Mac's.
 
+## Build caches
+
+A run on a tag reads the Actions caches of `main` and no other tag's, so the caches a release
+builds from are saved by runs on a branch only. Every Monday the workflow runs on `main`, builds
+both apps, and uploads nothing, which keeps those caches warm; a run by hand with **upload** off
+does the same:
+
+```sh
+gh workflow run release-mobile.yml -f upload=false
+```
+
+- **Rust**: `target/` and the registry, per platform (`Swatinem/rust-cache`). The iOS job builds
+  only the device slice of the core (`bun run core ios-device`); a Mac's release keeps the
+  simulator slice, which the dev loop links.
+- **Xcode's compilation cache** (`~/Library/Developer/Xcode/DerivedData/CompilationCache.noindex`),
+  keyed by the Xcode build and `mobile/bun.lock`. It answers the C, C++, and Objective-C compiles
+  of the pods; Swift compiles in full on every archive.
+- **Gradle**: its dependencies and build cache (`gradle/actions/setup-gradle`, with
+  `org.gradle.caching` on in the release build).
+- **ccache** for the C++ CMake builds of React Native's libraries and the app, for each ABI. The
+  Android job prints its hit rate after the build.
+
+A release's own run saves none of these: no later tag could read them, and they would push
+`main`'s out of the repository's 10 GB.
+
 ## From a Mac
 
 `bun run release-ios` uploads to TestFlight with the Apple account in Xcode, as before
