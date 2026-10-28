@@ -256,7 +256,7 @@ jobs:
           trap 'rm -f "$ANDROID_KEYSTORE"' EXIT
           ccache --zero-stats
           bun run release-android
-          ccache --show-stats
+          ccache --show-stats --verbose
       - uses: actions/cache/save@v6
         if: github.ref_type != 'tag'
         with:
