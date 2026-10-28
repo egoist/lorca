@@ -13,7 +13,7 @@ Identity is a **key pair**. Devices pair. The relay stores public keys and ciphe
 3. **The CLI owns the agent loop:** inference, tools, streaming, cancellation, orchestration.
 4. **The relay is zero-knowledge:** opaque blobs and public keys. Auth is a signature challenge. Devices check what it delivers: the account DEK encrypts what they share, and what one Device sends another is signed ([Relay trust](docs/architecture/relay-trust.md)). Its [hosted receivers](docs/architecture/receivers.md) read a service's webhook while they seal it to a Runner, and keep only the sealed copy.
 5. **Every Device records its `os`.** A Device with a desktop `os` (`macos`, `linux`, `windows`) is a **Runner**. Phones and tablets (`ios`, `ipados`, `android`) are Devices, never Runners.
-6. **Provider credentials belong to the account.** API keys, ChatGPT and Grok tokens, and custom providers (any server that speaks OpenAI's or Anthropic's API, or a decision API) are connected once, on any Device, and reach every paired Device as a `credentials` blob encrypted with the account DEK. A bot runs with them on whichever Runner it is assigned to.
+6. **Provider credentials belong to the account.** API keys, ChatGPT and Grok tokens, and custom providers (any server that speaks OpenAI's or Anthropic's API, or a decision API) are connected once, on any Device, and reach every paired Device as a `credentials` blob encrypted with the account DEK. A bot runs with them on whichever Runner it is assigned to. A provider the user keeps on one Device never leaves it, and only that Runner's bots run with it.
 7. **A bot runs on one Runner:** that Device’s CLI.
 
 ## Three processes

@@ -2,7 +2,7 @@
 
 Read [ARCHITECTURE.md](./ARCHITECTURE.md) before writing code, then the subject docs it lists for the parts you change.
 
-Identity is a local key pair. Paired Devices sync through an E2E relay. Provider credentials belong to the account: they sync to every paired Device as a blob encrypted with the account key. The desktop app talks to the local CLI.
+Identity is a local key pair. Paired Devices sync through an E2E relay. Provider credentials belong to the account: they sync to every paired Device as a blob encrypted with the account key, except a provider the user keeps on one Device. The desktop app talks to the local CLI.
 
 ## Write the current system
 

@@ -182,6 +182,9 @@ enum ProviderCommand {
         /// The API root to call instead of the provider's own: a proxy or a compatible server.
         #[usage(long)]
         base_url: Option<String>,
+        /// Keep it on this Device: the other Devices never get it.
+        #[usage(long)]
+        keep: bool,
     },
     /// Add a custom provider: any server that speaks OpenAI's Chat Completions or Responses, or
     /// Anthropic's Messages, such as a gateway or a model server on your network, or a decision
@@ -201,8 +204,19 @@ enum ProviderCommand {
         /// Read an API key from stdin. Without it the server is called with no key.
         #[usage(long)]
         api_key_stdin: bool,
+        /// Keep it on this Device: the other Devices never get it.
+        #[usage(long)]
+        keep: bool,
     },
-    /// Disconnect a provider on every Device, or delete a custom one.
+    /// Send a connected provider to every Device, or keep it on this one with --off.
+    Sync {
+        kind: String,
+        /// Keep it on this Device: the other Devices drop it.
+        #[usage(long)]
+        off: bool,
+    },
+    /// Disconnect a provider on every Device, or delete a custom one; one this Device keeps is
+    /// dropped here alone.
     Remove { kind: String },
     /// List the providers and what is connected.
     List,
@@ -478,7 +492,7 @@ async fn main() -> anyhow::Result<()> {
 /// change at once; otherwise here, followed by one sync pass.
 async fn provider(app: &std::sync::Arc<App>, command: ProviderCommand) -> anyhow::Result<()> {
     let (method, params) = match command {
-        ProviderCommand::Set { kind, api_key, base_url } => {
+        ProviderCommand::Set { kind, api_key, base_url, keep } => {
             if !lorca::credentials::PROVIDER_KINDS.contains(&kind.as_str()) {
                 anyhow::bail!("Unknown provider {kind}. Use one of: {}", lorca::credentials::PROVIDER_KINDS.join(", "));
             }
@@ -495,18 +509,26 @@ async fn provider(app: &std::sync::Arc<App>, command: ProviderCommand) -> anyhow
                 };
                 serde_json::json!({ "api_key": api_key, "base_url": base_url })
             };
+            let mut params = params;
+            if keep {
+                params["sync"] = false.into();
+            }
             let method_kind = if kind == "opencode-go" { "opencode_go" } else { &kind };
             (format!("providers.connect_{method_kind}"), params)
         }
-        ProviderCommand::Add { name, base_url, api, model, api_key_stdin } => {
+        ProviderCommand::Add { name, base_url, api, model, api_key_stdin, keep } => {
             let api_key = if api_key_stdin { read_api_key()? } else { String::new() };
-            let params = serde_json::json!({ "name": name, "base_url": base_url, "api": api, "models": model, "api_key": api_key });
+            let mut params = serde_json::json!({ "name": name, "base_url": base_url, "api": api, "models": model, "api_key": api_key });
+            if keep {
+                params["sync"] = false.into();
+            }
             ("providers.connect_custom".to_string(), params)
         }
+        ProviderCommand::Sync { kind, off } => ("providers.set_sync".to_string(), serde_json::json!({ "kind": kind, "sync": !off })),
         ProviderCommand::Remove { kind } => ("providers.disconnect".to_string(), serde_json::json!({ "kind": kind })),
         ProviderCommand::List => {
             // A running serve holds the same set: both load and save the one credentials file.
-            print_providers(&serde_json::to_value(app.credentials.lock().unwrap().statuses())?);
+            print_providers(&serde_json::to_value(app.provider_statuses())?);
             return Ok(());
         }
     };
@@ -637,6 +659,9 @@ fn print_providers(providers: &serde_json::Value) {
                 shown.push_str(&format!(", and {} more", models.len() - 5));
             }
             detail = format!("{name} · {} · {detail} · {shown}", provider["api"].as_str().unwrap_or_default());
+        }
+        if provider["kept"].as_bool() == Some(true) {
+            detail.push_str(" · kept on this Device");
         }
         println!("{:<10} {detail}", provider["kind"].as_str().unwrap_or_default());
     }

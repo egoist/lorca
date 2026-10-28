@@ -35,14 +35,14 @@ export default function TemplateImportScreen() {
   const devices = useStore((s) => s.devices);
   const runners = useMemo(() => devices.filter(isRunner), [devices]);
   const statuses = useStore((s) => s.providers);
-  const connected = connectedProviders(statuses);
+  const [runnerId, setRunnerId] = useState<string>();
+  const connected = connectedProviders(statuses, runnerId ?? runners.find((r) => deviceIsOnline(r.id))?.id ?? runners[0]?.id);
   const providers: readonly string[] = connected.length ? connected : PROVIDER_KINDS;
   const pendingLink = useStore((s) => s.pendingTemplateLink);
   const opened = params.link ? templateAddress(params.link) : undefined;
 
   const [from, setFrom] = useState(opened ?? "");
   const [source, setSource] = useState<Source | undefined>(opened ? { link: opened } : undefined);
-  const [runnerId, setRunnerId] = useState<string>();
   const [provider, setProvider] = useState<string>(providers[0]);
   const [name, setName] = useState("");
   const nameEdited = useRef(false);
