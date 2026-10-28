@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/egoist/lorca/desktop/model"
 	"github.com/egoist/mygo/ui"
@@ -137,35 +139,78 @@ func TestInspectorBotOpensSettings(t *testing.T) {
 	}
 }
 
-// Compact runs on the bot's Runner, which may be another machine: the Context row says it is at
-// work until the Runner answers, and why it failed when it did.
+// compactTransport holds every chats.compact until the test answers it.
+type compactTransport struct{ answers chan error }
+
+func (compactTransport) Reconnect() {}
+
+func (b compactTransport) Request(method string, params any) (json.RawMessage, error) {
+	if method == "chats.compact" {
+		return nil, <-b.answers
+	}
+	return nil, nil
+}
+
+// Compact waits for a running turn and the memory flush, so the row shows it under way until the
+// Runner answers, then why it did not compact, or a check that it did.
 func TestInspectorCompactShowsProgressAndFailure(t *testing.T) {
 	m := demoWindow(t)
-	chat, bot := store.Chat("chat-nova"), store.Bot("bot-nova")
-	usage := ui.NewTester(func(c *ui.Context) {
+	demo := store
+	transport := compactTransport{answers: make(chan error)}
+	queue := make(chan func(), 64)
+	store = model.NewStore(transport, func(fn func()) { queue <- fn }, false)
+	store.Devices, store.Bots, store.Chats, store.Providers, store.Models = demo.Devices, demo.Bots, demo.Chats, demo.Providers, demo.Models
+	store.IsConnected, store.IsStarting, store.HasIdentity = true, false, demo.HasIdentity
+	context := store.Chat("chat-nova").Usage.ContextSummary()
+	tt := ui.NewTester(func(c *ui.Context) {
 		applyTheme(c)
-		m.inspectorUsage(c, bot, chat)
-	}, 360, 300)
-	settle(usage)
-	summary := chat.Usage.ContextSummary()
-	if !usage.HasText(summary) || !usage.HasText(L("Compact")) {
-		t.Fatalf("no Context row in %q", usage.Texts())
+		m.inspectorUsage(c, store.Bot("bot-nova"), store.Chat("chat-nova"))
+	}, 360, 400)
+	tt.Frame()
+	answer := func(err error) {
+		t.Helper()
+		select {
+		case transport.answers <- err:
+		case <-time.After(4 * time.Second):
+			t.Fatal("no chats.compact request")
+		}
+		select {
+		case fn := <-queue:
+			fn()
+		case <-time.After(4 * time.Second):
+			t.Fatal("the answer never came back")
+		}
+		tt.Frame()
 	}
-	m.inspector.compacting = map[string]bool{chat.ID: true}
-	settle(usage)
-	if !usage.HasText(L("Compacting…")) || slices.Contains(usage.Texts(), L("Compact")) {
-		t.Fatalf("no progress in %q", usage.Texts())
+
+	click(t, tt, L("Compact"))
+	tt.Frame()
+	if !tt.HasText(L("Compacting…")) || tt.HasText(context) {
+		t.Fatalf("no progress while compacting: %q", tt.Texts())
 	}
-	m.inspector.compacting = map[string]bool{}
-	m.inspector.compactErrors = map[string]string{chat.ID: "Studio Mac is offline."}
-	settle(usage)
-	if !usage.HasText("Studio Mac is offline.") || !usage.HasText(L("Compact")) {
-		t.Fatalf("no failure in %q", usage.Texts())
+	if err := tt.Click(L("Compact")); err == nil {
+		t.Fatal("Compact can be pressed again while it runs")
 	}
-	// The mock Runner answers at once; the failure goes and the context shows again.
-	click(t, usage, L("Compact"))
-	settle(usage)
-	if !usage.HasText(summary) || m.inspector.compacting[chat.ID] || m.inspector.compactErrors[chat.ID] != "" {
-		t.Fatalf("after Compact %q", usage.Texts())
+	renderTo(t, tt, "inspector-compacting")
+	answer(&model.RequestError{Message: "Nothing to compact yet"})
+	if !tt.HasText("Nothing to compact yet") || tt.HasText(L("Compacting…")) {
+		t.Fatalf("the failure does not show: %q", tt.Texts())
+	}
+	renderTo(t, tt, "inspector-compact-failed")
+
+	click(t, tt, L("Compact"))
+	tt.Frame()
+	if tt.HasText("Nothing to compact yet") || !tt.HasText(L("Compacting…")) {
+		t.Fatalf("a new try keeps the old failure: %q", tt.Texts())
+	}
+	answer(nil)
+	if !tt.HasText(L("Compacted")) || !tt.HasText(context) {
+		t.Fatalf("no check once compacted: %q", tt.Texts())
+	}
+	renderTo(t, tt, "inspector-compacted")
+	tt.Advance(2100 * time.Millisecond)
+	tt.Frame()
+	if tt.HasText(L("Compacted")) || !tt.HasText(L("Compact")) {
+		t.Fatalf("the check stays: %q", tt.Texts())
 	}
 }

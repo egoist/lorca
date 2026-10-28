@@ -1525,4 +1525,5 @@ var zh = map[string]string{
 	"No coding agents":   "没有编程智能体",
 	"Lorca app":          "Lorca 应用",
 	"Compacting…":        "正在压缩…",
+	"Compacted":          "已压缩",
 }
