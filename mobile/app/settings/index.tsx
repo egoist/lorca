@@ -7,7 +7,7 @@ import { ActivityIndicator, Alert, Platform, ScrollView, StyleSheet, Text, View 
 import { engine } from "../../src/core/engine";
 import { loadPrefs } from "../../src/core/prefs";
 import { checkForUpdates, installedVersion, installUpdate, setDailyChecks, updatesSupported, useUpdates, type Updates } from "../../src/core/updates";
-import { CUSTOM_PRESETS, customProviderNamed, isCustomProvider, presetGroup, providerLabel, reviewModelRows, reviewPicker, withCustomModels, type ReviewModelRow } from "../../src/core/model";
+import { CUSTOM_PRESETS, customProviderNamed, isCustomProvider, presetGroup, providerLabel, providerSignsInOnRunner, reviewModelRows, reviewPicker, withCustomModels, type ReviewModelRow } from "../../src/core/model";
 import { useStore } from "../../src/core/store";
 import { deviceLanguage, languageNames, languages, setAppLanguage, t, useLanguage } from "../../src/i18n";
 import { FieldRow, MenuRow, Row, Section, ToggleRow, type MenuChoice } from "../../src/ui/forms";
@@ -332,7 +332,7 @@ export default function SettingsScreen() {
                 subtitle={
                   provider.is_connected || provider.runners?.length ? provider.detail || undefined : undefined
                 }
-                detail={provider.is_connected ? t("Connected") : provider.runners?.length ? t("Kept on a Runner") : t("Not connected")}
+                detail={provider.is_connected ? t("Connected") : provider.runners?.length ? (providerSignsInOnRunner(provider.kind) ? t("Signed in on a Runner") : t("Kept on a Runner")) : t("Not connected")}
                 onPress={() => router.push(`/settings/provider/${provider.kind}`)}
                 chevron
               />

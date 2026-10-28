@@ -1554,4 +1554,11 @@ var zh = map[string]string{
 	"Kept on this Device.": "仅保留在这台设备上。",
 	"Your browser opens a %@ sign-in. The tokens are kept on this Device.":       "浏览器会打开 %@ 登录页。令牌只保留在这台设备上。",
 	"%@ is kept on another Device. Connect it on %@ too, or sync it from there.": "%1$@ 保留在另一台设备上。也在 %2$@ 上接入它，或从那台设备同步它。",
+	"Check Again":           "再次检查",
+	"Checking Claude Code…": "正在检查 Claude Code…",
+	"Bots on this computer use Claude Code’s own login: run claude auth login in a terminal, then continue. %@": "这台电脑上的智能体使用 Claude Code 自己的登录：在终端中运行 claude auth login，然后继续。%@",
+	"The sign-in stays with Claude Code on this computer.":                                                      "登录信息留在这台电脑上的 Claude Code 中。",
+	"Claude Code is not signed in on %@. Run claude auth login in a terminal there; the bot is created now.":    "Claude Code 尚未在 %@ 上登录。请在那台电脑的终端中运行 claude auth login；智能体会先创建好。",
+	"It needs a Claude Pro or Max subscription.":                                                                "需要 Claude Pro 或 Max 订阅。",
+	"Claude Code is not signed in on this computer.":                                                            "Claude Code 尚未在这台电脑上登录。",
 }

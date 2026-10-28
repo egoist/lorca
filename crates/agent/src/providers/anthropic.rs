@@ -150,7 +150,8 @@ impl AnthropicProvider {
         self.cache.then(|| json!({ "type": "ephemeral" }))
     }
 
-    fn body(&self, request: &ModelRequest) -> Value {
+    /// The Messages request for `request`; `claude_code` hands its parts to `claude -p`.
+    pub(crate) fn body(&self, request: &ModelRequest) -> Value {
         let transformed = transform_messages_with_origins(
             &request.messages,
             &TransformOptions {
@@ -419,7 +420,7 @@ enum Block {
 }
 
 /// Tracks the stream's content blocks and the server tool calls awaiting their result.
-struct MessagesState {
+pub(crate) struct MessagesState {
     next_index: usize,
     blocks: HashMap<u64, (usize, Block)>,
     /// Server tool calls by id: the tool name and detail reported at their start.
@@ -430,7 +431,7 @@ struct MessagesState {
 }
 
 impl MessagesState {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         MessagesState { next_index: 0, blocks: HashMap::new(), pending: HashMap::new(), stop: None, usage: Usage::default() }
     }
 
@@ -454,7 +455,7 @@ impl MessagesState {
     }
 
     /// Applies one event. `Ok(true)` when the message is complete.
-    async fn apply(&mut self, kind: &str, value: &Value, tx: &mpsc::Sender<AssistantEvent>) -> Result<bool, String> {
+    pub(crate) async fn apply(&mut self, kind: &str, value: &Value, tx: &mpsc::Sender<AssistantEvent>) -> Result<bool, String> {
         match kind {
             "message_start" => self.read_usage(&value["message"]["usage"]),
             "content_block_start" => {
@@ -587,6 +588,38 @@ impl MessagesState {
             _ => {}
         }
         Ok(false)
+    }
+
+    /// Closes the blocks still open when the stream ends, so the message is whole, and answers
+    /// the stream's last event: `Done` with the usage and its cost, or why it is not done.
+    /// `completed` is whether `message_stop` came; `source` names the stream in errors.
+    pub(crate) async fn finish(&mut self, completed: bool, info: Option<&'static ModelInfo>, source: &str, tx: &mpsc::Sender<AssistantEvent>) -> AssistantEvent {
+        let mut open: Vec<(u64, (usize, Block))> = self.blocks.drain().collect();
+        open.sort_by_key(|(provider_index, _)| *provider_index);
+        for (_, (index, block)) in open {
+            match block {
+                Block::Text => {
+                    let _ = tx.send(AssistantEvent::TextEnd { index }).await;
+                }
+                Block::Thinking => {
+                    let _ = tx.send(AssistantEvent::ThinkingEnd { index }).await;
+                }
+                Block::ToolCall => {
+                    let _ = tx.send(AssistantEvent::ToolCallEnd { index }).await;
+                }
+                Block::ServerToolUse { .. } | Block::Server(_) => {}
+            }
+        }
+        let mut usage = self.usage.clone();
+        if let Some(info) = info {
+            usage.cost = info.cost_of(&usage);
+        }
+        match (completed, self.stop.take()) {
+            (true, Some(Ok(stop_reason))) => AssistantEvent::Done { stop_reason, usage },
+            (true, Some(Err(message))) => AssistantEvent::Error { message, aborted: false },
+            (true, None) => AssistantEvent::Error { message: format!("{source} stream ended without a stop reason"), aborted: false },
+            (false, _) => AssistantEvent::Error { message: format!("{source} stream ended before message_stop"), aborted: false },
+        }
     }
 }
 
@@ -731,33 +764,7 @@ impl Provider for AnthropicProvider {
                 }
             }
 
-            // Blocks still open when the stream ends are closed so the message is whole.
-            let mut open: Vec<(u64, (usize, Block))> = state.blocks.drain().collect();
-            open.sort_by_key(|(provider_index, _)| *provider_index);
-            for (_, (index, block)) in open {
-                match block {
-                    Block::Text => {
-                        let _ = tx.send(AssistantEvent::TextEnd { index }).await;
-                    }
-                    Block::Thinking => {
-                        let _ = tx.send(AssistantEvent::ThinkingEnd { index }).await;
-                    }
-                    Block::ToolCall => {
-                        let _ = tx.send(AssistantEvent::ToolCallEnd { index }).await;
-                    }
-                    Block::ServerToolUse { .. } | Block::Server(_) => {}
-                }
-            }
-            let mut usage = state.usage.clone();
-            if let Some(info) = info {
-                usage.cost = info.cost_of(&usage);
-            }
-            let terminal = match (completed, state.stop.take()) {
-                (true, Some(Ok(stop_reason))) => AssistantEvent::Done { stop_reason, usage },
-                (true, Some(Err(message))) => AssistantEvent::Error { message, aborted: false },
-                (true, None) => AssistantEvent::Error { message: "Anthropic stream ended without a stop reason".into(), aborted: false },
-                (false, _) => AssistantEvent::Error { message: "Anthropic stream ended before message_stop".into(), aborted: false },
-            };
+            let terminal = state.finish(completed, info, "Anthropic", &tx).await;
             let _ = tx.send(terminal).await;
         });
 

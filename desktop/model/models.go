@@ -24,7 +24,11 @@ type ProviderKind = string
 
 // ProviderKinds are the built-in kinds, in the order Settings lists them. The account's custom
 // providers follow them, in the order they were added (`Store.ProviderKinds`).
-var ProviderKinds = []ProviderKind{"deepseek", "anthropic", "opencode", "opencode-go", "chatgpt", "grok"}
+var ProviderKinds = []ProviderKind{"deepseek", "anthropic", "claude-code", "opencode", "opencode-go", "chatgpt", "grok"}
+
+// ClaudeCode is the provider a Runner signs in to on its own, with Claude Code's login there: its
+// sign-in is never shared, and only the bots of the Runners signed in run with it.
+const ClaudeCode ProviderKind = "claude-code"
 
 const customPrefix = "custom:"
 
@@ -53,6 +57,8 @@ func ProviderName(kind ProviderKind, providers []ProviderCredential) string {
 		return "DeepSeek"
 	case "anthropic":
 		return "Anthropic"
+	case ClaudeCode:
+		return "Claude Code"
 	case "opencode":
 		return "OpenCode Zen"
 	case "opencode-go":
@@ -79,6 +85,9 @@ func ProviderSymbol(kind ProviderKind) string {
 	if IsCustomKind(kind) {
 		return "server.rack"
 	}
+	if kind == ClaudeCode {
+		return "terminal"
+	}
 	if UsesAPIKey(kind) {
 		return "key.fill"
 	}
@@ -102,6 +111,8 @@ func SignInRequirement(kind ProviderKind) string {
 		return L("It needs a ChatGPT subscription.")
 	case "grok":
 		return L("It needs a SuperGrok or X Premium+ subscription.")
+	case ClaudeCode:
+		return L("It needs a Claude Pro or Max subscription.")
 	}
 	return ""
 }

@@ -22,6 +22,10 @@ pub type GrokTokens = serde_json::Value;
 /// The built-in providers. A custom provider's kind is `custom:` and a slug of its name.
 pub const PROVIDER_KINDS: [&str; 6] = ["deepseek", "anthropic", "opencode", "opencode-go", "chatgpt", "grok"];
 
+/// The providers a Runner signs in to on its own and never shares: Claude Code's sign-in is the
+/// Runner's Claude Code login. They are not in this set; each Runner lists the ones it has.
+pub const LOCAL_PROVIDER_KINDS: [&str; 1] = ["claude-code"];
+
 pub const CUSTOM_PREFIX: &str = "custom:";
 
 /// Whether `kind` names a provider the user added.
@@ -313,9 +317,13 @@ impl Credentials {
         self.statuses().into_iter().filter(|s| s.is_connected).map(|s| s.kind).collect()
     }
 
-    /// Every kind a bot can run with: the built-in providers, then the custom ones that chat.
+    /// Every kind a bot can run with: the built-in providers, Claude Code after Anthropic, then
+    /// the custom ones that chat.
     pub fn kinds(&self) -> Vec<String> {
-        PROVIDER_KINDS.iter().map(|kind| kind.to_string()).chain(self.custom_kinds().into_iter().filter(|kind| !self.custom[kind].api.decides())).collect()
+        let mut kinds: Vec<String> = PROVIDER_KINDS.iter().map(|kind| kind.to_string()).collect();
+        kinds.insert(2, LOCAL_PROVIDER_KINDS[0].to_string());
+        kinds.extend(self.custom_kinds().into_iter().filter(|kind| !self.custom[kind].api.decides()));
+        kinds
     }
 
     /// The custom providers' kinds, in the order the user added them.
@@ -378,6 +386,7 @@ impl Credentials {
                 "anthropic" => "Anthropic".into(),
                 "opencode" => "OpenCode Zen".into(),
                 "opencode-go" => "OpenCode Go".into(),
+                "claude-code" => "Claude Code".into(),
                 "chatgpt" => "ChatGPT".into(),
                 "grok" => "Grok".into(),
                 other => other.strip_prefix(CUSTOM_PREFIX).unwrap_or(other).to_string(),
@@ -593,7 +602,7 @@ mod tests {
         let merge = ours.merge(&theirs);
         assert_eq!(merge, Merge { taken: vec!["custom:lab".into(), "custom:router".into()], is_ahead: true });
         assert_eq!(ours.custom_kinds(), ["custom:mine", "custom:router"]);
-        assert_eq!(ours.kinds().len(), PROVIDER_KINDS.len() + 2);
+        assert_eq!(ours.kinds().len(), PROVIDER_KINDS.len() + LOCAL_PROVIDER_KINDS.len() + 2);
         assert_eq!(ours.label("custom:router"), "Router");
         assert_eq!(ours.label("custom:lab"), "lab");
         assert_eq!(ours.label("opencode-go"), "OpenCode Go");

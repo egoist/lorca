@@ -122,3 +122,30 @@ async fn a_provider_kept_on_one_runner_is_offered_for_its_bots_alone() {
     api::dispatch(&app, "providers.set_sync", json!({ "kind": "deepseek", "sync": true })).await.unwrap();
     assert!(serde_json::to_string(&app.credentials.lock().unwrap().shared()).unwrap().contains("sk-test-kept"));
 }
+
+#[tokio::test]
+async fn claude_code_is_this_runners_own_and_never_in_the_shared_set() {
+    let home = Home(std::env::temp_dir().join(format!("lorca-claude-code-{}", uuid::Uuid::new_v4())));
+    let app = App::load(Config { home: home.0.clone(), port: 0 }).unwrap();
+    let status = |app: &std::sync::Arc<App>| app.provider_statuses().into_iter().find(|status| status.kind == "claude-code").unwrap();
+
+    lorca::claude_code::set_status(Some(lorca::claude_code::Status { program: None, ..Default::default() }));
+    let missing = status(&app);
+    assert!(!missing.is_connected && missing.detail.contains("not installed"));
+    // It is listed after Anthropic, as the apps list the built-ins.
+    let kinds: Vec<String> = app.provider_statuses().into_iter().map(|status| status.kind).collect();
+    assert_eq!(&kinds[..3], ["deepseek", "anthropic", "claude-code"]);
+    let error = lorca::providers::provider_for(&app, "claude-code", None, None).err().unwrap();
+    assert!(error.starts_with("Claude Code is not installed on this Runner"), "{error}");
+
+    lorca::claude_code::set_status(Some(lorca::claude_code::Status { program: Some("/usr/local/bin/claude".into()), signed_in: true, plan: Some("max".into()), email: Some("me@example.com".into()) }));
+    let signed_in = status(&app);
+    assert_eq!((signed_in.is_connected, signed_in.kept, signed_in.detail.as_str()), (true, true, "Claude Max · me@example.com"));
+    assert!(app.connected_kinds().contains(&"claude-code".to_string()));
+    let provider = lorca::providers::provider_for(&app, "claude-code", None, None).unwrap();
+    assert_eq!((provider.provider_id(), provider.model_id()), ("claude-code", "claude-opus-5-5"));
+    // The account's set never carries it, and Disconnect points at Claude Code's own sign-out.
+    assert!(!serde_json::to_string(&app.credentials.lock().unwrap().shared()).unwrap().contains("claude-code"));
+    assert!(api::dispatch(&app, "providers.disconnect", json!({ "kind": "claude-code" })).await.unwrap_err().contains("claude auth logout"));
+    lorca::claude_code::set_status(None);
+}

@@ -311,6 +311,9 @@ func (o *onboardingWindow) connectProvider() {
 	if model.UsesAPIKey(kind) {
 		o.status = &onboardingStatus{text: L("Checking the key with %@…", name)}
 		store.ConnectAPIKey(kind, key, "", true, done)
+	} else if kind == model.ClaudeCode {
+		o.status = &onboardingStatus{text: L("Checking Claude Code…")}
+		store.CheckClaudeCode(done)
 	} else {
 		o.status = &onboardingStatus{text: L("Waiting for the browser…")}
 		o.signingIn = true
@@ -810,6 +813,8 @@ func (o *onboardingWindow) providerRows(c *ui.Context, next onboardingButton) {
 					next.run()
 				}
 			})
+		case kind == model.ClaudeCode:
+			ui.Text(c, L("Bots on this computer use Claude Code’s own login: run claude auth login in a terminal, then continue. %@", model.SignInRequirement(kind))).FontSize(12).LineHeight(1.4).TextColor(p.Label2)
 		default:
 			ui.Text(c, L("Your browser opens a %@ sign-in when you continue. %@", name, model.SignInRequirement(kind))).FontSize(12).LineHeight(1.4).TextColor(p.Label2)
 		}
@@ -818,6 +823,8 @@ func (o *onboardingWindow) providerRows(c *ui.Context, next onboardingButton) {
 	switch {
 	case o.status != nil:
 		note, color = o.status.text, o.statusColor(c)
+	case kind == model.ClaudeCode:
+		note = L("The sign-in stays with Claude Code on this computer.")
 	case o.custom:
 		note = L("Lorca checks the server, then shares it with your paired Devices, encrypted.")
 	case apiKey:

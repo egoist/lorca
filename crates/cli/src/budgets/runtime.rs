@@ -399,7 +399,7 @@ struct BudgetProvider {
 fn pricing(provider: &dyn Provider) -> Pricing {
     if provider.provider_id().starts_with("custom:") || provider.model_info().is_none() {
         Pricing::Unknown
-    } else if matches!(provider.provider_id(), "chatgpt" | "grok" | "opencode-go") {
+    } else if matches!(provider.provider_id(), "chatgpt" | "grok" | "opencode-go" | "claude-code") {
         Pricing::SubscriptionEstimate
     } else {
         Pricing::Api

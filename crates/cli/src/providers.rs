@@ -113,7 +113,7 @@ fn built_in_vision(kind: &str, model: Option<&str>) -> bool {
     }
     let model = model.to_ascii_lowercase();
     match kind {
-        "chatgpt" | "anthropic" | "grok" => true,
+        "chatgpt" | "anthropic" | "claude-code" | "grok" => true,
         "deepseek" => model.contains("vl") || model.contains("vision"),
         "opencode" | "opencode-go" => {
             model.contains("claude")
@@ -175,7 +175,7 @@ pub enum Reviewer {
 /// chat model thinks the least it can.
 pub fn reviewer(app: &Arc<App>, kind: &str) -> Result<Reviewer, String> {
     let review = app.auto_review();
-    let connected = app.credentials.lock().unwrap().connected_kinds();
+    let connected = app.connected_kinds();
     let kind = review.provider.filter(|picked| connected.contains(picked)).unwrap_or_else(|| kind.to_string());
     let model = review.models.get(&kind).cloned().unwrap_or_else(|| small_model(app, &kind).0);
     if let Some(decider) = decider(app, &kind, &model)? {
@@ -241,7 +241,8 @@ pub fn provider_for(app: &Arc<App>, kind: &str, model: Option<&str>, thinking: O
 
 /// Why a provider this Runner lacks is out of reach: another Runner keeps it to itself.
 fn kept_elsewhere(app: &App, kind: &str) -> Option<String> {
-    if app.credentials.lock().unwrap().connected_kinds().iter().any(|connected| connected == kind) {
+    // Claude Code signs in on each Runner; its own error says how.
+    if kind == crate::claude_code::KIND || app.credentials.lock().unwrap().connected_kinds().iter().any(|connected| connected == kind) {
         return None;
     }
     let status = app.provider_statuses().into_iter().find(|status| status.kind == kind && !status.runners.is_empty())?;
@@ -318,6 +319,10 @@ fn unmetered_provider_for(app: &Arc<App>, kind: &str, model: Option<&str>, think
             }
             let model = model.or_else(|| std::env::var("LORCA_CHATGPT_MODEL").ok()).unwrap_or_else(|| default_model(kind).into());
             Ok(Arc::new(ChatGptProvider::new(Arc::new(AppTokenSource(app.clone())), Some(model.as_str())).with_thinking(thinking)))
+        }
+        "claude-code" => {
+            let model = model.or_else(|| std::env::var("LORCA_CLAUDE_CODE_MODEL").ok()).unwrap_or_else(|| default_model(kind).into());
+            Ok(Arc::new(crate::claude_code::provider(app, &model, thinking)?))
         }
         "grok" => {
             if app.credentials.lock().unwrap().grok.is_none() {

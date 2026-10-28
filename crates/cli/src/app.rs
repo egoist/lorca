@@ -733,7 +733,7 @@ impl App {
             box_pubkey: keys.box_pubkey(),
             plugins: self.plugins.lock().unwrap().statuses(),
             channels: self.channels.statuses(),
-            providers: self.credentials.lock().unwrap().kept_statuses(),
+            providers: self.kept_providers(),
             version: config::VERSION.into(),
             update: self.update_status(),
             app: self.app_status(),
@@ -2281,8 +2281,43 @@ impl App {
         self.provider_statuses_in(&state)
     }
 
+    /// The providers this Device keeps to itself and tells the others of: the credentials it
+    /// keeps, and Claude Code while it is signed in here.
+    fn kept_providers(&self) -> Vec<ProviderStatus> {
+        let mut kept = self.credentials.lock().unwrap().kept_statuses();
+        let claude_code = self.claude_code_status();
+        if claude_code.is_connected {
+            kept.push(ProviderStatus { detail: String::new(), review_model: None, ..claude_code });
+        }
+        kept
+    }
+
+    /// Claude Code as this Device lists it: its own sign-in on a Runner, and on a Device that runs
+    /// no bots, a row the Runners that have it fill in.
+    fn claude_code_status(&self) -> ProviderStatus {
+        let review_model = lorca_models::review_model(crate::credentials::LOCAL_PROVIDER_KINDS[0]).map(str::to_string);
+        #[cfg(feature = "runner")]
+        if self.machine_file().is_none_or(|machine| matches!(machine.os.as_str(), "macos" | "linux" | "windows")) {
+            return crate::claude_code::provider_status(review_model);
+        }
+        ProviderStatus { kind: crate::credentials::LOCAL_PROVIDER_KINDS[0].into(), detail: "Signed in on a Runner with claude auth login".into(), review_model, ..Default::default() }
+    }
+
+    /// The kinds a bot on this Runner runs with now: the connected credentials and Claude Code
+    /// while it is signed in here.
+    pub fn connected_kinds(&self) -> Vec<String> {
+        let mut kinds = self.credentials.lock().unwrap().connected_kinds();
+        if self.claude_code_status().is_connected {
+            kinds.push(crate::credentials::LOCAL_PROVIDER_KINDS[0].into());
+        }
+        kinds
+    }
+
     fn provider_statuses_in(&self, state: &State) -> Vec<ProviderStatus> {
         let mut statuses = self.credentials.lock().unwrap().statuses();
+        // Claude Code after Anthropic, as the apps list the built-ins.
+        let at = statuses.iter().position(|status| status.kind == "anthropic").map_or(0, |at| at + 1);
+        statuses.insert(at, self.claude_code_status());
         let this_id = self.this_device_id();
         for status in statuses.iter_mut().filter(|status| status.kept && status.is_connected) {
             status.runners.extend(this_id.clone());
@@ -2302,7 +2337,7 @@ impl App {
                 .filter_map(|id| state.devices.iter().find(|device| &device.id == id))
                 .map(|device| state.device_names.get(&device.id).unwrap_or(&device.name).clone())
                 .collect();
-            status.detail = format!("Kept on {}", names.join(", "));
+            status.detail = if status.kind == crate::credentials::LOCAL_PROVIDER_KINDS[0] { format!("Signed in on {}", names.join(", ")) } else { format!("Kept on {}", names.join(", ")) };
         }
         statuses
     }

@@ -109,6 +109,7 @@ func mockProviders() []ProviderCredential {
 	return []ProviderCredential{
 		{Kind: "deepseek", IsConnected: true, Detail: "sk-live…4f2c", ReviewModel: "deepseek-flash"},
 		{Kind: "anthropic", IsConnected: true, Detail: "sk-ant…8d1a", ReviewModel: "claude-haiku-4-5"},
+		{Kind: ClaudeCode, Detail: "Not signed in. Run claude auth login on this computer.", ReviewModel: "claude-haiku-5-5"},
 		{Kind: "opencode", Detail: "Not connected", ReviewModel: "deepseek-v4.1-flash"},
 		{Kind: "opencode-go", Detail: "Not connected", ReviewModel: "glm-5.3-flash"},
 		{Kind: "chatgpt", IsConnected: true, Detail: "you@lorca.app", ReviewModel: "gpt-6-luna"},

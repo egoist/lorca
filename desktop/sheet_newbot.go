@@ -87,6 +87,9 @@ func (st *newBotState) note() (string, bool) {
 	if credential != nil && credential.RunsOn(host.ID) {
 		return L("%@ is connected. Turns run on %@.", name, host.Name), false
 	}
+	if st.provider == model.ClaudeCode {
+		return L("Claude Code is not signed in on %@. Run claude auth login in a terminal there; the bot is created now.", host.Name), true
+	}
 	if credential != nil && credential.IsConnected {
 		return L("%@ is kept on another Device. Connect it on %@ too, or sync it from there.", name, host.Name), true
 	}

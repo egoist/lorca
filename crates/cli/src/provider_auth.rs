@@ -487,6 +487,9 @@ pub fn disconnect(app: &Arc<App>, kind: &str) -> Result<(), String> {
             credentials.custom.remove(kind);
         });
     }
+    if kind == crate::credentials::LOCAL_PROVIDER_KINDS[0] {
+        return Err("Claude Code signs out on its own Runner: run claude auth logout there.".into());
+    }
     if !PROVIDER_KINDS.contains(&kind) {
         return Err(format!("Unknown provider {kind}"));
     }

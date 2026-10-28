@@ -10,6 +10,7 @@ Bots think with your own AI accounts. Connect a provider once, on any paired dev
 | --- | --- | --- |
 | **DeepSeek** | API key | `deepseek-flash` |
 | **Anthropic** | API key | `claude-opus-5` |
+| **Claude Code** | Your Claude Pro or Max subscription, signed in with Claude Code on the Runner | `claude-opus-5-5` |
 | **OpenCode Zen** | API key, pay as you go | `deepseek-v4.1-flash` |
 | **OpenCode Go** | API key and Go subscription | `glm-5.3-flash` |
 | **ChatGPT** | Sign in with your ChatGPT subscription | `gpt-6.1-sol` |
@@ -34,6 +35,16 @@ lorca provider set opencode-go
 lorca provider set chatgpt
 lorca provider list
 ```
+
+### Claude Code
+
+Claude Code runs your bots on your Claude Pro or Max subscription. Bots use the Claude Code CLI on the computer they run on, so there is nothing to paste into Lorca. On each Runner that should use it, install [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and sign in:
+
+```bash
+claude auth login
+```
+
+**Settings › Providers › Claude Code** shows whether this computer is signed in. Choose **Check Again** after signing in. The sign-in stays with Claude Code on that computer: it never syncs, and other devices list Claude Code as signed in on that Runner, so only bots on it can pick it. Each reply counts against your Claude plan's usage limits, as Claude Code's own work does. If Anthropic charges a reply to usage credits instead of your plan, the bot stops and says so. Sign out with `claude auth logout` on that computer.
 
 ### Keep a provider on one device
 
@@ -98,4 +109,4 @@ If a bot's provider is not connected, its turn ends with a note that says to con
 
 ## Cost
 
-DeepSeek, Anthropic, and OpenCode Zen bill by usage; OpenCode Go applies usage to its subscription limits. The inspector shows what each chat has spent. ChatGPT and Grok sign-ins use your subscription, and the figure shown is what the work would cost at API rates.
+DeepSeek, Anthropic, and OpenCode Zen bill by usage; OpenCode Go applies usage to its subscription limits. The inspector shows what each chat has spent. ChatGPT, Grok, and Claude Code use your subscription, and the figure shown is what the work would cost at API rates.
