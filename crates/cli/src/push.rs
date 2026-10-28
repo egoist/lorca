@@ -227,7 +227,7 @@ mod tests {
             meta: ChatMeta { id: "attention-chat".into(), kind: "dm".into(), title: None,
                 bot_ids: vec![bot.id.clone()], owner_bot_id: None, description: None,
                 is_pinned: false, section_id: None, is_hidden: false, mute: None, created_at: 1.0, channel: None },
-            unread_count: 0, usage: None, compactions: vec![],
+            unread_count: 0, usage: None, compactions: vec![], runner_usage: Default::default(),
         };
         app.state.lock().unwrap().chats.push(chat.clone());
         crate::attention::dispatch(&app, "attention.preferences", serde_json::json!({"summaries":false}), None).unwrap();
@@ -302,7 +302,7 @@ mod tests {
         let chat = Chat {
             meta: ChatMeta { id: id.into(), kind: "dm".into(), title: None, bot_ids: vec![bot.id.clone()],
                 owner_bot_id: None, description: None, is_pinned: false, section_id: None, is_hidden: false, mute: None, created_at: 1.0, channel: None },
-            unread_count: 0, usage: None, compactions: vec![],
+            unread_count: 0, usage: None, compactions: vec![], runner_usage: Default::default(),
         };
         app.state.lock().unwrap().chats.push(chat.clone());
         app.upsert_message(Message::new(id, Author::Bot { bot_id: bot.id.clone() }, Body::text("Done")), false);
@@ -442,7 +442,7 @@ mod tests {
             let chat = Chat {
                 meta: ChatMeta { id: id.into(), kind: "dm".into(), title: None, bot_ids: vec![bot.id.clone()],
                     owner_bot_id: None, description: None, is_pinned: false, section_id: None, is_hidden: false, mute: None, created_at: 1.0, channel: None },
-                unread_count: 0, usage: None, compactions: vec![],
+                unread_count: 0, usage: None, compactions: vec![], runner_usage: Default::default(),
             };
             app.state.lock().unwrap().chats.push(chat);
         }

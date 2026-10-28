@@ -830,6 +830,7 @@ mod tests {
             unread_count: 0,
             usage: None,
             compactions: Vec::new(),
+            runner_usage: Default::default(),
         }
     }
 

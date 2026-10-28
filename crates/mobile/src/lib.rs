@@ -253,6 +253,7 @@ mod tests {
             unread_count: 0,
             usage: None,
             compactions: Vec::new(),
+            runner_usage: Default::default(),
         });
         let tool = lorca::model::Message::new(
             chat_id,

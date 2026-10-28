@@ -1233,11 +1233,12 @@ impl App {
     // MARK: - Roster mutations (local + roster upload)
 
     pub fn roster_summary(&self) -> Event {
+        let this_device = self.this_device_id();
         let state = self.state.lock().unwrap();
         Event::RosterChanged {
             devices: self.devices_out(&state),
             bots: state.bots.clone(),
-            chats: state.chats.iter().map(|c| ChatSummary { meta: c.meta.clone(), unread_count: c.unread_count, usage: c.usage.clone() }).collect(),
+            chats: state.chats.iter().map(|c| ChatSummary { meta: c.meta.clone(), unread_count: c.unread_count, usage: shown_usage(&state, c, this_device.as_deref()) }).collect(),
             sections: state.sections.clone(),
             routines: self.routines_out(&state),
             auto_review: state.auto_review.clone(),
@@ -1473,7 +1474,7 @@ impl App {
                 }
             }
         }
-        let chat = Chat { meta, unread_count: 0, usage: None, compactions: Vec::new() };
+        let chat = Chat { meta, unread_count: 0, usage: None, compactions: Vec::new(), runner_usage: Default::default() };
         {
             let mut state = self.state.lock().unwrap();
             if let Some(existing) = state.chats.iter().find(|c| c.meta.id == chat.meta.id) {
@@ -2028,7 +2029,7 @@ impl App {
             entry.clone()
         };
         self.save_state();
-        self.emit(Event::ChatUsageChanged { chat_id: chat_id.into(), usage: updated });
+        self.report_usage(chat_id, updated);
     }
 
     /// Adds a finished turn's usage to the chat's and tells the app.
@@ -2050,7 +2051,7 @@ impl App {
             entry.clone()
         };
         self.save_state();
-        self.emit(Event::ChatUsageChanged { chat_id: chat_id.to_string(), usage: updated });
+        self.report_usage(chat_id, updated);
     }
 
     /// Adds a side call's tokens and cost to the chat's, such as a script's `models.ask()`: they
@@ -2070,7 +2071,45 @@ impl App {
             entry.clone()
         };
         self.save_state();
-        self.emit(Event::ChatUsageChanged { chat_id: chat_id.to_string(), usage: updated });
+        self.report_usage(chat_id, updated);
+    }
+
+    /// Uploads what the turns here used in the chat, for the other Devices, and tells the app.
+    #[cfg(feature = "runner")]
+    fn report_usage(&self, chat_id: &str, usage: ChatUsage) {
+        if let Some(runner_id) = self.this_device_id() {
+            self.push_chat_op(&ChatBlob::Usage { chat_id: chat_id.to_string(), runner_id, usage });
+        }
+        self.emit_usage(chat_id);
+    }
+
+    /// Another Runner's report of what its turns used in the chat. The cycle saves state once
+    /// after the page.
+    pub fn set_runner_usage(&self, chat_id: &str, runner_id: &str, usage: ChatUsage) {
+        if self.this_device_id().as_deref() == Some(runner_id) {
+            return;
+        }
+        {
+            let mut state = self.state.lock().unwrap();
+            let Some(chat) = state.chats.iter_mut().find(|c| c.meta.id == chat_id) else { return };
+            if chat.runner_usage.get(runner_id) == Some(&usage) {
+                return;
+            }
+            chat.runner_usage.insert(runner_id.to_string(), usage);
+        }
+        self.emit_usage(chat_id);
+    }
+
+    /// Tells the app the chat's usage as it shows it.
+    fn emit_usage(&self, chat_id: &str) {
+        let this_device = self.this_device_id();
+        let usage = {
+            let state = self.state.lock().unwrap();
+            state.chats.iter().find(|c| c.meta.id == chat_id).and_then(|chat| shown_usage(&state, chat, this_device.as_deref()))
+        };
+        if let Some(usage) = usage {
+            self.emit(Event::ChatUsageChanged { chat_id: chat_id.to_string(), usage });
+        }
     }
 
     /// Replaces the bot's summary of the chat so far, or clears it.
@@ -2253,12 +2292,12 @@ impl App {
 
     /// A chat as a snapshot carries it: its newest messages in the apps' form, and `has_more`
     /// when older ones remain in SQLite for `chats.messages` to page.
-    fn chat_for_app(&self, chat: &Chat) -> Value {
+    fn chat_for_app(&self, state: &State, chat: &Chat, this_device: Option<&str>) -> Value {
         let (messages, has_more) = self.message_page(&chat.meta.id, None, SNAPSHOT_MESSAGES);
         let mut out = serde_json::to_value(ChatSummary {
             meta: chat.meta.clone(),
             unread_count: chat.unread_count,
-            usage: chat.usage.clone(),
+            usage: shown_usage(state, chat, this_device),
         })
         .unwrap_or_default();
         out["messages"] = json!(messages);
@@ -2271,19 +2310,20 @@ impl App {
         // the opposite order when they update unread state.
         let state = self.state.lock().unwrap().clone();
         let identity_id = self.machine_file().map(|m| keys::identity_id(&m.identity_pubkey));
+        let this_device = self.this_device_id();
         json!({
             "version": config::VERSION,
             "has_identity": self.has_identity(),
             "is_identity_device": self.is_identity_device(),
             "identity_id": identity_id,
-            "this_device_id": self.this_device_id(),
+            "this_device_id": this_device.clone(),
             "relay_url": self.relay_url(),
             "relay_connected": self.relay_connected.load(Ordering::Relaxed),
             "relay_update_required": self.relay_update_required.load(Ordering::Relaxed),
             "relay_error": self.relay_problem.lock().unwrap().clone(),
             "devices": self.devices_out(&state),
             "bots": state.bots,
-            "chats": state.chats.iter().map(|chat| self.chat_for_app(chat)).collect::<Vec<_>>(),
+            "chats": state.chats.iter().map(|chat| self.chat_for_app(&state, chat, this_device.as_deref())).collect::<Vec<_>>(),
             "sections": state.sections,
             "routines": self.routines_out(&state),
             "reviews": crate::review_queue::list(self).unwrap_or_default(),
@@ -2339,6 +2379,14 @@ fn read_mark_at(messages: &[Message], unread: u32) -> usize {
 
 /// Drops everything still waiting to upload for these chats and queues their relay groups for
 /// deletion. The sync cycle retries each group until the relay accepts it.
+/// A chat's usage as the apps show it: `Chat::shown_usage` with the context of the Runner its
+/// bot, or a group's owner, runs on.
+fn shown_usage(state: &State, chat: &Chat, this_device: Option<&str>) -> Option<ChatUsage> {
+    let bot_id = chat.meta.owner_bot_id.as_ref().or(chat.meta.bot_ids.first());
+    let runner_id = bot_id.and_then(|id| state.bots.iter().find(|bot| &bot.id == id)).map(|bot| bot.runner_id.as_str());
+    chat.shown_usage(runner_id, this_device)
+}
+
 fn queue_chat_deletes(state: &mut State, chat_ids: &[String]) {
     for chat_id in chat_ids {
         let group = crate::model::relay_name(chat_id);
@@ -2437,6 +2485,7 @@ mod tests {
             unread_count: 0,
             usage: None,
             compactions: Vec::new(),
+            runner_usage: Default::default(),
         }
     }
 

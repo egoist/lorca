@@ -4085,6 +4085,7 @@ mod tests {
             unread_count: 0,
             usage: None,
             compactions: Vec::new(),
+            runner_usage: Default::default(),
         }
     }
 
@@ -5395,6 +5396,62 @@ mod tests {
             message: AgentMessage::Assistant(AssistantMessage::empty("deepseek", "model")),
             assistant_message_event: AssistantEvent::ThinkingStart { index: 0 },
         }
+    }
+
+    #[test]
+    fn a_chats_usage_goes_up_from_its_runner_and_shows_on_other_devices() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        crate::identity::create(app, Some("Runner".into())).unwrap();
+        let runner_id = app.this_device_id().unwrap();
+        let mut chef = bot("b1", "Chef");
+        chef.runner_id = runner_id.clone();
+        {
+            let mut state = app.state.lock().unwrap();
+            state.bots.push(chef.clone());
+            state.chats.push(chat("chat", "dm", None, &["b1"]));
+        }
+        let usage = lorca_agent::Usage { input: 1_000, output: 200, total_tokens: 1_200, ..Default::default() };
+        app.record_usage("chat", "deepseek-chat", &usage, 128_000);
+        app.record_usage("chat", "deepseek-chat", &usage, 128_000);
+
+        // The Runner's latest report stands in one slot of the chat's group.
+        let dek = app.dek().unwrap();
+        let reports: Vec<_> = app
+            .store
+            .outbox()
+            .unwrap()
+            .into_iter()
+            .filter(|item| item.kind == "chat")
+            .filter_map(|item| match crate::crypto::decrypt_json::<ChatBlob>(&dek, "chat", &item.ciphertext).unwrap() {
+                ChatBlob::Usage { chat_id, runner_id, usage } => Some((chat_id, runner_id, usage, item.slot.unwrap(), item.group)),
+                _ => None,
+            })
+            .collect();
+        let [(chat_id, from, reported, slot, group)] = reports.try_into().unwrap();
+        assert_eq!((chat_id.as_str(), from.as_str(), group.as_deref()), ("chat", runner_id.as_str(), Some("chat")));
+        assert!(!slot.keep_first);
+        assert_eq!((reported.context_tokens, reported.context_window, reported.turns, reported.input_tokens), (1_200, 128_000, 2, 2_000));
+
+        // A Device the bot does not run on shows the Runner's report, and its updates.
+        let other = scratch_app();
+        let phone = &other.0;
+        {
+            let mut state = phone.state.lock().unwrap();
+            state.bots.push(chef);
+            state.chats.push(chat("chat", "dm", None, &["b1"]));
+        }
+        assert!(phone.snapshot()["chats"][0]["usage"].is_null());
+        let mut events = phone.events.subscribe();
+        phone.set_runner_usage("chat", &runner_id, reported.clone());
+        assert_eq!(phone.snapshot()["chats"][0]["usage"]["context_tokens"], 1_200);
+        let Ok(Event::ChatUsageChanged { chat_id, usage }) = events.try_recv() else { panic!("a usage event") };
+        assert_eq!((chat_id.as_str(), usage), ("chat", reported.clone()));
+        let crate::events::Event::RosterChanged { chats, .. } = phone.roster_summary() else { panic!() };
+        assert_eq!(chats[0].usage.as_ref(), Some(&reported));
+        // The same report again changes nothing.
+        phone.set_runner_usage("chat", &runner_id, reported);
+        assert!(events.try_recv().is_err());
     }
 
     #[test]

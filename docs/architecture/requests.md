@@ -1,6 +1,6 @@
 # Requests between Devices
 
-A Device asks a Runner for work on that Runner through the relay: a question goes up as a `kind=request` blob, [signed](relay-trust.md#signed-envelopes) and sealed to one Runner (`crates/cli/src/requests.rs`: `{ id, verb, body }`, asked by its signer), and the Runner answers with a `kind=response` it signs and seals to the Device that asked (`{ request_id, body, error? }`). Each side deletes the blob it consumed. The asker gives up after 20 s, or 75 s for the start of a plugin sign-in, whose discovery and registration the Runner cuts off at 45 s, or 150 s for `mcp.reconnect`, which answers once a server has connected or failed. A request is refused up front when the Runner is unknown or offline.
+A Device asks a Runner for work on that Runner through the relay: a question goes up as a `kind=request` blob, [signed](relay-trust.md#signed-envelopes) and sealed to one Runner (`crates/cli/src/requests.rs`: `{ id, verb, body }`, asked by its signer), and the Runner answers with a `kind=response` it signs and seals to the Device that asked (`{ request_id, body, error? }`). Each side deletes the blob it consumed. The asker gives up after 20 s, or 75 s for the start of a plugin sign-in, whose discovery and registration the Runner cuts off at 45 s, or 150 s for `mcp.reconnect`, which answers once a server has connected or failed, or 300 s for `chats.compact`, which waits for a turn in the chat to end and for the memory flush. A request is refused up front when the Runner is unknown or offline.
 
 ## Verbs
 
@@ -14,6 +14,7 @@ A Device asks a Runner for work on that Runner through the relay: a question goe
 - `coding.transcript`, `coding.send`, and `coding.stop`, so a coding agent is read, written to, and stopped from any Device; `coding.agents` and `.set`, so a Runner's coding agents are ordered from any Device.
 - `secrets.list`, `secrets.set`, and `secrets.delete`, so a Runner's secrets are listed without their values, replaced, or deleted from any Device.
 - `chats.send_now`, so a message the bot's turn holds is read at once from any Device.
+- `chats.compact`, so a chat is compacted for a bot on its Runner from any Device ([Compaction and usage](compaction.md)).
 - The `events.*` methods but `events.forward`, so a Runner's event subscriptions are managed from any Device.
 - `service.status`, so the Devices pane shows whether `lorca service` runs on a Runner.
 - `update.install` and `update.auto`, so a self-updating Runner's CLI installs its latest release, or turns its automatic updates on or off, from any Device ([Updates and the service](runtime.md#updates-and-the-service)).

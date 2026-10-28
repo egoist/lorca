@@ -136,3 +136,36 @@ func TestInspectorBotOpensSettings(t *testing.T) {
 		t.Fatal("Done did not close the settings")
 	}
 }
+
+// Compact runs on the bot's Runner, which may be another machine: the Context row says it is at
+// work until the Runner answers, and why it failed when it did.
+func TestInspectorCompactShowsProgressAndFailure(t *testing.T) {
+	m := demoWindow(t)
+	chat, bot := store.Chat("chat-nova"), store.Bot("bot-nova")
+	usage := ui.NewTester(func(c *ui.Context) {
+		applyTheme(c)
+		m.inspectorUsage(c, bot, chat)
+	}, 360, 300)
+	settle(usage)
+	summary := chat.Usage.ContextSummary()
+	if !usage.HasText(summary) || !usage.HasText(L("Compact")) {
+		t.Fatalf("no Context row in %q", usage.Texts())
+	}
+	m.inspector.compacting = map[string]bool{chat.ID: true}
+	settle(usage)
+	if !usage.HasText(L("Compacting…")) || slices.Contains(usage.Texts(), L("Compact")) {
+		t.Fatalf("no progress in %q", usage.Texts())
+	}
+	m.inspector.compacting = map[string]bool{}
+	m.inspector.compactErrors = map[string]string{chat.ID: "Studio Mac is offline."}
+	settle(usage)
+	if !usage.HasText("Studio Mac is offline.") || !usage.HasText(L("Compact")) {
+		t.Fatalf("no failure in %q", usage.Texts())
+	}
+	// The mock Runner answers at once; the failure goes and the context shows again.
+	click(t, usage, L("Compact"))
+	settle(usage)
+	if !usage.HasText(summary) || m.inspector.compacting[chat.ID] || m.inspector.compactErrors[chat.ID] != "" {
+		t.Fatalf("after Compact %q", usage.Texts())
+	}
+}

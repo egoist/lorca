@@ -109,7 +109,8 @@ One doc per subject under `docs/architecture/`, each short enough to read in one
 | [Shared project context](docs/architecture/project-context.md) | Group briefs, goals, constraints, decisions, source freshness and corrections, encrypted reference assets, bounded bot discovery |
 | [Playbooks](docs/architecture/playbooks.md) | Skills users write for a bot or group, saving one from a chat, revisions, discovery, export |
 | [Workflow feedback](docs/architecture/feedback.md) | Feedback on bots' work, suggested changes to routines and skills, versions and undo, exclusions |
-| [Providers](docs/architecture/providers.md) | Each model provider and its sign-in, custom providers, thinking levels, the model catalog and cost, compaction, retries |
+| [Providers](docs/architecture/providers.md) | Each model provider and its sign-in, custom providers, thinking levels, the model catalog and cost, retries |
+| [Compaction and usage](docs/architecture/compaction.md) | Summarizing a long chat, Compact, chat usage on every Device |
 | [Budgets and connector limits](docs/architecture/budgets.md) | Limits on turns, tasks, and routines, stopping and resuming, price labels, shared plugin call limits |
 | [Sidebar sections and alerts](docs/architecture/sidebar.md) | Sections, hidden and muted chats in every app, and the chat a computer shows in front, which no phone is alerted about |
 | [macOS app](docs/architecture/macos-app.md) | The AppKit app: launching the CLI, windows and onboarding, settings, updates, the command palette, sidebar and inspector |

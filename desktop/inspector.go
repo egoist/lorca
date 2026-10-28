@@ -36,6 +36,29 @@ type inspectorState struct {
 	project          projectInspectorState
 	// skillsShowingAll is the bot or group whose Skills section shows every skill.
 	skillsShowingAll model.PlaybookScope
+	// compacting is the chats whose Compact the bot's Runner is still working on, and
+	// compactErrors why the last one failed in each chat.
+	compacting    map[string]bool
+	compactErrors map[string]string
+}
+
+// compact summarizes the chat for its bot on the bot's Runner, here or through the relay; the
+// Context row shows it at work, and why it failed.
+func (s *inspectorState) compact(chatID string) {
+	if s.compacting == nil {
+		s.compacting, s.compactErrors = map[string]bool{}, map[string]string{}
+	}
+	if s.compacting[chatID] {
+		return
+	}
+	s.compacting[chatID] = true
+	delete(s.compactErrors, chatID)
+	store.CompactChat(chatID, func(err error) {
+		delete(s.compacting, chatID)
+		if err != nil {
+			s.compactErrors[chatID] = model.ErrorText(err)
+		}
+	})
 }
 
 // refreshMemory asks the CLI for the bot's memory; the section redraws when it answers.
@@ -400,9 +423,14 @@ func (m *mainWindow) inspectorUsage(c *ui.Context, bot *model.Bot, chat *model.C
 	p := colors(c)
 	section(c.Key("usage"), L("Usage"), sectionCaption, nil, func(k *card) {
 		if usage := chat.Usage; usage != nil {
-			label := p.Label
-			if _, result := actionRow(c, k, L("Context"), actionRowOptions{Value: usage.ContextSummary(), Tint: &label, Action: L("Compact")}); result.Action {
-				store.CompactChat(chat.ID)
+			context := actionRowOptions{Value: usage.ContextSummary(), Tint: &p.Label, Action: L("Compact")}
+			if m.inspector.compacting[chat.ID] {
+				context.Value, context.Tint, context.Action = L("Compacting…"), &p.Label2, ""
+			} else if text := m.inspector.compactErrors[chat.ID]; text != "" {
+				context.Value, context.Tint, context.Tooltip = text, &p.Orange, text
+			}
+			if _, result := actionRow(c, k, L("Context"), context); result.Action {
+				m.inspector.compact(chat.ID)
 			}
 			if note := usage.SpendNote(); note != "" {
 				keyValueRow(c, k, L("Spent"), usage.SpendSummary(), false, nil).Tooltip(note)

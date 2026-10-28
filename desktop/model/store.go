@@ -1344,9 +1344,10 @@ func (s *Store) SetBotRuntime(id string, provider ProviderKind, model, thinking 
 	s.perform("bots.update", map[string]any{"id": id, "provider": provider, "model": model, "thinking": thinking})
 }
 
-// CompactChat summarizes the chat's older part for its bot now, on the Runner.
-func (s *Store) CompactChat(id string) {
-	s.perform("chats.compact", map[string]any{"chat_id": id})
+// CompactChat summarizes the chat's older part for its bot now, on the bot's Runner, and answers
+// once it has or why it could not.
+func (s *Store) CompactChat(id string, done func(error)) {
+	s.simple(done, "chats.compact", map[string]any{"chat_id": id})
 }
 
 // MARK: - Plugins
