@@ -234,30 +234,6 @@ jobs:
       - uses: gradle/actions/setup-gradle@v6
         with:
           cache-read-only: ${{ github.ref_type == 'tag' }}
-      # The C++ of React Native's libraries and the app, built by CMake for each ABI, goes through
-      # ccache: CMake takes the launcher from these variables. The generated project sits at the
-      # same path on every runner, so the hashes match from one release to the next. Most of the
-      # libraries compile with a precompiled header, which ccache takes only with the pch_defines
-      # and time_macros sloppiness; prebuild writes the project anew, so include files' times say
-      # nothing; and the debug info's working directory, a hashed build folder, stays out of the hash.
-      - name: Set up ccache
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends ccache
-          {
-            echo "CCACHE_DIR=$HOME/.cache/ccache"
-            echo "CCACHE_MAXSIZE=2G"
-            echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
-            echo "CCACHE_SLOPPINESS=pch_defines,time_macros,include_file_mtime,include_file_ctime"
-            echo "CCACHE_NOHASHDIR=true"
-            echo "CMAKE_C_COMPILER_LAUNCHER=ccache"
-            echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache"
-          } >> "$GITHUB_ENV"
-      - uses: actions/cache/restore@v6
-        with:
-          path: ~/.cache/ccache
-          key: ccache-android-${{ hashFiles('mobile/bun.lock') }}-${{ github.run_id }}
-          restore-keys: ccache-android-
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
         working-directory: mobile
@@ -274,14 +250,7 @@ jobs:
           export ANDROID_KEYSTORE=$RUNNER_TEMP/release.keystore
           base64 --decode <<<"$KEYSTORE" > "$ANDROID_KEYSTORE"
           trap 'rm -f "$ANDROID_KEYSTORE"' EXIT
-          ccache --zero-stats
           bun run release-android
-          ccache --show-stats --verbose
-      - uses: actions/cache/save@v6
-        if: github.ref_type != 'tag'
-        with:
-          path: ~/.cache/ccache
-          key: ccache-android-${{ hashFiles('mobile/bun.lock') }}-${{ github.run_id }}
       - name: Draft ${{ needs.version.outputs.tag }}
         if: needs.version.outputs.upload == 'true'
         env:

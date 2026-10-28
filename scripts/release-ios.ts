@@ -119,24 +119,34 @@ for (const name of KEEP) {
 // pod install fetches React Native's prebuilt core, its dependencies, and Hermes from Maven Central
 // with a curl that has no timeout, and a runner's download has stalled there for an hour. It takes
 // them from React Native's shared cache when they are there and match Maven's SHA-1, so they go
-// there first, by a curl that gives up on a stalled connection and tries again.
-const MAVEN = "https://repo1.maven.org/maven2/com/facebook"
+// there first, by a curl that gives up on a stalled connection and tries again, then from Google's
+// mirror of Maven Central: one tarball stalled on every try from the runners' Maven Central edge.
+const MIRRORS = ["https://repo1.maven.org/maven2", "https://maven-central.storage-download.googleapis.com/maven2"]
 const SHARED_CACHE = join(homedir(), "Library", "Caches", "ReactNative")
 const rn: string = (await Bun.file(join(PROJECT, "node_modules", "react-native", "package.json")).json()).version
 const hermes: string = (await Bun.file(join(PROJECT, "node_modules", "hermes-compiler", "package.json")).json()).version
 await mkdir(SHARED_CACHE, { recursive: true })
 for (const configuration of ["debug", "release"]) {
-  const artifacts = `${MAVEN}/react/react-native-artifacts/${rn}/react-native-artifacts-${rn}`
+  const artifacts = `com/facebook/react/react-native-artifacts/${rn}/react-native-artifacts-${rn}`
   const tarballs = {
     [`reactnative-core-${rn}-${configuration}.tar.gz`]: `${artifacts}-reactnative-core-${configuration}.tar.gz`,
     [`reactnative-dependencies-${rn}-${configuration}.tar.gz`]: `${artifacts}-reactnative-dependencies-${configuration}.tar.gz`,
-    [`hermes-ios-${hermes}-${configuration}.tar.gz`]: `${MAVEN}/hermes/hermes-ios/${hermes}/hermes-ios-${hermes}-hermes-ios-${configuration}.tar.gz`,
+    [`hermes-ios-${hermes}-${configuration}.tar.gz`]: `com/facebook/hermes/hermes-ios/${hermes}/hermes-ios-${hermes}-hermes-ios-${configuration}.tar.gz`,
   }
-  for (const [name, url] of Object.entries(tarballs)) {
+  for (const [name, artifact] of Object.entries(tarballs)) {
     const path = join(SHARED_CACHE, name)
     if (existsSync(path)) continue
     log(`${color.bold("downloading")} ${color.dim(name)}`)
-    await $`curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 --speed-limit 100000 --speed-time 30 -o ${`${path}.download`} ${url}`
+    let fetched = false
+    for (const mirror of MIRRORS) {
+      const curl = await $`curl -fsSL --retry 2 --retry-all-errors --connect-timeout 20 --speed-limit 100000 --speed-time 30 -o ${`${path}.download`} ${`${mirror}/${artifact}`}`.nothrow()
+      if (curl.exitCode === 0) {
+        fetched = true
+        break
+      }
+      log(color.yellow(`${mirror} failed to send ${name}`))
+    }
+    if (!fetched) die(`could not download ${name}`)
     await rename(`${path}.download`, path)
   }
 }

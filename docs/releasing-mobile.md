@@ -187,12 +187,12 @@ gh workflow run release-mobile.yml -f upload=false
 - **Xcode's compilation cache** (`~/Library/Developer/Xcode/DerivedData/CompilationCache.noindex`),
   keyed by the Xcode build and `mobile/bun.lock`. It answers the C, C++, and Objective-C compiles
   of the pods; Swift compiles in full on every archive.
-- **React Native's prebuilt core** (`~/Library/Caches/ReactNative`), which pod install would
-  download from Maven Central.
+- **React Native's prebuilt core** (`~/Library/Caches/ReactNative`): its core, dependencies, and
+  Hermes. `release-ios` fills the folder before pod install, from Maven Central or else Google's
+  mirror of it, with a curl that gives up on a stalled connection; pod install's own download has
+  none, and one stalled for an hour on a runner.
 - **Gradle**: its dependencies and build cache (`gradle/actions/setup-gradle`, with
   `org.gradle.caching` on in the release build).
-- **ccache** for the C++ CMake builds of React Native's libraries and the app, for each ABI. The
-  Android job prints its hit rate after the build.
 
 A release's own run saves none of these: no later tag could read them, and they would push
 `main`'s out of the repository's 10 GB.
