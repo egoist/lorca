@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -118,7 +119,7 @@ func TestCharacterFiles(t *testing.T) {
 			continue
 		}
 		got, err := os.ReadFile(path)
-		if err != nil || !bytes.Equal(got, want) {
+		if err != nil || !closeEnough(path, got, want) {
 			t.Errorf("%s is not what characters.go makes; run LORCA_WRITE_CHARACTERS=1 go test -run TestCharacterFiles .", path)
 		}
 	}
@@ -127,6 +128,42 @@ func TestCharacterFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+}
+
+// closeEnough is whether a checked-in file is what characters.go makes, but for the last digit:
+// arm64 fuses multiply-adds that amd64 rounds apart, so a mask's edge pixel or a path's last
+// decimal can differ by a step between the computer that wrote the file and the one checking it.
+func closeEnough(path string, got, want []byte) bool {
+	if strings.HasSuffix(path, ".png") {
+		a, errA := png.Decode(bytes.NewReader(got))
+		b, errB := png.Decode(bytes.NewReader(want))
+		if errA != nil || errB != nil || a.Bounds() != b.Bounds() {
+			return false
+		}
+		for y := a.Bounds().Min.Y; y < a.Bounds().Max.Y; y++ {
+			for x := a.Bounds().Min.X; x < a.Bounds().Max.X; x++ {
+				_, _, _, alphaA := a.At(x, y).RGBA()
+				_, _, _, alphaB := b.At(x, y).RGBA()
+				if math.Abs(float64(alphaA)-float64(alphaB)) > 4*257 {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	numbers := regexp.MustCompile(`-?\d+(\.\d+)?`)
+	if numbers.ReplaceAllString(string(got), "0") != numbers.ReplaceAllString(string(want), "0") {
+		return false
+	}
+	a, b := numbers.FindAllString(string(got), -1), numbers.FindAllString(string(want), -1)
+	for i := range a {
+		x, _ := strconv.ParseFloat(a[i], 64)
+		y, _ := strconv.ParseFloat(b[i], 64)
+		if math.Abs(x-y) > 0.11 {
+			return false
+		}
+	}
+	return true
 }
 
 const generatedHeader = "// Made by desktop/characters_test.go from desktop/characters.go; rewrite it with\n" +
