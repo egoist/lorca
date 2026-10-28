@@ -35,6 +35,16 @@ lorca provider set chatgpt
 lorca provider list
 ```
 
+### 把服务商只留在一台设备上
+
+服务商默认同步到你的所有设备。如果想只留在一台电脑上，接入时关掉 **同步到你的其他设备**，或者之后在它的面板里关掉。这样它的密钥或登录只留在那台电脑上，其他设备会删掉已有的副本，也只有那台电脑上的智能体能用它。其他设备仍会列出它，标明保留在那台电脑上，所以在那台电脑上新建的智能体可以选它。
+
+```bash
+lorca provider set deepseek --keep
+lorca provider sync deepseek --off
+lorca provider sync deepseek
+```
+
 ### 自定义 API 地址
 
 如果要用代理或兼容的服务器，在接入任何 API 密钥类服务商时填写 **Base URL**。密钥会针对那个地址验证。
@@ -84,7 +94,7 @@ lorca provider add "TypeSafe" https://api.typesafe.ai/v1/systemone --api system-
 
 ## 断开
 
-**断开** 会从每一台设备上移除这份凭据。对 Grok 来说，还会撤销登录。**删除** 会从每一台设备上移除一个自定义服务商；在终端里用 `lorca provider remove` 加上 `lorca provider list` 显示的标识（例如 `custom:openrouter`）也一样。
+**断开** 会从每一台设备上移除这份凭据。只保留在一台电脑上的服务商只会从那台电脑上移除。对 Grok 来说，还会撤销登录。**删除** 会从每一台设备上移除一个自定义服务商；在终端里用 `lorca provider remove` 加上 `lorca provider list` 显示的标识（例如 `custom:openrouter`）也一样。
 
 ## 花费
 
