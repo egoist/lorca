@@ -3,7 +3,6 @@ package main
 import (
 	"math"
 	"slices"
-	"time"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -254,93 +253,65 @@ func teardrop() [][2]float64 {
 
 // MARK: - Drawing
 
-// MARK: - Motion
-
-// Motion after Grok Bot's clips. At rest a character blinks twice a loop (Grok Bot's Idle_B shuts
-// its eyes at 1.48 s and 3.46 s, a 0.26 s blink); a working one also rocks from side to side, as
-// Working_C rolls about ±35° every 1.6 s, toned down for avatars this small. A bot's id shifts its
-// rocking, and its blinks to one of three places in the loop, so a group never moves as one and a
-// window full of bots repaints at most three short times a loop while they rest.
-
+// The head the body is drawn as: what a turn does to the outline and to the eyes.
 const (
-	idleLoop    = 6.0
-	blinkLength = 0.26
-	rockPeriod  = 1.63
-	rockDegrees = 14
-	// rockSway is how far the body slides with the rock, in the box.
-	rockSway = 0.04
+	// headDepth is how far the eyes stand out of the body's plane: the body is a puffy disc, not a
+	// ball, so a turn slides them across the face without carrying them past its edge.
+	headDepth = 0.6
 )
 
-var idleBlinks = [2]float64{1.48, 3.46}
-
-// pose is how a character stands at a moment: turned `roll` degrees clockwise around its middle,
-// slid `sway` to the right, its eyes `lids` shut (0 open, 1 shut).
-type pose struct {
-	roll, sway, lids float64
-}
-
-// motionSeed is the number a key (a bot's id) shifts its character's timing by.
-func motionSeed(key string) uint32 {
-	hash := uint32(2166136261)
-	for i := 0; i < len(key); i++ {
-		hash ^= uint32(key[i])
-		hash *= 16777619
+// animate is the pose to draw now: a working character's, asking the window for the next frame,
+// or the still one at rest and when the desktop asks for less motion.
+func animate(painter *ui.Painter, moving bool, key string, seed uint32) pose {
+	if !moving {
+		return restPose
 	}
-	return hash
-}
-
-// poseAt is the character's pose `seconds` into the clock, and how many seconds it holds still
-// from there: 0 while it moves.
-func poseAt(seconds float64, seed uint32, working bool) (pose, float64) {
-	var at pose
-	t := math.Mod(seconds+float64(seed%3)*idleLoop/3, idleLoop)
-	still := math.Inf(1)
-	for _, blink := range idleBlinks {
-		switch since := t - blink; {
-		case since >= 0 && since < blinkLength:
-			at.lids, still = math.Sin(math.Pi*since/blinkLength), 0
-		case since < 0:
-			still = min(still, -since)
-		default:
-			still = min(still, idleLoop-since)
-		}
-	}
-	if working {
-		phase := 2 * math.Pi * (seconds + float64(seed%1000)/1000*rockPeriod) / rockPeriod
-		at.roll, at.sway, still = rockDegrees*math.Sin(phase), rockSway*math.Sin(phase), 0
-	}
-	return at, still
-}
-
-// animate is the pose to draw now, asking the window for the next frame it changes on; a desktop
-// that asks for less motion keeps every character still.
-func animate(painter *ui.Painter, still bool, seed uint32, working bool) pose {
-	if still {
-		return pose{}
-	}
+	painter.AnimationFrame()
 	now := painter.Now()
-	at, hold := poseAt(float64(now.UnixNano())/1e9, seed, working)
-	if hold == 0 {
-		painter.AnimationFrame()
-	} else {
-		painter.After(time.Duration(hold * float64(time.Second)))
-	}
-	return at
+	return workingPose(now.Sub(workStart(key, now)).Seconds(), seed)
 }
 
-// place maps a point of the box into `r` for a character standing in `at`.
-func place(r ui.Rect, at pose, p [2]float64) (float32, float32) {
+// bodyPoint maps a point of the box into `r` for the body in `at`: squeezed as a puffy disc is
+// seen turned and tipped, scaled, leaned, and moved.
+func bodyPoint(r ui.Rect, at pose, p [2]float64) (float32, float32) {
+	yaw, pitch := at.yaw*math.Pi/180, at.pitch*math.Pi/180
+	x := p[0] * at.scale * (0.8 + 0.2*math.Abs(math.Cos(yaw)))
+	y := p[1] * at.scale * (0.6 + 0.4*math.Abs(math.Cos(pitch)))
+	return lean(r, at, x, y)
+}
+
+// lean turns a point by the pose's roll, moves it, and maps it into `r`.
+func lean(r ui.Rect, at pose, x, y float64) (float32, float32) {
 	sin, cos := math.Sincos(at.roll * math.Pi / 180)
-	x, y := p[0]*cos-p[1]*sin+at.sway, p[0]*sin+p[1]*cos
+	x, y = x*cos-y*sin+at.x, x*sin+y*cos+at.y
 	half := float64(r.W) / 2
 	return r.X + float32((1+x)*half), r.Y + float32(float64(r.H)/2+y*half)
+}
+
+// eyeAt is where an eye's middle shows for a character in `at`, and how much of it faces the
+// viewer: 1 straight on, 0 when it has turned away.
+func eyeAt(made *character, at pose, i int) (x, y, facing float64) {
+	eyes := made.eyes
+	mid := func(e [2][2]float64) (float64, float64) { return (e[0][0] + e[1][0]) / 2, (e[0][1] + e[1][1]) / 2 }
+	hx, hy := mid(eyes[i])
+	ax, ay := mid(eyes[0])
+	bx, by := mid(eyes[1])
+	// Centered, the pair keeps its spacing about the middle of the face, a little high.
+	cx, cy := hx-(ax+bx)/2, hy-(ay+by)/2-0.1
+	x, y = hx+(cx-hx)*at.face.center, hy+(cy-hy)*at.face.center
+	z := headDepth * math.Sqrt(max(0.25, 1-x*x-y*y))
+	yaw, pitch := at.yaw*math.Pi/180, at.pitch*math.Pi/180
+	x, z = x*math.Cos(yaw)+z*math.Sin(yaw), -x*math.Sin(yaw)+z*math.Cos(yaw)
+	y, z = y*math.Cos(pitch)-z*math.Sin(pitch), y*math.Sin(pitch)+z*math.Cos(pitch)
+	// Past about 70° off straight on, the eye has gone round the edge.
+	return x * at.scale, y * at.scale, math.Min(1, math.Max(0, (z/headDepth-0.35)/0.4))
 }
 
 // characterPath is the body's outline in `r`.
 func characterPath(c *character, r ui.Rect, at pose) *ui.Path {
 	var path ui.Path
 	for i, p := range c.outline {
-		x, y := place(r, at, p)
+		x, y := bodyPoint(r, at, p)
 		if i == 0 {
 			path.MoveTo(x, y)
 		} else {
@@ -364,26 +335,30 @@ func drawCharacter(painter *ui.Painter, r ui.Rect, shape string, body ui.Color, 
 		painter.StrokePath(path, ring*2, backdrop)
 	}
 	painter.FillPath(path, body)
-	// A blink draws each eye in to its middle, down to a dot.
-	open := 1 - at.lids
-	width := eyeWidth * float64(r.W) / 2 * (1 - 0.3*at.lids)
-	for _, eye := range made.eyes {
-		mx, my := (eye[0][0]+eye[1][0])/2, (eye[0][1]+eye[1][1])/2
+	// A blink draws each eye in to its middle, down to a dot; one turned away shrinks out of sight.
+	half := float64(r.W) / 2
+	for i := range made.eyes {
+		x, y, facing := eyeAt(made, at, i)
+		if facing <= 0 {
+			continue
+		}
+		size := facing * at.scale
+		reach := (at.face.length - at.face.width) / 2 * (1 - at.lids) * size
+		width := at.face.width * (1 - 0.3*at.lids) * size
+		sin, cos := math.Sincos(at.face.tilt * math.Pi / 180)
+		dx, dy := reach*sin, reach*cos
 		var line ui.Path
-		line.MoveTo(place(r, at, [2]float64{mx + (eye[0][0]-mx)*open, my + (eye[0][1]-my)*open}))
-		line.LineTo(place(r, at, [2]float64{mx + (eye[1][0]-mx)*open, my + (eye[1][1]-my)*open}))
-		painter.StrokePath(&line, float32(width), ui.RGB(255, 255, 255))
+		line.MoveTo(lean(r, at, x-dx, y-dy))
+		line.LineTo(lean(r, at, x+dx, y+dy))
+		painter.StrokePath(&line, float32(width*half), ui.RGB(255, 255, 255))
 	}
 }
 
-// characterView is a box `size` across that draws the character, blinking now and then; `key`
-// shifts when.
-func characterView(c *ui.Context, shape, key string, body ui.Color, size float32) ui.Element {
-	still := c.Preferences().ReduceMotion
-	seed := motionSeed(key)
+// characterView is a box `size` across that draws the character at rest.
+func characterView(c *ui.Context, shape string, body ui.Color, size float32) ui.Element {
 	box := ui.Box(c).Size(size, size)
 	box.Draw(func(painter *ui.Painter, r ui.Rect) {
-		drawCharacter(painter, r, shape, body, 0, body, animate(painter, still, seed, false))
+		drawCharacter(painter, r, shape, body, 0, body, restPose)
 	})
 	return box
 }

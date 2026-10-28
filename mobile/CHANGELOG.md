@@ -7,8 +7,8 @@ when it offers the update.
 ## [Unreleased]
 
 - Bots are little characters now, as in Grok Bot: one of twelve shapes in the bot's color, with two
-  eyes. They blink now and then and rock while they work. Look and New Bot offer the shapes where
-  they offered symbols; a bot you haven't given one gets its own.
+  eyes. While a bot works, its character looks around, sways, spins, and flips. Look and New Bot
+  offer the shapes where they offered symbols; a bot you haven't given one gets its own.
 
 ## [1.0.10]
 

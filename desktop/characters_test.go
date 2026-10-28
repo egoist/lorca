@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -102,6 +103,7 @@ func inside(polygon [][2]float64, x, y float64) bool {
 func TestCharacterFiles(t *testing.T) {
 	files := map[string][]byte{
 		"../mobile/src/ui/characters.ts":           phoneTable(),
+		"../mobile/src/ui/shapeMasks.ts":           phoneMasks(),
 		"../web/src/components/site/characters.ts": webTable(),
 	}
 	for _, shape := range botShapes {
@@ -199,15 +201,74 @@ func shapeList(b *strings.Builder) {
 func phoneTable() []byte {
 	var b strings.Builder
 	b.WriteString(generatedHeader)
-	b.WriteString("// Bot characters' bodies as white masks to tint, and where their eyes sit.\n\n")
+	b.WriteString("// Bot characters: where their eyes sit and how they move while they work. The bodies' masks\n// are in shapeMasks.ts.\n\n")
 	shapeList(&b)
+	eyeTable(&b, "BotShape")
+	motionTable(&b)
+	return []byte(b.String())
+}
+
+// phoneMasks is the bodies' white masks for the phone to tint.
+func phoneMasks() []byte {
+	var b strings.Builder
+	b.WriteString(generatedHeader)
+	b.WriteString("// Bot characters' bodies as white masks to tint.\n\nimport type { BotShape } from \"./characters\";\n\n")
 	b.WriteString("export const SHAPE_MASKS: Record<BotShape, number> = {\n")
 	for _, shape := range botShapes {
 		fmt.Fprintf(&b, "  %s: require(\"../../assets/shapes/%s.png\"),\n", shape, shape)
 	}
-	b.WriteString("};\n\n")
-	eyeTable(&b, "BotShape")
+	b.WriteString("};\n")
 	return []byte(b.String())
+}
+
+// motionTable is the working characters' clips (motion.go), and poses the desktop app draws at a
+// few moments, for the phone's test of its own copy of the math.
+func motionTable(b *strings.Builder) {
+	b.WriteString("\n/// A working character's motion (desktop/motion.go): expressions are the eyes' length, width,\n")
+	b.WriteString("/// tilt, and how far they move to the middle of the face; a clip's turn keys are yaw, pitch,\n/// and roll, its move keys x, y, and scale.\n")
+	fmt.Fprintf(b, "export const HEAD_DEPTH = %s;\nexport const FACE_MORPH = %s;\nexport const BLINK_LENGTH = %s;\n\n", number(headDepth), number(faceMorph), number(blinkLength))
+	b.WriteString("export const EXPRESSIONS: Record<string, [number, number, number, number]> = {\n")
+	names := make([]string, 0, len(expressions))
+	for name := range expressions {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		e := expressions[name]
+		fmt.Fprintf(b, "  %s: [%s, %s, %s, %s],\n", name, number(e.length), number(e.width), number(e.tilt), number(e.center))
+	}
+	b.WriteString("};\n\n")
+	keys := func(list []key) string {
+		var parts []string
+		for _, k := range list {
+			parts = append(parts, fmt.Sprintf("[%s, %s, %s, %s]", number(k.t), number(k.v[0]), number(k.v[1]), number(k.v[2])))
+		}
+		return "[" + strings.Join(parts, ", ") + "]"
+	}
+	b.WriteString("export type Clip = { name: string; duration: number; turn: number[][]; move: number[][]; face: [number, string][]; blinks: number[] };\n\n")
+	b.WriteString("export const CLIPS: Clip[] = [\n")
+	for _, c := range clips {
+		var face []string
+		for _, k := range c.face {
+			face = append(face, fmt.Sprintf("[%s, %q]", number(k.t), k.name))
+		}
+		var blinks []string
+		for _, t := range c.blinks {
+			blinks = append(blinks, number(t))
+		}
+		fmt.Fprintf(b, "  {\n    name: %q,\n    duration: %s,\n    turn: %s,\n    move: %s,\n    face: [%s],\n    blinks: [%s],\n  },\n",
+			c.name, number(c.duration), keys(c.turn), keys(c.move), strings.Join(face, ", "), strings.Join(blinks, ", "))
+	}
+	b.WriteString("];\n\n")
+	b.WriteString("/// Poses the desktop app draws for bot-sample: [seconds working, yaw, pitch, roll, x, y, scale, lids, eye length, eye width, eye tilt, eye center].\n")
+	b.WriteString("export const MOTION_SAMPLES: number[][] = [\n")
+	seed := motionSeed("bot-sample")
+	for _, t := range []float64{0.5, 1.3, 2.75, 3.6, 7.1, 9.4, 12.2, 15.8, 19.05, 23.3, 31} {
+		at := workingPose(t, seed)
+		fmt.Fprintf(b, "  [%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s],\n", number(t), number(at.yaw), number(at.pitch), number(at.roll), number(at.x), number(at.y), number(at.scale), number(at.lids),
+			number(at.face.length), number(at.face.width), number(at.face.tilt), number(at.face.center))
+	}
+	b.WriteString("];\n")
 }
 
 func webTable() []byte {
@@ -332,26 +393,43 @@ func paint(canvas *image.NRGBA, coverage *image.Alpha, ink color.NRGBA) {
 	}
 }
 
-func TestCharactersBlinkAtRestAndRockWhileWorking(t *testing.T) {
-	// Seed 0 starts the loop on the clock: still until the first blink, eyes shut halfway through it.
-	at, hold := poseAt(0, 0, false)
-	if at != (pose{}) || math.Abs(hold-idleBlinks[0]) > 1e-9 {
-		t.Fatalf("at rest %+v, still for %.2f s", at, hold)
+func TestEveryClipStartsAndEndsAtRest(t *testing.T) {
+	still := func(at pose) bool {
+		return math.Abs(math.Remainder(at.yaw, 360)) < 1e-9 && math.Abs(math.Remainder(at.pitch, 360)) < 1e-9 &&
+			math.Abs(at.roll) < 1e-9 && at.x == 0 && at.y == 0 && at.scale == 1 && at.lids == 0
 	}
-	at, hold = poseAt(idleBlinks[0]+blinkLength/2, 0, false)
-	if hold != 0 || at.lids < 0.99 || at.roll != 0 {
-		t.Fatalf("mid-blink %+v, still for %.2f s", at, hold)
-	}
-	// After the second blink it rests until the loop comes round to the first.
-	after := idleBlinks[1] + blinkLength + 0.01
-	if _, hold = poseAt(after, 0, false); math.Abs(hold-(idleLoop-after+idleBlinks[0])) > 1e-9 {
-		t.Fatalf("after the second blink, still for %.2f s", hold)
-	}
-	// Working never holds still, and rocks within its reach.
-	for step := range 40 {
-		at, hold = poseAt(float64(step)*0.1, 7, true)
-		if hold != 0 || math.Abs(at.roll) > rockDegrees || math.Abs(at.sway) > rockSway {
-			t.Fatalf("working at %.1f s: %+v, still for %.2f s", float64(step)*0.1, at, hold)
+	for _, c := range clips {
+		if start := clipPose(c, 0); !still(start) || start.face != expressions["rest"] {
+			t.Errorf("%s starts at %+v", c.name, start)
 		}
+		if end := clipPose(c, c.duration); !still(end) || end.face != expressions["rest"] {
+			t.Errorf("%s ends at %+v", c.name, end)
+		}
+		for _, k := range c.face {
+			if _, ok := expressions[k.name]; !ok {
+				t.Errorf("%s turns to an unknown face %q", c.name, k.name)
+			}
+		}
+	}
+	// A bot plays every clip once a round, in its own order.
+	order := clipOrder(motionSeed("bot-a"))
+	seen := map[int]bool{}
+	for _, i := range order {
+		seen[i] = true
+	}
+	if len(seen) != len(clips) {
+		t.Fatalf("order %v", order)
+	}
+}
+
+func TestATurnedHeadHidesItsEyes(t *testing.T) {
+	made := characters["blob"]
+	if _, _, facing := eyeAt(made, restPose, 0); facing < 0.99 {
+		t.Fatalf("at rest the eye faces %.2f", facing)
+	}
+	back := restPose
+	back.yaw, back.face.center = 180, 1
+	if _, _, facing := eyeAt(made, back, 0); facing != 0 {
+		t.Fatalf("turned around, the eye faces %.2f", facing)
 	}
 }

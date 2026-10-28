@@ -37,7 +37,7 @@ const (
 
 type avatarContent struct {
 	Kind avatarKind
-	// Shape is a bot's body, one of botShapes, and Key what shifts its blinks and rocking: the
+	// Shape is a bot's body, one of botShapes, and Key what shifts its motion while it works: the
 	// bot's id.
 	Shape  string
 	Key    string
@@ -128,12 +128,12 @@ func avatarRinged(c *ui.Context, content avatarContent, size float32, working bo
 	p := colors(c)
 	box := ui.Box(c).Size(size, size)
 	if content.Kind == avatarBot {
-		// A working character rocks, which says it as the dot does; at rest it blinks now and then.
+		// A working character acts out its clips beside the dot (motion.go); at rest it stands still.
 		body := p.accentColor(content.Accent)
-		still := c.Preferences().ReduceMotion
-		seed := motionSeed(content.Key)
+		moving := working && !c.Preferences().ReduceMotion
+		key, seed := content.Key, motionSeed(content.Key)
 		box.Draw(func(painter *ui.Painter, r ui.Rect) {
-			drawCharacter(painter, r, content.Shape, body, ring, backdrop, animate(painter, still, seed, working))
+			drawCharacter(painter, r, content.Shape, body, ring, backdrop, animate(painter, moving, key, seed))
 		})
 		if working {
 			drawPresence(c, box, size, false, backdrop)
