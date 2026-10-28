@@ -952,6 +952,7 @@ mod tests {
                 unread_count: 0,
                 usage: None,
                 compactions: vec![],
+                runner_usage: Default::default(),
             });
         }
         app.save_state_now();
@@ -1198,6 +1199,7 @@ mod tests {
             unread_count: 0,
             usage: None,
             compactions: vec![],
+            runner_usage: Default::default(),
         });
         assert!(prompt(app, "later-group", "bot-a").contains("Sent before the roster"));
         // A group with nothing in it adds nothing to a turn.

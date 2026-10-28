@@ -4,9 +4,9 @@ A bot template holds the parts of a bot the user picked: its profile, skills, me
 
 ## What a file holds
 
-The root is `format: "lorca.bot-template"`, `version: 2`, an optional `profile`, and the arrays `skills`, `memories`, `routines`, and `requirements` (omitted when empty). Nothing else has a field:
+The root is `format: "lorca.bot-template"`, `version: 1`, an optional `profile`, and the arrays `skills`, `memories`, `routines`, and `requirements` (omitted when empty). Nothing else has a field:
 
-- **Profile**: name, description (the bot's instructions), `shape` (omitted for the one the new bot's id picks), and accent. No avatar, provider, model, Runner, or working directory.
+- **Profile**: name, description (the bot's instructions), SF Symbol, and accent. No avatar, provider, model, Runner, or working directory.
 - **Skills**: name, description, instructions, examples, and inline `references/` and `scripts/` texts, as the playbook API's content.
 - **Memories**: lines of the bot's `workspaces/<bot id>/MEMORY.md` and whole `memory/*.md` topic files. Daily logs, attachments, and other workspace files are never offered. Reads are bounded, refuse symbolic links, and ignore a working directory's memory.
 - **Routines**: name, schedule, prompt, the check script, and `timezone` and `missed_run_policy` where the routine API has them. No run history, health, or next run. Only routines that repeat: a one-time routine, a [routine on events, or one around calendar events](routine-triggers.md) belongs to the account it was set up in.

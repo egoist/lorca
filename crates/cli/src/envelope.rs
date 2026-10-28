@@ -404,6 +404,47 @@ mod tests {
         assert!(!marker.exists());
     }
 
+    /// Compact on a Device the bot does not run on goes to the bot's Runner as a request, which
+    /// compacts there and answers.
+    #[cfg(feature = "runner")]
+    #[tokio::test]
+    async fn compact_from_another_device_runs_on_the_bots_runner() {
+        let pair = pair();
+        let runner_id = pair.runner.this_device_id().unwrap();
+        let bot = pair.runner.state.lock().unwrap().bots[0].clone();
+        assert_eq!(bot.runner_id, runner_id);
+        let chat = pair.runner.dm_with(&bot.id, None).unwrap();
+        {
+            let mut state = pair.phone.state.lock().unwrap();
+            state.bots.push(bot);
+            state.chats.push(chat.clone());
+            state.device_online.insert(runner_id.clone());
+        }
+        pair.phone.machine.lock().unwrap().as_mut().unwrap().relay_url = Some("http://127.0.0.1:9".into());
+        let phone = pair.phone.clone();
+        let chat_id = chat.meta.id.clone();
+        let asking = tokio::spawn(async move { crate::api::dispatch(&phone, "chats.compact", json!({ "chat_id": chat_id })).await });
+        let sent = |app: &Arc<App>, kind: &'static str| {
+            let app = app.clone();
+            async move {
+                loop {
+                    if let Some(item) = app.store.outbox().unwrap().into_iter().find(|item| item.kind == kind) {
+                        return item;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+            }
+        };
+        let question = tokio::time::timeout(std::time::Duration::from_secs(5), sent(&pair.phone, "request")).await.unwrap();
+        assert_eq!(question.recipient.as_deref(), Some(runner_id.as_str()));
+        deliver(&pair.runner, "request", &question.ciphertext);
+        let answer = tokio::time::timeout(std::time::Duration::from_secs(5), sent(&pair.runner, "response")).await.unwrap();
+        deliver(&pair.phone, "response", &answer.ciphertext);
+        let answered = tokio::time::timeout(std::time::Duration::from_secs(5), asking).await.unwrap().unwrap();
+        // The Runner went to compact with the bot's provider, which it has not connected.
+        assert_eq!(answered, Err("DeepSeek is not connected".to_string()));
+    }
+
     /// A Device's job carries the Device whose turn it is, for its result and the checks on it;
     /// one signed by another Device does not run.
     #[test]

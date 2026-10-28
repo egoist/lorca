@@ -12,7 +12,7 @@ import (
 type TemplateProfile struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	Shape       string `json:"shape,omitempty"`
+	SymbolName  string `json:"symbol_name"`
 	Accent      string `json:"accent"`
 }
 

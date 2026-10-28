@@ -288,6 +288,7 @@ async fn setup() -> Scratch {
         id: "b1".into(),
         name: "Chef".into(),
         description: String::new(),
+        symbol_name: String::new(),
         shape: String::new(),
         accent: String::new(),
         avatar: None,
@@ -308,6 +309,7 @@ async fn setup() -> Scratch {
             unread_count: 0,
             usage: None,
             compactions: Vec::new(),
+            runner_usage: Default::default(),
         });
     }
     let repo = home.join("work").join("shop");
@@ -1203,6 +1205,7 @@ async fn the_accounts_agents_list_with_their_bot_and_chat_and_a_start_beside_one
                 unread_count: 0,
                 usage: None,
                 compactions: Vec::new(),
+                runner_usage: Default::default(),
             });
         }
     }

@@ -18,6 +18,10 @@ use crate::model::{Request, Response};
 /// seconds; past this the relay is slow or the Runner just went away.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// How long `chats.compact` may take: the Runner waits for a turn in the chat to end, then the
+/// bot saves to memory for up to two minutes before the summary.
+pub const COMPACT_TIMEOUT: Duration = Duration::from_secs(300);
+
 /// Asks `runner_id` to run `verb` and waits for the answer. Refuses up front when the Runner is
 /// unknown, unreachable, or offline, so an editor never spins on a machine that is asleep.
 pub async fn ask(app: &Arc<App>, runner_id: &str, verb: &str, body: Value) -> Result<Value, String> {
@@ -97,9 +101,10 @@ pub fn serve(app: Arc<App>, from: String, request: Request, blob_id: String) {
 /// Runner's own installs, the `mcp.*` verbs on its mcp.json, and the `events.*` verbs on its
 /// event subscriptions; the permission verb answers a card a bot here is waiting on; the bash
 /// verbs type into, stop, or background a command here;
-/// Send now has a turn here read a message it holds. The update verbs install the latest release
-/// of this CLI, or turn its automatic updates on or off. A request names no release and no
-/// download: the Runner installs only what its own signed manifest offers.
+/// Send now has a turn here read a message it holds, and compact summarizes a chat for a bot
+/// here. The update verbs install the latest release of this CLI, or turn its automatic updates
+/// on or off. A request names no release and no download: the Runner installs only what its own
+/// signed manifest offers.
 async fn answer(app: &Arc<App>, from: &str, request: &Request) -> Result<Value, String> {
     let body = &request.body;
     match request.verb.as_str() {
@@ -158,6 +163,12 @@ async fn answer(app: &Arc<App>, from: &str, request: &Request) -> Result<Value, 
             let chat_id = body["chat_id"].as_str().ok_or("missing chat_id")?;
             let message_id = body["message_id"].as_str().ok_or("missing message_id")?;
             crate::turns::send_now(app, chat_id, message_id).map(|sent| json!({ "sent": sent }))
+        }
+        #[cfg(feature = "runner")]
+        "chats.compact" => {
+            let chat_id = body["chat_id"].as_str().ok_or("missing chat_id")?;
+            let tokens_before = crate::turns::compact_now(app, chat_id, body["bot_id"].as_str()).await?;
+            Ok(json!({ "tokens_before": tokens_before }))
         }
         #[cfg(feature = "cli")]
         "update.install" => crate::update::install_now(app).await,

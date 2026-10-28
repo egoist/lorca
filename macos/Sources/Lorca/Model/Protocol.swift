@@ -488,8 +488,7 @@ enum Wire {
         var id: String
         var name: String
         var description: String
-        /// Bots carry a `shape` now, which this app does not draw; it shows its default symbol.
-        var symbolName: String?
+        var symbolName: String
         var accent: String
         var runnerId: String
         var provider: String
@@ -920,7 +919,7 @@ extension Wire.Bot {
             id: id,
             name: name,
             description: description,
-            symbolName: symbolName ?? "sparkles",
+            symbolName: symbolName,
             accent: Accent(rawValue: accent) ?? .indigo,
             runnerID: runnerId,
             provider: ProviderCredential.Kind(wireValue: provider) ?? .deepseek,

@@ -1203,7 +1203,7 @@ fn apply_roster(app: &Arc<App>, mut roster: RosterBlob) {
         for meta in roster.chats {
             match state.chats.iter_mut().find(|c| c.meta.id == meta.id) {
                 Some(chat) => chat.meta = meta,
-                None => state.chats.push(Chat { meta, unread_count: 0, usage: None, compactions: Vec::new() }),
+                None => state.chats.push(Chat { meta, unread_count: 0, usage: None, compactions: Vec::new(), runner_usage: Default::default() }),
             }
         }
     }
@@ -1299,6 +1299,7 @@ fn apply_chat_op(app: &Arc<App>, op: ChatBlob) {
                         unread_count: 0,
                         usage: None,
                         compactions: Vec::new(),
+                        runner_usage: Default::default(),
                     });
                 }
             }
@@ -1311,6 +1312,7 @@ fn apply_chat_op(app: &Arc<App>, op: ChatBlob) {
         }
         ChatBlob::Remove { chat_id, message_id } => app.remove_message(&chat_id, &message_id, false),
         ChatBlob::ClearUnread { chat_id } => app.mark_read(&chat_id, false),
+        ChatBlob::Usage { chat_id, runner_id, usage } => app.set_runner_usage(&chat_id, &runner_id, usage),
     }
 }
 

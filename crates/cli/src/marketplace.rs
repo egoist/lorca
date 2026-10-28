@@ -70,6 +70,9 @@ pub struct BotTemplate {
     pub summary: String,
     /// What the bot does and how it should work: the new bot's description.
     pub description: String,
+    /// The SF Symbol apps from before characters draw.
+    #[serde(default = "default_symbol")]
+    pub symbol_name: String,
     /// One of `BOT_SHAPES`; empty picks one from the new bot's id.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub shape: String,
@@ -99,6 +102,10 @@ pub struct RoutineTemplate {
     /// A repeating schedule `crate::schedule::parse_repeating` reads: `every 2h`, `0 9 * * 1-5`.
     pub schedule: String,
     pub prompt: String,
+}
+
+fn default_symbol() -> String {
+    "sparkles".into()
 }
 
 fn default_accent() -> String {
@@ -480,7 +487,7 @@ mod tests {
         assert_eq!(index.plugins.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["A"], "a second a and a server this build cannot run are left out");
         assert_eq!(index.bots.iter().map(|b| b.id.as_str()).collect::<Vec<_>>(), ["b", "d"], "a bad id and a bad schedule are left out");
         assert!(index.bot("b").unwrap().featured);
-        assert_eq!(index.bot("d").unwrap().shape, "", "a template without a shape takes the one the bot's id picks");
+        assert_eq!(index.bot("d").unwrap().symbol_name, "sparkles", "a template without a look gets the default");
 
         let a = r#"[ { "id": "a", "name": "A", "servers": { "s": { "type": "http", "url": "https://a.test/mcp" } } } ]"#;
         let refused = [
@@ -541,7 +548,7 @@ mod tests {
         let params = serde_json::json!({ "template_id": "pr-reviewer", "runner_id": runner_id, "greeting": "Hi PR Reviewer, introduce yourself." });
         let out = crate::api::dispatch(&app, "bots.create", params).await.unwrap();
         let bot = app.bot(out["bot"]["id"].as_str().unwrap()).unwrap();
-        assert_eq!((bot.name.as_str(), bot.shape.as_str(), bot.accent.as_str()), ("PR Reviewer", "hex", "blue"));
+        assert_eq!((bot.name.as_str(), bot.symbol_name.as_str(), bot.shape.as_str(), bot.accent.as_str()), ("PR Reviewer", "checklist", "hex", "blue"));
         assert!(bot.description.starts_with("You review pull requests"));
         let routines = app.routines_of(&bot.id);
         assert_eq!(routines.iter().map(|r| (r.name.as_str(), r.is_enabled)).collect::<Vec<_>>(), [("Review new pull requests", false)]);

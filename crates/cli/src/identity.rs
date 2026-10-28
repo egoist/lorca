@@ -196,6 +196,7 @@ fn create_lead_bot(app: &Arc<App>) {
         id: String::new(),
         name: LEAD_BOT_NAME.into(),
         description: "Chief of staff. Plans the work and delegates each task to the right teammate, proposing a new one when none fits. Does hands-on work when necessary.".into(),
+        symbol_name: "sparkles".into(),
         shape: String::new(),
         accent: "indigo".into(),
         avatar: None,
