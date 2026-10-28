@@ -3,6 +3,7 @@ package main
 import (
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/egoist/lorca/desktop/model"
 	"github.com/egoist/mygo/ui"
@@ -36,6 +37,40 @@ type inspectorState struct {
 	project          projectInspectorState
 	// skillsShowingAll is the bot or group whose Skills section shows every skill.
 	skillsShowingAll model.PlaybookScope
+	// compacts is each chat's last Compact from here: under way, just done, or why it failed.
+	compacts map[string]*compactState
+}
+
+// compactState is a chat's Compact: under way until the Runner answers, then done or failed. A
+// failure stays on the row until the context it was about changes.
+type compactState struct {
+	running bool
+	done    bool
+	// doneAt is the first frame that showed it done; the check shows for a moment from there.
+	doneAt  time.Time
+	failure string
+	// context is the chat's context summary when it failed.
+	context string
+}
+
+// compact asks the chat's Runner to compact it now, and keeps what it answers for the row.
+func (s *inspectorState) compact(chatID, context string) {
+	if s.compacts == nil {
+		s.compacts = map[string]*compactState{}
+	}
+	if state := s.compacts[chatID]; state != nil && state.running {
+		return
+	}
+	state := &compactState{running: true}
+	s.compacts[chatID] = state
+	store.CompactChat(chatID, func(err error) {
+		state.running = false
+		if err != nil {
+			state.failure, state.context = model.ErrorText(err), context
+		} else {
+			state.done = true
+		}
+	})
 }
 
 // refreshMemory asks the CLI for the bot's memory; the section redraws when it answers.
@@ -400,9 +435,28 @@ func (m *mainWindow) inspectorUsage(c *ui.Context, bot *model.Bot, chat *model.C
 	p := colors(c)
 	section(c.Key("usage"), L("Usage"), sectionCaption, nil, func(k *card) {
 		if usage := chat.Usage; usage != nil {
-			label := p.Label
-			if _, result := actionRow(c, k, L("Context"), actionRowOptions{Value: usage.ContextSummary(), Tint: &label, Action: L("Compact")}); result.Action {
-				store.CompactChat(chat.ID)
+			// Compacting waits for a running turn and the memory flush, so the row says it is under
+			// way, then checks it off or says why it did not.
+			context := usage.ContextSummary()
+			o := actionRowOptions{Value: context, Tint: &p.Label, Action: L("Compact")}
+			state := m.inspector.compacts[chat.ID]
+			switch {
+			case state == nil:
+			case state.running:
+				o.Value, o.Tint, o.Action, o.Busy = L("Compacting…"), &p.Label2, L("Compacting…"), true
+			case state.failure != "" && state.context == context:
+				o.Value, o.Tint, o.Tooltip = state.failure, &p.Orange, state.failure
+			case state.done:
+				if state.doneAt.IsZero() {
+					state.doneAt = c.Now()
+				}
+				if since := c.Now().Sub(state.doneAt); since < 2*time.Second {
+					o.Action, o.Copied = L("Compacted"), true
+					c.After(2*time.Second - since)
+				}
+			}
+			if _, result := actionRow(c, k, L("Context"), o); result.Action {
+				m.inspector.compact(chat.ID, context)
 			}
 			if note := usage.SpendNote(); note != "" {
 				keyValueRow(c, k, L("Spent"), usage.SpendSummary(), false, nil).Tooltip(note)
