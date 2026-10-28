@@ -331,3 +331,27 @@ func paint(canvas *image.NRGBA, coverage *image.Alpha, ink color.NRGBA) {
 		}
 	}
 }
+
+func TestCharactersBlinkAtRestAndRockWhileWorking(t *testing.T) {
+	// Seed 0 starts the loop on the clock: still until the first blink, eyes shut halfway through it.
+	at, hold := poseAt(0, 0, false)
+	if at != (pose{}) || math.Abs(hold-idleBlinks[0]) > 1e-9 {
+		t.Fatalf("at rest %+v, still for %.2f s", at, hold)
+	}
+	at, hold = poseAt(idleBlinks[0]+blinkLength/2, 0, false)
+	if hold != 0 || at.lids < 0.99 || at.roll != 0 {
+		t.Fatalf("mid-blink %+v, still for %.2f s", at, hold)
+	}
+	// After the second blink it rests until the loop comes round to the first.
+	after := idleBlinks[1] + blinkLength + 0.01
+	if _, hold = poseAt(after, 0, false); math.Abs(hold-(idleLoop-after+idleBlinks[0])) > 1e-9 {
+		t.Fatalf("after the second blink, still for %.2f s", hold)
+	}
+	// Working never holds still, and rocks within its reach.
+	for step := range 40 {
+		at, hold = poseAt(float64(step)*0.1, 7, true)
+		if hold != 0 || math.Abs(at.roll) > rockDegrees || math.Abs(at.sway) > rockSway {
+			t.Fatalf("working at %.1f s: %+v, still for %.2f s", float64(step)*0.1, at, hold)
+		}
+	}
+}

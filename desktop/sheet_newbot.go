@@ -157,7 +157,7 @@ func (st *newBotState) view(c *ui.Context, s *sheet, onCreate func(botID string)
 						b.Opacity(0.35)
 					}
 					b.Children(func() {
-						avatar(c, avatarContent{Kind: avatarBot, Shape: look.shape, Accent: look.accent}, 26, false)
+						avatar(c, avatarContent{Kind: avatarBot, Shape: look.shape, Key: look.shape, Accent: look.accent}, 26, false)
 					})
 					if b.Clicked() {
 						st.look = i

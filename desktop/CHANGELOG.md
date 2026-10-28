@@ -7,7 +7,8 @@ and the update window shows it.
 ## [Unreleased]
 
 - Bots are little characters now, as in Grok Bot: one of twelve shapes in the bot's color, with two
-  eyes. Look offers the shapes where it offered symbols; a bot you haven't given one gets its own.
+  eyes. They blink now and then and rock while they work. Look offers the shapes where it offered
+  symbols; a bot you haven't given one gets its own.
 
 ## [0.1.19]
 

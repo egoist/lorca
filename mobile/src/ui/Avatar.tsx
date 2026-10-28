@@ -8,7 +8,7 @@ import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { memo, useEffect } from "react";
 import { StyleSheet, Text, View, type ColorValue, type StyleProp, type ViewStyle } from "react-native";
-import Animated, { Easing, useAnimatedStyle, useSharedValue, withRepeat, withTiming } from "react-native-reanimated";
+import Animated, { cancelAnimation, Easing, useAnimatedStyle, useReducedMotion, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from "react-native-reanimated";
 import { engine } from "../core/engine";
 import type { Bot } from "../core/model";
 import { useStore } from "../core/store";
@@ -18,44 +18,91 @@ import { BOT_SHAPES, type BotShape, EYE_LENGTH, EYE_TILT, EYE_WIDTH, SHAPE_EYES,
 import { Symbol } from "./Symbol";
 import { accentColor, usePalette } from "./theme";
 
+/// FNV-1a of a key, as the desktop app hashes ids.
+function fnv(key: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < key.length; i++) {
+    hash ^= key.charCodeAt(i);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  return hash;
+}
+
 /// The bot's shape: the one it was given, or one its id picks (FNV-1a, as the desktop app's
 /// `shapeFor`), so bots told apart by nothing else still look different.
 export function shapeFor(shape: string | undefined, id: string): BotShape {
   if (shape && (BOT_SHAPES as readonly string[]).includes(shape)) return shape as BotShape;
-  let hash = 2166136261;
-  for (let i = 0; i < id.length; i++) {
-    hash ^= id.charCodeAt(i);
-    hash = Math.imul(hash, 16777619) >>> 0;
-  }
-  return BOT_SHAPES[hash % BOT_SHAPES.length];
+  return BOT_SHAPES[fnv(id) % BOT_SHAPES.length];
 }
 
-/// The character `size` across: the shape's mask in `color`, the eyes over it in white.
-export function Character({ shape, color, size, style }: { shape: BotShape; color: string; size: number; style?: StyleProp<ViewStyle> }) {
+// Motion after Grok Bot's clips, as the desktop app's (characters.go): at rest a character blinks
+// twice a 6 s loop (Idle_B's blinks at 1.48 s and 3.46 s, 0.26 s each), and a working one rocks
+// from side to side (Working_C's roll, toned down) every 1.63 s. A bot's id shifts its blinks to
+// one of three places in the loop and its rocking within a swing, so a group never moves as one.
+const BLINK_HALF = 130;
+const ROCK_HALF = 815;
+const ROCK_DEGREES = 14;
+const ROCK_SWAY = 0.04;
+
+/// The character `size` across: the shape's mask in `color`, the eyes over it in white. It blinks
+/// now and then and rocks while `working`, unless the phone asks for less motion; `motionKey` (the
+/// bot's id) shifts when.
+export const Character = memo(function Character({ shape, color, size, motionKey = shape, working = false, style }: { shape: BotShape; color: string; size: number; motionKey?: string; working?: boolean; style?: StyleProp<ViewStyle> }) {
+  const reduceMotion = useReducedMotion();
+  const lids = useSharedValue(0);
+  const rock = useSharedValue(0);
+  const seed = fnv(motionKey);
+  useEffect(() => {
+    if (reduceMotion) return;
+    const blink = () => withSequence(withTiming(1, { duration: BLINK_HALF }), withTiming(0, { duration: BLINK_HALF }));
+    lids.value = withDelay(
+      (seed % 3) * 2000,
+      withRepeat(withSequence(withDelay(1480, blink()), withDelay(1720, blink()), withDelay(2280, withTiming(0, { duration: 0 }))), -1),
+    );
+    return () => cancelAnimation(lids);
+  }, [lids, seed, reduceMotion]);
+  useEffect(() => {
+    if (reduceMotion || !working) {
+      cancelAnimation(rock);
+      rock.value = withTiming(0, { duration: 200 });
+      return;
+    }
+    const swing = { duration: ROCK_HALF, easing: Easing.inOut(Easing.sin) };
+    rock.value = withSequence(
+      withTiming(-1, { duration: ((seed % 1000) / 1000) * ROCK_HALF }),
+      withRepeat(withTiming(1, swing), -1, true),
+    );
+    return () => cancelAnimation(rock);
+  }, [rock, seed, working, reduceMotion]);
   const half = size / 2;
   const width = EYE_WIDTH * half;
   const length = EYE_LENGTH * half;
+  const body = useAnimatedStyle(() => ({ transform: [{ translateX: rock.value * ROCK_SWAY * half }, { rotate: `${rock.value * ROCK_DEGREES}deg` }] }));
+  // A blink draws each eye in to its middle, down to a dot.
+  const eye = useAnimatedStyle(() => ({ transform: [{ rotate: `${-EYE_TILT}deg` }, { scaleY: 1 - 0.8 * lids.value }, { scaleX: 1 - 0.3 * lids.value }] }));
   return (
-    <View style={[{ width: size, height: size }, style]}>
+    <Animated.View style={[{ width: size, height: size }, body, style]}>
       <Image source={SHAPE_MASKS[shape]} tintColor={color} style={{ width: size, height: size }} accessible={false} />
       {SHAPE_EYES[shape].map(([x, y], i) => (
-        <View
+        <Animated.View
           key={i}
-          style={{
-            position: "absolute",
-            left: half + x * half - width / 2,
-            top: half + y * half - length / 2,
-            width,
-            height: length,
-            borderRadius: width / 2,
-            backgroundColor: "#FFFFFF",
-            transform: [{ rotate: `${-EYE_TILT}deg` }],
-          }}
+          style={[
+            {
+              position: "absolute",
+              left: half + x * half - width / 2,
+              top: half + y * half - length / 2,
+              width,
+              height: length,
+              borderRadius: width / 2,
+              backgroundColor: "#FFFFFF",
+            },
+            eye,
+          ]}
         />
       ))}
-    </View>
+    </Animated.View>
   );
-}
+});
 
 /// The file URI of the bot's profile image, once this phone has the bytes; asks the core for
 /// them the first time. Undefined while they are on their way or when the bot has none.
@@ -112,7 +159,7 @@ export function ShapePicker({ shape, accent, onPick }: { shape: BotShape; accent
           accessibilityRole="button"
           accessibilityState={{ selected: s === shape }}
         >
-          <Character shape={s} color={color} size={30} />
+          <Character shape={s} color={color} size={30} motionKey={s} />
         </Pressable>
       ))}
     </View>
@@ -120,7 +167,7 @@ export function ShapePicker({ shape, accent, onPick }: { shape: BotShape; accent
 }
 
 /// The look as a character, or an image in a circle; the picker previews a pending choice this way.
-export function LookAvatar({ shape, accent, uri, size, style }: { shape: BotShape; accent: string; uri?: string; size: number; style?: StyleProp<ViewStyle> }) {
+export function LookAvatar({ shape, accent, uri, size, motionKey, working, style }: { shape: BotShape; accent: string; uri?: string; size: number; motionKey?: string; working?: boolean; style?: StyleProp<ViewStyle> }) {
   const p = usePalette();
   if (uri) {
     return (
@@ -129,7 +176,7 @@ export function LookAvatar({ shape, accent, uri, size, style }: { shape: BotShap
       </View>
     );
   }
-  return <Character shape={shape} color={accentColor(accent, p.dark)} size={size} style={style} />;
+  return <Character shape={shape} color={accentColor(accent, p.dark)} size={size} motionKey={motionKey} working={working} style={style} />;
 }
 
 export const BotAvatar = memo(function BotAvatar({ bot, size = 40, working = false, service, style }: { bot: Bot | undefined; size?: number; working?: boolean; service?: string; style?: StyleProp<ViewStyle> }) {
@@ -137,7 +184,7 @@ export const BotAvatar = memo(function BotAvatar({ bot, size = 40, working = fal
   const uri = useBotAvatarUri(bot);
   return (
     <View style={[{ width: size, height: size }, style]}>
-      <LookAvatar shape={shapeFor(bot?.shape, bot?.id ?? "")} accent={bot?.accent ?? "indigo"} uri={uri} size={size} />
+      <LookAvatar shape={shapeFor(bot?.shape, bot?.id ?? "")} accent={bot?.accent ?? "indigo"} uri={uri} size={size} motionKey={bot?.id} working={working} />
       {service && <ServiceBadge service={service} size={size} ring={p.background} />}
       {working && <PresenceDot size={size} ring={p.background} top={!!service} />}
     </View>

@@ -49,7 +49,7 @@ export default function BotLookScreen() {
       <Stack.Screen options={{ title: t("Look") }} />
       <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ paddingBottom: 40 }}>
         <View style={styles.hero}>
-          <LookAvatar shape={shape} accent={bot.accent} uri={uri} size={96} />
+          <LookAvatar shape={shape} accent={bot.accent} uri={uri} size={96} motionKey={bot.id} />
         </View>
         <Section title={t("Photo")} footer={bot.avatar ? t("The photo shows in place of the shape and color, on every paired Device.") : t("A photo shows in place of the shape and color. It is shared encrypted, like an attachment.")}>
           <Row title={bot.avatar ? t("Change Photo") : t("Choose Photo")} icon="photo.on.rectangle" onPress={() => void choosePhoto()} />

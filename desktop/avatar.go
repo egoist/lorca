@@ -37,8 +37,10 @@ const (
 
 type avatarContent struct {
 	Kind avatarKind
-	// Shape is a bot's body, one of botShapes.
+	// Shape is a bot's body, one of botShapes, and Key what shifts its blinks and rocking: the
+	// bot's id.
 	Shape  string
+	Key    string
 	Accent model.Accent
 	// Path is an image's file on this computer.
 	Path string
@@ -54,13 +56,13 @@ func botAvatar(bot *model.Bot) avatarContent {
 			return avatarContent{Kind: avatarImage, Path: path}
 		}
 	}
-	return avatarContent{Kind: avatarBot, Shape: shapeFor(bot.Shape, bot.ID), Accent: bot.Accent}
+	return avatarContent{Kind: avatarBot, Shape: shapeFor(bot.Shape, bot.ID), Key: bot.ID, Accent: bot.Accent}
 }
 
 // templateAvatar is the character a marketplace bot starts with; one without a shape shows the
 // one its id picks, standing in for the id the new bot gets.
 func templateAvatar(template model.BotTemplate) avatarContent {
-	return avatarContent{Kind: avatarBot, Shape: shapeFor(template.Shape, template.ID), Accent: template.Accent}
+	return avatarContent{Kind: avatarBot, Shape: shapeFor(template.Shape, template.ID), Key: template.ID, Accent: template.Accent}
 }
 
 func authorAvatar(author model.Author) avatarContent {
@@ -126,9 +128,12 @@ func avatarRinged(c *ui.Context, content avatarContent, size float32, working bo
 	p := colors(c)
 	box := ui.Box(c).Size(size, size)
 	if content.Kind == avatarBot {
+		// A working character rocks, which says it as the dot does; at rest it blinks now and then.
 		body := p.accentColor(content.Accent)
+		still := c.Preferences().ReduceMotion
+		seed := motionSeed(content.Key)
 		box.Draw(func(painter *ui.Painter, r ui.Rect) {
-			drawCharacter(painter, r, content.Shape, body, ring, backdrop)
+			drawCharacter(painter, r, content.Shape, body, ring, backdrop, animate(painter, still, seed, working))
 		})
 		if working {
 			drawPresence(c, box, size, false, backdrop)

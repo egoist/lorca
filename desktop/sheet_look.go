@@ -115,7 +115,7 @@ func (st *lookState) preview() avatarContent {
 			}
 		}
 	}
-	return avatarContent{Kind: avatarBot, Shape: st.shape, Accent: st.accent}
+	return avatarContent{Kind: avatarBot, Shape: st.shape, Key: st.botID, Accent: st.accent}
 }
 
 // chooseImage asks for a picture and prepares it off the main thread; the sheet shows it once it
@@ -181,7 +181,7 @@ func (st *lookState) view(c *ui.Context, s *sheet, w *appWindow) {
 							if selected {
 								tile.Border(2, p.accentColor(st.accent))
 							}
-							tile.Children(func() { characterView(c, shape, p.accentColor(st.accent), 30) })
+							tile.Children(func() { characterView(c, shape, shape, p.accentColor(st.accent), 30) })
 							if tile.Clicked() {
 								st.shape = shape
 							}
