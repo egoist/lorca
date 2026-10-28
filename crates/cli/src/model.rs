@@ -33,6 +33,13 @@ pub struct ProviderStatus {
     pub api: Option<crate::credentials::CustomApi>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<StatusModel>,
+    /// Kept on this Device alone: its credential never reaches the others.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub kept: bool,
+    /// The Runners that keep it to themselves, this one included, by Device id: a bot on one of
+    /// them runs with it, wherever it is connected otherwise.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runners: Vec<String>,
 }
 
 /// A custom provider's model as the apps show it: what its server's list said, and the thinking
@@ -60,6 +67,10 @@ pub struct Device {
     /// The channels this Runner's bots listen on, with their state. Tokens stay on the Runner.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub channels: Vec<crate::channels::ChannelStatus>,
+    /// The providers this Runner keeps to itself, so other Devices offer them for its bots:
+    /// each one's kind, name, and models, never its key or its detail.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub providers: Vec<ProviderStatus>,
     /// The `lorca` this Device runs, as `lorca --version` says it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub version: String,

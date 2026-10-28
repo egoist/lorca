@@ -364,7 +364,7 @@ func (m *mainWindow) inspectorRuntime(c *ui.Context, bot *model.Bot) {
 	models := model.ProviderModels(catalog, bot.Provider)
 	levels := model.ThinkingLevels(catalog, bot.Provider, bot.Model)
 	credential := store.Credential(bot.Provider)
-	connected := credential != nil && credential.IsConnected
+	connected := credential != nil && credential.RunsOn(bot.RunnerID)
 	section(c, L("Runs with"), sectionCaption, nil, func(k *card) {
 		var providers []popUpOption
 		for _, kind := range kinds {
@@ -416,6 +416,9 @@ func (m *mainWindow) inspectorRuntime(c *ui.Context, bot *model.Bot) {
 		value, tint, action := "", p.Label2, L("Connect")
 		if connected {
 			value, tint, action = firstNonEmpty(credential.Detail, L("Connected")), p.Label, L("Change")
+		} else if credential != nil && len(credential.Runners) > 0 {
+			// Kept on other Runners than the bot's.
+			value = credential.Detail
 		}
 		if _, result := actionRow(c, k, L("Credential"), actionRowOptions{Value: value, Tint: &tint, Action: action}); result.Action {
 			if model.IsCustomKind(bot.Provider) {

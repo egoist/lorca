@@ -83,8 +83,12 @@ func (st *newBotState) note() (string, bool) {
 		return L("No Runner is paired. Bots run on a Device with macOS, Linux, or Windows."), true
 	}
 	name := model.ProviderName(st.provider, store.Providers)
-	if credential := store.Credential(st.provider); credential != nil && credential.IsConnected {
+	credential := store.Credential(st.provider)
+	if credential != nil && credential.RunsOn(host.ID) {
 		return L("%@ is connected. Turns run on %@.", name, host.Name), false
+	}
+	if credential != nil && credential.IsConnected {
+		return L("%@ is kept on another Device. Connect it on %@ too, or sync it from there.", name, host.Name), true
 	}
 	return L("%@ is not connected yet. The bot is created now and its first turn waits until you connect it in Settings.", name), true
 }

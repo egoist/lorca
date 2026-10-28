@@ -430,6 +430,8 @@ type WireProvider struct {
 	Name        *string           `json:"name"`
 	API         *string           `json:"api"`
 	Models      []WireCustomModel `json:"models"`
+	Kept        bool              `json:"kept"`
+	Runners     []string          `json:"runners"`
 }
 
 // WireCustomModel is a custom provider's model, with what its server's model list said of it, and
@@ -1178,7 +1180,7 @@ func ToProviders(wire []WireProvider) []ProviderCredential {
 		if !IsProviderKind(provider.Kind) {
 			continue
 		}
-		credential := ProviderCredential{Kind: provider.Kind, IsConnected: provider.IsConnected, Detail: provider.Detail, BaseURL: str(provider.BaseURL), ReviewModel: str(provider.ReviewModel)}
+		credential := ProviderCredential{Kind: provider.Kind, IsConnected: provider.IsConnected, Detail: provider.Detail, BaseURL: str(provider.BaseURL), ReviewModel: str(provider.ReviewModel), Kept: provider.Kept, Runners: provider.Runners}
 		if IsCustomKind(provider.Kind) {
 			credential.Name = str(provider.Name)
 			if api := str(provider.API); IsCustomAPI(api) {

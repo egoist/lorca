@@ -17,6 +17,10 @@ export interface ProviderStatus {
   /** The model Auto-review runs on this provider unless the user picks another: the catalog's
    * small, fast review model for a built-in, a custom provider's first. */
   review_model?: string;
+  /** Kept on the Device that answered: its credential never reaches the others. */
+  kept?: boolean;
+  /** The Runners that keep it to themselves, by Device id; only their bots run with it. */
+  runners?: string[];
 }
 
 /// The wire protocol a custom provider's server speaks: a chat protocol, or a decision API
@@ -131,10 +135,17 @@ export interface PluginDetail {
   servers: { name: string; kind: string; auth: { oauth?: boolean; signed_in?: boolean } }[];
 }
 
-/// The connected kinds a bot can run with: built-ins first, then custom providers in the order
-/// they were added, as the core lists them. A decision provider is Auto-review's alone.
-export function connectedProviders(providers: readonly ProviderStatus[]): string[] {
-  return providers.filter((p) => p.is_connected && !isDecisionAPI(p.api)).map((p) => p.kind);
+/// The connected kinds a bot on `runnerId` can run with: built-ins first, then custom providers in
+/// the order they were added, as the core lists them. A provider a Runner keeps to itself is that
+/// Runner's bots' alone. A decision provider is Auto-review's alone.
+export function connectedProviders(providers: readonly ProviderStatus[], runnerId?: string): string[] {
+  return providers.filter((p) => runsOn(p, runnerId) && !isDecisionAPI(p.api)).map((p) => p.kind);
+}
+
+/// Whether a bot on `runnerId` can use the provider: connected for the account, or kept on that
+/// Runner.
+export function runsOn(provider: ProviderStatus, runnerId?: string): boolean {
+  return (provider.is_connected && !provider.kept) || (!!runnerId && !!provider.runners?.includes(runnerId));
 }
 
 /// The providers Auto-review can run a model of: every one the account has connected, decision

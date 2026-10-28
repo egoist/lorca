@@ -330,9 +330,9 @@ export default function SettingsScreen() {
                 key={provider.kind}
                 title={providerLabel(provider.kind, providers)}
                 subtitle={
-                  provider.is_connected ? provider.detail || undefined : undefined
+                  provider.is_connected || provider.runners?.length ? provider.detail || undefined : undefined
                 }
-                detail={provider.is_connected ? t("Connected") : t("Not connected")}
+                detail={provider.is_connected ? t("Connected") : provider.runners?.length ? t("Kept on a Runner") : t("Not connected")}
                 onPress={() => router.push(`/settings/provider/${provider.kind}`)}
                 chevron
               />
