@@ -42,6 +42,9 @@ type avatarContent struct {
 	Shape  string
 	Key    string
 	Accent model.Accent
+	// Busy is whether the bot has a turn running anywhere: its character moves wherever it shows,
+	// the sidebar, the chat, and the inspector alike, while the dot stays where the work is.
+	Busy bool
 	// Path is an image's file on this computer.
 	Path string
 	// Name is a contact's name.
@@ -56,7 +59,7 @@ func botAvatar(bot *model.Bot) avatarContent {
 			return avatarContent{Kind: avatarImage, Path: path}
 		}
 	}
-	return avatarContent{Kind: avatarBot, Shape: shapeFor(bot.Shape, bot.ID), Key: bot.ID, Accent: bot.Accent}
+	return avatarContent{Kind: avatarBot, Shape: shapeFor(bot.Shape, bot.ID), Key: bot.ID, Accent: bot.Accent, Busy: store.IsWorking(bot.ID)}
 }
 
 // templateAvatar is the character a marketplace bot starts with; one without a shape shows the
@@ -130,7 +133,7 @@ func avatarRinged(c *ui.Context, content avatarContent, size float32, working bo
 	if content.Kind == avatarBot {
 		// A working character acts out its clips beside the dot (motion.go); at rest it stands still.
 		body := p.accentColor(content.Accent)
-		moving := working && !c.Preferences().ReduceMotion
+		moving := (working || content.Busy) && !c.Preferences().ReduceMotion
 		key, seed := content.Key, motionSeed(content.Key)
 		box.Draw(func(painter *ui.Painter, r ui.Rect) {
 			drawCharacter(painter, r, content.Shape, body, ring, backdrop, animate(painter, moving, key, seed))

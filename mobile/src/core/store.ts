@@ -545,6 +545,11 @@ export function useIsWorking(chatId: string): boolean {
   return useStore((s) => Object.values(s.running).some((r) => r.chatId === chatId));
 }
 
+/// Whether the bot has a turn running in any chat: its character moves wherever it shows.
+export function useBotIsWorking(botId: string | undefined): boolean {
+  return useStore((s) => !!botId && Object.values(s.running).some((r) => r.botId === botId));
+}
+
 export function useWorkingBotIds(): Set<string> {
   return useStore(useShallow((s) => new Set(Object.values(s.running).map((r) => r.botId).filter(Boolean))));
 }

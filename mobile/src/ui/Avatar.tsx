@@ -11,7 +11,7 @@ import { StyleSheet, Text, View, type ColorValue, type StyleProp, type ViewStyle
 import Animated, { Easing, useAnimatedStyle, useFrameCallback, useReducedMotion, useSharedValue, withRepeat, withTiming } from "react-native-reanimated";
 import { engine } from "../core/engine";
 import type { Bot } from "../core/model";
-import { useStore } from "../core/store";
+import { useBotIsWorking, useStore } from "../core/store";
 import { t } from "../i18n";
 import { Pressable } from "./Pressable";
 import { BOT_SHAPES, type BotShape, SHAPE_EYES } from "./characters";
@@ -161,9 +161,12 @@ export function LookAvatar({ shape, accent, uri, size, motionKey, working, style
 export const BotAvatar = memo(function BotAvatar({ bot, size = 40, working = false, service, style }: { bot: Bot | undefined; size?: number; working?: boolean; service?: string; style?: StyleProp<ViewStyle> }) {
   const p = usePalette();
   const uri = useBotAvatarUri(bot);
+  // The character moves wherever the bot shows while it has a turn running anywhere: the chat
+  // list, the chat, and its details alike. `working` is where the work is, which the dot marks.
+  const busy = useBotIsWorking(bot?.id);
   return (
     <View style={[{ width: size, height: size }, style]}>
-      <LookAvatar shape={shapeFor(bot?.shape, bot?.id ?? "")} accent={bot?.accent ?? "indigo"} uri={uri} size={size} motionKey={bot?.id} working={working} />
+      <LookAvatar shape={shapeFor(bot?.shape, bot?.id ?? "")} accent={bot?.accent ?? "indigo"} uri={uri} size={size} motionKey={bot?.id} working={working || busy} />
       {service && <ServiceBadge service={service} size={size} ring={p.background} />}
       {working && <PresenceDot size={size} ring={p.background} top={!!service} />}
     </View>
