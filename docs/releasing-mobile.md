@@ -187,6 +187,8 @@ gh workflow run release-mobile.yml -f upload=false
 - **Xcode's compilation cache** (`~/Library/Developer/Xcode/DerivedData/CompilationCache.noindex`),
   keyed by the Xcode build and `mobile/bun.lock`. It answers the C, C++, and Objective-C compiles
   of the pods; Swift compiles in full on every archive.
+- **React Native's prebuilt core** (`~/Library/Caches/ReactNative`), which pod install would
+  download from Maven Central.
 - **Gradle**: its dependencies and build cache (`gradle/actions/setup-gradle`, with
   `org.gradle.caching` on in the release build).
 - **ccache** for the C++ CMake builds of React Native's libraries and the app, for each ABI. The
