@@ -57,7 +57,8 @@ on decrypted Job:
     events → job.started / job.finished / job.retry / job.thinking (chat, bot) → local app WS, which shows the bot at work
            → the turn and what it is doing (thinking, a retry) → this Runner's `machine` blob, which every
              other Device's CLI turns into the same events
-           → each finished turn's usage → chat.usage (context size, cost so far)
+           → each finished turn's usage → chat.usage (context size, cost so far), and to the
+             other Devices as the chat's `usage` blob for this Runner
            → a reply grows in chunks, not tokens: the text so far is re-sent at paragraph ends,
              or at a sentence end after 1.5 s of silence, never mid-word; the end sends it complete
            → every chunk and every completed message is encrypted with the account DEK → relay,

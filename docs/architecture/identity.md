@@ -56,7 +56,7 @@ The relay stores:
 
 - Identity public key and content public key; machine signing and box public keys with their attestation: the identity’s signature, or the paired machine that attested them
 - Blob ids, kinds, sequence numbers, timestamps, size
-- A blob's slot: the random id of the message it is a version of, `roster`, `credentials`, `machine-<machine public key>`, or `read-<chat id>`
+- A blob's slot: the random id of the message it is a version of, `roster`, `credentials`, `machine-<machine public key>`, `read-<chat id>`, or the hash of `usage-<chat id>-<machine public key>`
 - A blob's group: the random id of the chat a message, read mark, or attachment belongs to, and the ids of deleted chats
 - Recipient machine public key on an envelope (so a Runner can fetch its jobs)
 - Which machine public keys have a sync socket open (presence), and when each last connected or disconnected
