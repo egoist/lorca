@@ -14,6 +14,7 @@
 import { $ } from "bun"
 import { existsSync } from "node:fs"
 import { mkdir, readdir, rename, rm } from "node:fs/promises"
+import { homedir } from "node:os"
 import { join } from "node:path"
 import { color, log, ROOT } from "./common.ts"
 
@@ -27,7 +28,7 @@ const local = args.includes("--local")
 const unknown = args.find((arg) => arg !== "--local")
 if (unknown) die(`unknown argument: ${unknown}`)
 
-for (const tool of ["cargo", "xcodebuild", "pod", "bunx", "plutil", "rsync"]) {
+for (const tool of ["cargo", "xcodebuild", "pod", "bunx", "plutil", "rsync", "curl"]) {
   if (!Bun.which(tool)) die(`missing required tool: ${tool}`)
 }
 
@@ -113,6 +114,31 @@ await rm(IOS, { recursive: true, force: true })
 await $`bunx expo prebuild --platform ios --no-install`.cwd(PROJECT).env(env)
 for (const name of KEEP) {
   if (existsSync(join(KEPT, name))) await rename(join(KEPT, name), join(IOS, name))
+}
+
+// pod install fetches React Native's prebuilt core, its dependencies, and Hermes from Maven Central
+// with a curl that has no timeout, and a runner's download has stalled there for an hour. It takes
+// them from React Native's shared cache when they are there and match Maven's SHA-1, so they go
+// there first, by a curl that gives up on a stalled connection and tries again.
+const MAVEN = "https://repo1.maven.org/maven2/com/facebook"
+const SHARED_CACHE = join(homedir(), "Library", "Caches", "ReactNative")
+const rn: string = (await Bun.file(join(PROJECT, "node_modules", "react-native", "package.json")).json()).version
+const hermes: string = (await Bun.file(join(PROJECT, "node_modules", "hermes-compiler", "package.json")).json()).version
+await mkdir(SHARED_CACHE, { recursive: true })
+for (const configuration of ["debug", "release"]) {
+  const artifacts = `${MAVEN}/react/react-native-artifacts/${rn}/react-native-artifacts-${rn}`
+  const tarballs = {
+    [`reactnative-core-${rn}-${configuration}.tar.gz`]: `${artifacts}-reactnative-core-${configuration}.tar.gz`,
+    [`reactnative-dependencies-${rn}-${configuration}.tar.gz`]: `${artifacts}-reactnative-dependencies-${configuration}.tar.gz`,
+    [`hermes-ios-${hermes}-${configuration}.tar.gz`]: `${MAVEN}/hermes/hermes-ios/${hermes}/hermes-ios-${hermes}-hermes-ios-${configuration}.tar.gz`,
+  }
+  for (const [name, url] of Object.entries(tarballs)) {
+    const path = join(SHARED_CACHE, name)
+    if (existsSync(path)) continue
+    log(`${color.bold("downloading")} ${color.dim(name)}`)
+    await $`curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 --speed-limit 100000 --speed-time 30 -o ${`${path}.download`} ${url}`
+    await rename(`${path}.download`, path)
+  }
 }
 await $`pod install`.cwd(IOS).env(env)
 

@@ -108,6 +108,9 @@ jobs:
     if: needs.version.outputs.ios == 'true'
     # Xcode 27, which the builds from a Mac use too. The image is a preview.
     runs-on: xcode-27
+    # A cold build and upload take about half an hour; a stalled download fails the job instead of
+    # holding the release for six.
+    timeout-minutes: 75
     env:
       ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
