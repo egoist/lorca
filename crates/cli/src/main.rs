@@ -32,6 +32,10 @@ struct Cli {
 
 #[derive(Subcommands, Debug)]
 enum Command {
+    /// The tool server Claude Code lists a bot's tools from: it lists the tools in the manifest
+    /// and runs none.
+    #[usage(hide)]
+    ClaudeCodeTools { manifest: PathBuf },
     /// Run the local API the app connects to.
     Serve {
         /// Exit when this process is gone. The app passes its own pid so a killed app never
@@ -339,6 +343,11 @@ async fn main() -> anyhow::Result<()> {
         print!("{}", Cli::render_help(Cli::command(), false).unwrap_or_default());
         return Ok(());
     };
+    // Claude Code's tool server speaks MCP on stdout; it needs no account, and logs nothing.
+    let command = match command {
+        Command::ClaudeCodeTools { manifest } => return Ok(lorca_agent::providers::claude_code::serve_tools(&manifest)?),
+        command => command,
+    };
     // `lorca mcp` and `lorca chats` say how each step went in their own words; the log keeps to
     // warnings.
     let quiet = matches!(command, Command::Mcp { .. } | Command::Marketplace { .. } | Command::Models { .. } | Command::Chats { .. } | Command::Tasks { .. });
@@ -383,6 +392,8 @@ async fn main() -> anyhow::Result<()> {
             lorca::plugins::mcp_json::start(&app);
             lorca::catalog::enable(&app);
             lorca::catalog::check_in_background(&app);
+            lorca::claude_code::enable();
+            lorca::claude_code::check_in_background(&app);
             lorca::marketplace::enable(&app);
             lorca::marketplace::check_in_background(&app);
             if let Some(pid) = parent_pid {
@@ -475,7 +486,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Chats { command } => chats(&app, command).await,
         Command::Tasks { command } => tasks(&app, command).await,
         Command::Update { check, auto } => update(&app, check, auto).await,
-        Command::Service { .. } => unreachable!(),
+        Command::Service { .. } | Command::ClaudeCodeTools { .. } => unreachable!(),
         Command::Status => {
             let snapshot = app.snapshot();
             println!("{}", serde_json::to_string_pretty(&snapshot)?);
@@ -1351,7 +1362,7 @@ async fn doctor(app: &std::sync::Arc<App>) {
         }
         None => ok("relay", false, "not configured (LORCA_RELAY_URL); single-Device mode".into()),
     }
-    let credentials = app.credentials.lock().unwrap().connected_kinds();
+    let credentials = app.connected_kinds();
     ok("providers", !credentials.is_empty(), if credentials.is_empty() { "none connected".into() } else { credentials.join(", ") });
     let (servers, problems, error) = {
         let store = app.plugins.lock().unwrap();

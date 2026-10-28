@@ -420,8 +420,17 @@ func (m *mainWindow) inspectorRuntime(c *ui.Context, bot *model.Bot) {
 			// Kept on other Runners than the bot's.
 			value = credential.Detail
 		}
+		if bot.Provider == model.ClaudeCode {
+			action = L("Check Again")
+		}
 		if _, result := actionRow(c, k, L("Credential"), actionRowOptions{Value: value, Tint: &tint, Action: action}); result.Action {
-			if model.IsCustomKind(bot.Provider) {
+			if bot.Provider == model.ClaudeCode {
+				store.CheckClaudeCode(func(err error) {
+					if err != nil {
+						m.showAlert(alertOptions{Message: model.ErrorText(err)}, nil)
+					}
+				})
+			} else if model.IsCustomKind(bot.Provider) {
 				m.presentCustomProvider(bot.Provider, nil, nil)
 			} else {
 				baseURL := ""

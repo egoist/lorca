@@ -3323,6 +3323,34 @@ func (s *Store) SetProviderSync(kind ProviderKind, sync bool, done func(error)) 
 	}, func(_ struct{}, err error) { done(err) })
 }
 
+// CheckClaudeCode asks Claude Code on this computer whether it is signed in now
+// (`providers.check_claude_code`), and fails with what to do when it is not.
+func (s *Store) CheckClaudeCode(done func(error)) {
+	if s.IsMock {
+		s.post(func() { done(nil) })
+		return
+	}
+	Async(s, func() ([]ProviderCredential, error) {
+		reply, err := call[struct {
+			Providers []WireProvider `json:"providers"`
+		}](s, "providers.check_claude_code", nil)
+		return ToProviders(reply.Providers), err
+	}, func(providers []ProviderCredential, err error) {
+		if err == nil && len(providers) > 0 {
+			s.Providers = providers
+			s.rosterTouched("")
+		}
+		if credential := s.Credential(ClaudeCode); err == nil && (credential == nil || !credential.IsConnected) {
+			detail := L("Claude Code is not signed in on this computer.")
+			if credential != nil && credential.Detail != "" {
+				detail = credential.Detail
+			}
+			err = errors.New(detail)
+		}
+		done(err)
+	})
+}
+
 // CancelSignIn stops a sign-in that is waiting on the browser.
 func (s *Store) CancelSignIn() { s.perform("providers.auth.cancel", nil) }
 

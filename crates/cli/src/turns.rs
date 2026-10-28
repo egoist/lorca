@@ -143,6 +143,10 @@ async fn run_budgeted_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) 
 
     // A model this Device's catalog lacks may have been picked on one with a newer catalog.
     crate::catalog::check_for_model(app, &bot.provider, bot.model.as_deref()).await;
+    // A Claude Code sign-in made in a terminal since the last check counts.
+    if bot.provider == crate::claude_code::KIND && !crate::claude_code::is_signed_in() {
+        crate::claude_code::check(app).await;
+    }
     let provider = match providers::provider_for(app, &bot.provider, bot.model.as_deref(), providers::thinking_level(&bot)) {
         Ok(provider) => provider,
         Err(reason) => {
@@ -5223,6 +5227,45 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         (format!("http://{addr}/v1"), tokio::spawn(async move { axum::serve(listener, server).await.unwrap() }))
+    }
+
+    /// A whole turn on the real Claude Code, signed in on this computer, with a build of the CLI
+    /// serving the tool list: `cargo build -p lorca && cargo test -p lorca --lib live_claude_code
+    /// -- --ignored`. The bot runs a command with its own bash tool and reports what it printed.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[ignore]
+    async fn live_claude_code_runs_a_turn_with_the_bots_tools() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        crate::identity::create(app, Some("Runner".into())).unwrap();
+        let claude = crate::coding::process::find("claude").await.expect("claude on PATH");
+        crate::claude_code::set_status(Some(crate::claude_code::Status { program: Some(claude), signed_in: true, plan: None, email: None }));
+        crate::claude_code::set_tools_program(Some(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/lorca")));
+        let bot = {
+            let mut state = app.state.lock().unwrap();
+            state.bots[0].provider = "claude-code".into();
+            state.bots[0].model = Some("claude-haiku-5-5".into());
+            state.bots[0].clone()
+        };
+        let chat_id = app.dm_with(&bot.id, None).unwrap().meta.id;
+        std::fs::create_dir_all(bot.working_directory(&app.config.home)).unwrap();
+        crate::runtime::send_user_message(app.clone(), &chat_id, "Run `echo lorca-live-$((6*7))` with your bash tool, then tell me exactly what it printed.", None, Vec::new(), Vec::new(), None).unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let ended = tokio::time::timeout(Duration::from_secs(120), async {
+            while !app.running_jobs.lock().unwrap().is_empty() {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+        })
+        .await;
+        let messages = app.messages(&chat_id);
+        assert!(ended.is_ok(), "the turn ends: {messages:#?}");
+        let ran = messages.iter().any(|m| matches!(&m.body, Body::Tool { name, result: Some(result), .. } if name == "bash" && result.contains("lorca-live-42")));
+        let replies: Vec<String> = messages.iter().filter_map(|m| match (&m.author, &m.body) { (Author::Bot { .. }, Body::Text { text, .. }) => Some(text.clone()), _ => None }).collect();
+        assert!(ran, "{messages:#?}");
+        assert!(replies.iter().any(|text| text.contains("lorca-live-42")), "{replies:?}");
+        crate::claude_code::set_status(None);
+        crate::claude_code::set_tools_program(None);
     }
 
     /// Stop on a turn whose call never returns: the call is cut off after the grace, the turn

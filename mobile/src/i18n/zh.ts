@@ -1092,4 +1092,8 @@ export const zh: Record<string, string> = {
   "Checking with another bot…": "找别的智能体商量一下…",
   "Waiting on results…": "坐等结果…",
   "Kept on a Runner": "保留在一台 Runner 上",
+  "It needs a Claude Pro or Max subscription.": "需要 Claude Pro 或 Max 订阅。",
+  "Signed in on a Runner": "已在一台 Runner 上登录",
+  "Bots use the Claude Code login of the Runner they run on: run claude auth login in a terminal there. The sign-in never leaves that Runner.": "智能体使用其所在 Runner 上的 Claude Code 登录：在那台电脑的终端中运行 claude auth login。登录信息不会离开那台 Runner。",
+  "Not signed in on any Runner": "尚未在任何 Runner 上登录",
 };

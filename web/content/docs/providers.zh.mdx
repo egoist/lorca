@@ -10,6 +10,7 @@ icon: Sparkles
 | --- | --- | --- |
 | **DeepSeek** | API 密钥 | `deepseek-flash` |
 | **Anthropic** | API 密钥 | `claude-opus-5` |
+| **Claude Code** | 你的 Claude Pro 或 Max 订阅，在 Runner 上用 Claude Code 登录 | `claude-opus-5-5` |
 | **OpenCode Zen** | API 密钥，按量付费 | `deepseek-v4.1-flash` |
 | **OpenCode Go** | API 密钥和 Go 订阅 | `glm-5.3-flash` |
 | **ChatGPT** | 用你的 ChatGPT 订阅登录 | `gpt-6.1-sol` |
@@ -34,6 +35,16 @@ lorca provider set opencode-go
 lorca provider set chatgpt
 lorca provider list
 ```
+
+### Claude Code
+
+Claude Code 让你的智能体使用你的 Claude Pro 或 Max 订阅。智能体通过它所在电脑上的 Claude Code CLI 运行，所以不需要往 Lorca 里粘贴任何东西。在每台要使用它的 Runner 上安装 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 并登录：
+
+```bash
+claude auth login
+```
+
+**设置 › 服务商 › Claude Code** 会显示这台电脑是否已登录。登录后点 **再次检查**。登录信息留在那台电脑上的 Claude Code 中：它不会同步，其他设备会把 Claude Code 列为已在那台 Runner 上登录，所以只有那台电脑上的智能体能选它。每次回复都会计入你 Claude 订阅的用量上限，和 Claude Code 自己的工作一样。如果 Anthropic 把某次回复计入了额外用量而不是你的订阅，智能体会停下并告诉你。在那台电脑上用 `claude auth logout` 退出登录。
 
 ### 把服务商只留在一台设备上
 
@@ -98,4 +109,4 @@ lorca provider add "TypeSafe" https://api.typesafe.ai/v1/systemone --api system-
 
 ## 花费
 
-DeepSeek、Anthropic 和 OpenCode Zen 按用量计费；OpenCode Go 的用量计入订阅限额。检查器会显示每个聊天花了多少。ChatGPT 和 Grok 登录用的是你的订阅，显示的数字是按 API 价格折算的花费。
+DeepSeek、Anthropic 和 OpenCode Zen 按用量计费；OpenCode Go 的用量计入订阅限额。检查器会显示每个聊天花了多少。ChatGPT、Grok 和 Claude Code 用的是你的订阅，显示的数字是按 API 价格折算的花费。

@@ -2,9 +2,12 @@
 //! Anthropic-compatible endpoint is the one with server-side web search; OpenAI-compatible chat
 //! completions and Responses serve API-key gateways; ChatGPT and Grok are subscription OAuth
 //! adapters, each kept isolated in its own module, over the Responses wire shape they share.
+//! Claude Code runs a Claude subscription through `claude -p` on the Runner, over the Messages
+//! adapter's request and stream.
 
 pub mod anthropic;
 pub mod chatgpt;
+pub mod claude_code;
 pub mod grok;
 pub mod openai_compat;
 pub mod openai_responses;
@@ -12,6 +15,7 @@ pub(crate) mod responses;
 
 pub use anthropic::AnthropicProvider;
 pub use chatgpt::{ChatGptProvider, ChatGptTokens, TokenSource};
+pub use claude_code::ClaudeCodeProvider;
 pub use grok::{GrokProvider, GrokTokenSource, GrokTokens};
 pub use openai_compat::OpenAiCompatProvider;
 pub use openai_responses::OpenAiResponsesProvider;

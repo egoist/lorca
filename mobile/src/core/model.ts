@@ -939,6 +939,7 @@ export interface Chat extends ChatMeta {
 export const PROVIDER_LABELS: Record<string, string> = {
   deepseek: "DeepSeek",
   anthropic: "Anthropic",
+  "claude-code": "Claude Code",
   opencode: "OpenCode Zen",
   "opencode-go": "OpenCode Go",
   chatgpt: "ChatGPT",
@@ -946,7 +947,7 @@ export const PROVIDER_LABELS: Record<string, string> = {
 };
 
 /// The providers Lorca has built in, in the order the core lists them.
-export const PROVIDER_KINDS = ["deepseek", "anthropic", "opencode", "opencode-go", "chatgpt", "grok"] as const;
+export const PROVIDER_KINDS = ["deepseek", "anthropic", "claude-code", "opencode", "opencode-go", "chatgpt", "grok"] as const;
 export type ProviderKind = (typeof PROVIDER_KINDS)[number];
 
 /// A built-in provider's kind. Custom providers' kinds start with `custom:`.
@@ -1181,7 +1182,13 @@ export function providerKinds(providers: readonly ProviderStatus[]): string[] {
 }
 
 export function providerUsesAPIKey(kind: ProviderKind): boolean {
-  return kind !== "chatgpt" && kind !== "grok";
+  return kind !== "chatgpt" && kind !== "grok" && kind !== "claude-code";
+}
+
+/// Claude Code signs in on each Runner with its own login, which is never shared: a Runner
+/// lists it while `claude auth login` holds there, and only its bots run with it.
+export function providerSignsInOnRunner(kind: string): boolean {
+  return kind === "claude-code";
 }
 
 export function providerConnectMethod(kind: ProviderKind): string {
@@ -1220,6 +1227,7 @@ export function providerKeyPlaceholder(kind: ProviderKind): string {
 export function providerSignInRequirement(kind: ProviderKind): string {
   if (kind === "chatgpt") return t("It needs a ChatGPT subscription.");
   if (kind === "grok") return t("It needs a SuperGrok or X Premium+ subscription.");
+  if (kind === "claude-code") return t("It needs a Claude Pro or Max subscription.");
   return "";
 }
 

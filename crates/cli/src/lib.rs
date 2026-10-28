@@ -11,6 +11,8 @@ pub mod app_update;
 pub mod attention;
 pub mod budgets;
 pub mod channels;
+#[cfg(feature = "runner")]
+pub mod claude_code;
 pub mod browser;
 pub mod catalog;
 #[cfg(feature = "runner")]

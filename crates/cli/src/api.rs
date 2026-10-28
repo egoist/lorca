@@ -115,6 +115,8 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         // was checked within the hour.
         "bootstrap" => {
             crate::catalog::check_in_background(app);
+            #[cfg(feature = "runner")]
+            crate::claude_code::check_in_background(app);
             crate::marketplace::check_in_background(app);
             Ok(app.snapshot())
         }
@@ -916,9 +918,8 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
             if let Some(provider) = params.get("provider") {
                 let provider = provider.as_str().map(str::trim).filter(|kind| !kind.is_empty());
                 if let Some(kind) = provider {
-                    let credentials = app.credentials.lock().unwrap();
-                    if !credentials.connected_kinds().iter().any(|connected| connected == kind) {
-                        return Err(format!("{} is not connected", credentials.label(kind)));
+                    if !app.connected_kinds().iter().any(|connected| connected == kind) {
+                        return Err(format!("{} is not connected", app.credentials.lock().unwrap().label(kind)));
                     }
                 }
                 auto_review.provider = provider.map(str::to_string);
@@ -1111,6 +1112,13 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         "providers.auth.cancel" => {
             app.cancel_provider_auth();
             Ok(Value::Null)
+        }
+        // Asks Claude Code on this Runner whether it is signed in now, for a sign-in made in a
+        // terminal.
+        #[cfg(feature = "runner")]
+        "providers.check_claude_code" => {
+            crate::claude_code::check(app).await;
+            Ok(json!({ "providers": app.provider_statuses() }))
         }
         // Keeps a connected provider on this Device (`sync` false) or sends it to every Device.
         "providers.set_sync" => {

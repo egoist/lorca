@@ -8,6 +8,7 @@ import {
   providerKeyPlaceholder,
   providerLabel,
   providerSignInRequirement,
+  providerSignsInOnRunner,
   providerUsesAPIKey,
 } from "../../../src/core/model";
 import { useStore } from "../../../src/core/store";
@@ -43,6 +44,24 @@ export default function ProviderSettingsScreen() {
   const kind = rawKind;
   const name = providerLabel(kind, providers);
   const usesAPIKey = providerUsesAPIKey(kind);
+
+  // Claude Code has nothing to connect here: a Runner signs in to it in a terminal.
+  if (providerSignsInOnRunner(kind)) {
+    const signedIn = !!status?.runners?.length;
+    return (
+      <>
+        <Stack.Screen options={{ title: name }} />
+        <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={styles.content}>
+          <Section
+            title={t("Status")}
+            footer={`${t("Bots use the Claude Code login of the Runner they run on: run claude auth login in a terminal there. The sign-in never leaves that Runner.")} ${providerSignInRequirement(kind)}`}
+          >
+            <Row title={signedIn ? t("Signed in on a Runner") : t("Not signed in on any Runner")} subtitle={signedIn ? status?.detail : undefined} />
+          </Section>
+        </ScrollView>
+      </>
+    );
+  }
 
   async function connect() {
     if (working || (usesAPIKey && !apiKey.trim())) return;

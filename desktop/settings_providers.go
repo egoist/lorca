@@ -19,13 +19,17 @@ func (s settingsPane) providers(c *ui.Context) {
 			}
 			for _, credential := range store.Providers {
 				kind := credential.Kind
-				// Each opens its sheet: to connect, or to edit, sync, or disconnect it.
+				// Each opens its sheet: to connect, or to edit, sync, or disconnect it. Claude Code
+				// signs in with its own login, so its row asks it again.
 				action := L("Connect…")
 				if credential.IsConnected {
 					action = L("Edit…")
 				}
+				if kind == model.ClaudeCode {
+					action = L("Check Again")
+				}
 				subtitle := model.ProviderSubtitle(kind) + " · " + credential.Detail
-				if credential.IsConnected && credential.Kept {
+				if credential.IsConnected && credential.Kept && kind != model.ClaudeCode {
 					subtitle += " · " + L("Kept on this Device")
 				}
 				o := statusRowOptions{
@@ -47,6 +51,12 @@ func (s settingsPane) providers(c *ui.Context) {
 					switch {
 					case model.IsCustomKind(kind):
 						s.w.presentCustomProvider(kind, nil, nil)
+					case kind == model.ClaudeCode:
+						store.CheckClaudeCode(func(err error) {
+							if err != nil {
+								s.w.showAlert(alertOptions{Message: model.ErrorText(err)}, nil)
+							}
+						})
 					default:
 						s.w.presentConnectProvider(kind, credential.BaseURL, nil)
 					}

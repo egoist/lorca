@@ -17,6 +17,7 @@ const CATALOG = join(ROOT, "crates/models/catalog.json")
 const MODELS_DEV: Record<string, string> = {
   deepseek: "deepseek",
   anthropic: "anthropic",
+  "claude-code": "anthropic",
   chatgpt: "openai",
   grok: "xai",
   opencode: "opencode",
@@ -26,7 +27,8 @@ const MODELS_DEV: Record<string, string> = {
 /// Fields kept as written although models.dev says otherwise: the Grok sign-in caps output at 64k,
 /// DeepSeek documents its cap as 384K and takes every effort on its Anthropic endpoint, Lorca turns
 /// thinking off on Claude models models.dev lists no toggle for (Sonnet 5.5's off is
-/// between_tools), and the ChatGPT sign-in's levels are Codex's, which have no none.
+/// between_tools), the ChatGPT sign-in's levels are Codex's, which have no none, and Claude Code's
+/// are the efforts `claude -p` takes.
 const KEEP: Record<string, string[]> = {
   "grok/*": ["max_output"],
   "deepseek/*": ["max_output", "levels"],
@@ -34,6 +36,7 @@ const KEEP: Record<string, string[]> = {
   "anthropic/claude-opus-4-8": ["levels"],
   "anthropic/claude-sonnet-5-5": ["levels"],
   "chatgpt/*": ["levels"],
+  "claude-code/*": ["levels"],
 }
 
 /// OpenCode's endpoint tables, by provider.
