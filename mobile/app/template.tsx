@@ -164,7 +164,7 @@ export default function TemplateImportScreen() {
         {preview && template ? (
           <>
             <View style={styles.hero}>
-              <LookAvatar shape={shapeFor(template.profile?.shape, template.profile?.name ?? "")} accent={template.profile?.accent || "indigo"} size={76} />
+              <LookAvatar shape={shapeFor(undefined, template.profile?.name ?? "")} accent={template.profile?.accent || "indigo"} size={76} />
             </View>
             <Section>
               <FieldRow

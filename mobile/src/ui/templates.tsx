@@ -59,14 +59,15 @@ export function TemplateItemRow({ title, detail, flags = [], titleLines = 1, lea
 }
 
 /// The profile, which every template holds: the look, the name, and what the bot is for. A
-/// profile without a shape shows the one its name picks; the bot made from it gets its own id's.
+/// template carries no shape: it shows the one its name picks, and the bot made from it gets its
+/// own id's.
 export function TemplateProfileRow({ profile, flags }: { profile: TemplateProfile; flags?: readonly string[] }) {
   return (
     <TemplateItemRow
       title={profile.name}
       detail={profile.description}
       flags={flags}
-      leading={<LookAvatar shape={shapeFor(profile.shape, profile.name)} accent={profile.accent || "indigo"} size={36} />}
+      leading={<LookAvatar shape={shapeFor(undefined, profile.name)} accent={profile.accent || "indigo"} size={36} />}
     />
   );
 }

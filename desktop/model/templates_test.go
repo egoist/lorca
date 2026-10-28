@@ -29,7 +29,7 @@ func templatePosted(t *testing.T, queue <-chan func()) func() {
 }
 
 func TestTemplateRepliesReadTheCLIsShape(t *testing.T) {
-	contents := decodeJSON[TemplateContents](t, `{"profile":{"id":"profile","content":{"name":"Reviewer","description":"Read carefully","shape":"hex","accent":"blue"},"flags":["credential"]},"memories":[{"id":"memory-1","content":"- Email ops@example.com","flags":["email"]}],"routines":[{"id":"rt-1","content":{"name":"Morning","schedule":"every 2h","prompt":"Read inbox"}}],"requirements":[{"service_id":"github","name":"GitHub"}]}`)
+	contents := decodeJSON[TemplateContents](t, `{"profile":{"id":"profile","content":{"name":"Reviewer","description":"Read carefully","symbol_name":"checklist","accent":"blue"},"flags":["credential"]},"memories":[{"id":"memory-1","content":"- Email ops@example.com","flags":["email"]}],"routines":[{"id":"rt-1","content":{"name":"Morning","schedule":"every 2h","prompt":"Read inbox"}}],"requirements":[{"service_id":"github","name":"GitHub"}]}`)
 	if contents.Profile.Content.Name != "Reviewer" || contents.Profile.Flags[0] != "credential" || contents.Memories[0].Flags[0] != "email" || contents.Routines[0].ID != "rt-1" || contents.Requirements[0].Name != "GitHub" {
 		t.Fatalf("contents lost a field: %+v", contents)
 	}
@@ -99,7 +99,7 @@ func TestTemplateImportReconcilesIndependentBotAfterOrderedReplyOnly(t *testing.
 		}
 		data, _ := json.Marshal(params)
 		_ = json.Unmarshal(data, &sent)
-		return json.RawMessage(`{"bot":{"id":"bot-recipient-new","name":"Independent","description":"Review","shape":"hex","accent":"blue","runner_id":"recipient-runner","provider":"deepseek","created_at":1},"chat_id":"dm-recipient-new"}`), nil
+		return json.RawMessage(`{"bot":{"id":"bot-recipient-new","name":"Independent","description":"Review","symbol_name":"checklist","accent":"blue","runner_id":"recipient-runner","provider":"deepseek","created_at":1},"chat_id":"dm-recipient-new"}`), nil
 	}}
 	store := NewStore(transport, func(fn func()) { posts <- fn }, false)
 	store.Bots = []*Bot{{ID: "source-bot", Name: "Original", RunnerID: "source-runner"}}

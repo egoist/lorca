@@ -193,7 +193,8 @@ func polygon(points [][2]float64) func(float64) float64 {
 		var far float64
 		for i, a := range points {
 			b := points[(i+1)%len(points)]
-			// Solve t·(c, s) = a + u·(b − a) for t ≥ 0 and u in [0, 1].
+			// Solve t·(c, s) = a + u·(b − a) for t ≥ 0 and u in [0, 1], a hair wider so a ray
+			// through a corner meets an edge whichever way the rounding goes.
 			ex, ey := b[0]-a[0], b[1]-a[1]
 			den := c*ey - s*ex
 			if math.Abs(den) < 1e-12 {
@@ -201,7 +202,7 @@ func polygon(points [][2]float64) func(float64) float64 {
 			}
 			t := (a[0]*ey - a[1]*ex) / den
 			u := (a[0]*s - a[1]*c) / den
-			if t > 0 && u >= 0 && u <= 1 {
+			if t > 0 && u >= -1e-9 && u <= 1+1e-9 {
 				far = max(far, t)
 			}
 		}

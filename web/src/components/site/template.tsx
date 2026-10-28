@@ -20,7 +20,7 @@ const DEFAULT_RELAY = 'https://relay.lorca.app'
 const ENVELOPE_KIND = 'template'
 const NONCE_BYTES = 24
 
-type Profile = { name: string; description?: string; shape?: string; accent?: string }
+type Profile = { name: string; description?: string; accent?: string }
 export type Template = {
   format: string
   version: number
@@ -55,7 +55,7 @@ export function openTemplate(envelope: Uint8Array, key: Uint8Array): unknown {
 
 function isTemplate(value: unknown): value is Template {
   const template = value as Template
-  return typeof template === 'object' && template !== null && template.format === 'lorca.bot-template' && template.version === 2
+  return typeof template === 'object' && template !== null && template.format === 'lorca.bot-template' && template.version === 1
 }
 
 /// The relay a link names, or Lorca's.
@@ -100,10 +100,9 @@ function appLink(id: string, search: string, fragment: string): string {
 
 // MARK: - The bot's look
 
-/// The shape the apps draw for a profile: its own, or one its name picks (FNV-1a, as the apps'
-/// `shapeFor` does with a bot's id).
-function shapeFor(shape: string | undefined, key: string): BotShape {
-  if (shape && (BOT_SHAPES as readonly string[]).includes(shape)) return shape as BotShape
+/// The shape the apps draw for a template, which carries none: the one its name picks (FNV-1a,
+/// as the apps' `shapeFor` does with a bot's id).
+function shapeFor(key: string): BotShape {
   let hash = 2166136261
   for (let i = 0; i < key.length; i++) {
     hash ^= key.charCodeAt(i)
@@ -126,7 +125,7 @@ const ACCENTS: Record<string, string> = {
 
 /// The bot's character, as the apps draw it: its shape flat in its accent, with two white eyes.
 function Avatar({ profile }: { profile?: Profile }) {
-  const shape = shapeFor(profile?.shape, profile?.name ?? '')
+  const shape = shapeFor(profile?.name ?? '')
   const color = ACCENTS[profile?.accent ?? ''] ?? ACCENTS.indigo
   const reach = ((EYE_LENGTH - EYE_WIDTH) / 2) * 50
   const [dx, dy] = [reach * Math.sin((EYE_TILT * Math.PI) / 180), reach * Math.cos((EYE_TILT * Math.PI) / 180)]

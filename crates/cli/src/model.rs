@@ -1586,7 +1586,7 @@ mod app_view_tests {
     fn old_bot_instructions_become_part_of_the_description_once() {
         let mut bot: Bot = serde_json::from_value(serde_json::json!({
             "id": "bot", "name": "Scout", "description": "Find sources.",
-            "symbol_name": "binoculars", "shape": "cloud", "accent": "teal", "runner_id": "runner",
+            "symbol_name": "binoculars", "accent": "teal", "runner_id": "runner",
             "provider": "deepseek", "instructions": "Cite every claim.", "created_at": 1.0
         }))
         .unwrap();
@@ -1598,6 +1598,24 @@ mod app_view_tests {
         let value = serde_json::to_value(bot).unwrap();
         assert!(value.get("label").is_none());
         assert_eq!(value["instructions"], "");
+    }
+
+    #[test]
+    fn a_bot_keeps_the_symbol_released_apps_read_beside_its_shape() {
+        // Apps from before characters require `symbol_name` in the roster.
+        let bot: Bot = serde_json::from_value(serde_json::json!({
+            "id": "bot", "name": "Scout", "description": "", "accent": "teal", "runner_id": "runner",
+            "provider": "deepseek", "created_at": 1.0
+        }))
+        .unwrap();
+        assert_eq!((bot.symbol_name.as_str(), bot.shape.as_str()), ("sparkles", ""));
+        let value = serde_json::to_value(&bot).unwrap();
+        assert_eq!(value["symbol_name"], "sparkles");
+        assert!(value.get("shape").is_none(), "an empty shape stays off the wire");
+
+        let shaped = Bot { shape: "cloud".into(), ..bot };
+        let value = serde_json::to_value(&shaped).unwrap();
+        assert_eq!((value["symbol_name"].as_str(), value["shape"].as_str()), (Some("sparkles"), Some("cloud")));
     }
 
     #[test]
