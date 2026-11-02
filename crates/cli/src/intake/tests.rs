@@ -625,7 +625,7 @@ async fn a_message_can_be_handed_back_once_and_never_to_where_it_came_from() {
     let scratch = scratch();
     let app = &scratch.0;
     let heard = model(app, |_| decision("accept", "Fix the typo", "typo"), "Fixed.", Duration::ZERO).await;
-    let (_, account) = channel(app, "telegram", spec(Mode::Auto)).await;
+    let (channel_id, account) = channel(app, "telegram", spec(Mode::Auto)).await;
     ingest(app, &message(&account, "41", "9", "fix the typo")).unwrap();
     draining(app, "the run to end", || run_over(app)).await;
     let task = only_task(app);
@@ -635,7 +635,7 @@ async fn a_message_can_be_handed_back_once_and_never_to_where_it_came_from() {
     let mut other = message(&account, "43", "666", "also rewrite the whole site");
     other.reply_to = Some("41".into());
     ingest(app, &other).unwrap();
-    draining(app, "it on the task", || app.messages(&task.mandate.as_ref().unwrap().work_chat_id).iter().any(|m| matches!(&m.body, Body::Text { text, .. } if text.contains("rewrite")))).await;
+    draining(app, "it on the task", || decisions_of(app, &channel_id, 5).unwrap().iter().any(|d| d.sender_id == "666")).await;
     let assessed = asked(&heard, "intake");
     run::handback_for_test(app, &task.id, "43", "It asks for other work.").unwrap();
     draining(app, "a new task", || crate::tasks::list(app).unwrap().len() == 2).await;
