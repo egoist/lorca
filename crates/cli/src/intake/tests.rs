@@ -408,6 +408,8 @@ async fn accepted_work_runs_apart_and_a_reply_nobody_in_the_thread_read_goes_to_
     let limits = crate::budgets::serve(app, "budgets.get", &json!({ "kind": "task", "id": task.id })).ok();
     assert!(app.snapshot()["budgets"].as_array().is_some_and(|budgets| budgets.iter().any(|budget| budget["kind"] == "task" && budget["id"] == task.id.as_str())), "it has limits of its own: {limits:?}");
     assert!(mandate.request.is_empty(), "no one's words authorize inferred work");
+    // A quick run can end before the decision that started it is saved.
+    eventually("the decision on record", || !kinds(app, &channel_id).is_empty()).await;
     assert_eq!(kinds(app, &channel_id), [DecisionKind::Accepted]);
 
     let work = app.chat(&mandate.work_chat_id).unwrap();
@@ -420,7 +422,8 @@ async fn accepted_work_runs_apart_and_a_reply_nobody_in_the_thread_read_goes_to_
     assert_eq!(work.unread_count, 0, "no list shows it, so nothing could ever clear a mark");
 
     assert_eq!(task.state, TaskState::AwaitingReview, "a plain reply reached nobody, so it isn't done");
-    assert_eq!(crate::attention::view(app).unwrap().items.len(), 1, "and the owner reads it");
+    // Attention follows the Task's state a moment after it is saved.
+    eventually("the owner to read it", || crate::attention::view(app).unwrap().items.len() == 1).await;
 
     let asked_worker = heard.lock().unwrap().iter().find(|(who, _)| who == "worker").map(|(_, words)| words.clone()).expect("the worker ran");
     assert!(asked_worker.contains("durable task"), "it knows how a mandated run works");
@@ -702,7 +705,6 @@ async fn a_task_someone_stopped_takes_nothing_more() {
     ingest(app, &message(&account, "41", "9", "fix the typo")).unwrap();
     draining(app, "the run to end", || run_over(app)).await;
     let task = only_task(app);
-    update(app, &task.id, "u1", json!({ "state": "queued" }));
     update(app, &task.id, "u2", json!({ "state": "cancelled", "reason": "Not wanted." }));
     let mut reply = message(&account, "43", "9", "and another one");
     reply.reply_to = Some("41".into());
@@ -729,6 +731,8 @@ async fn an_unreadable_answer_lets_go_and_only_a_listed_persons_lost_request_tel
     ask.mentions_bot = true;
     ingest(app, &ask).unwrap();
     draining(app, "the second on record", || kinds(app, &channel_id).len() == 2).await;
+    // Attention follows the record a moment after it is saved.
+    eventually("the owner to hear", || !crate::attention::view(app).unwrap().items.is_empty()).await;
     let titles: Vec<String> = crate::attention::view(app).unwrap().items.into_iter().map(|item| item.title).collect();
     assert_eq!(titles, ["Couldn't assess a request: Team"], "their request went nowhere, so the owner hears");
 }
@@ -754,8 +758,7 @@ async fn an_outage_drops_nothing_and_the_queue_goes_on_when_the_model_is_back() 
         !kinds(app, &channel_id).is_empty()
     }).await;
     assert_eq!(kinds(app, &channel_id), [DecisionKind::Accepted]);
-    let open: Vec<String> = crate::attention::view(app).unwrap().items.into_iter().map(|item| item.title).filter(|title| title.starts_with("Messages waiting")).collect();
-    assert!(open.is_empty(), "and the notice goes with the outage");
+    eventually("the notice to go with the outage", || !crate::attention::view(app).unwrap().items.iter().any(|item| item.title.starts_with("Messages waiting"))).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
