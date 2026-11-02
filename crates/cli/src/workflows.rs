@@ -511,7 +511,9 @@ async fn turn_on_channels(app: &Arc<App>, setup: &mut Setup) -> Result<(), Strin
         }
         // Chats the user narrowed the channel to stay narrowed.
         let chats = existing.and_then(|(_, config)| config.channel.as_ref()).map(|c| c.chats.clone()).unwrap_or_default();
-        let channel = crate::channels::ChannelSpec { account_id: account_id.clone(), chats, listen: spec.listen.clone().normalized(), intake: None };
+        // Turning the workflow on again keeps what the owner set up since.
+        let intake = existing.and_then(|(_, config)| config.channel.as_ref()).and_then(|channel| channel.intake.clone());
+        let channel = crate::channels::ChannelSpec { account_id: account_id.clone(), chats, listen: spec.listen.clone().normalized(), intake };
         let config = crate::channels::config_for(&bot_id, &spec.service_id, &spec.name, &spec.task, channel);
         let id = match existing {
             Some((id, _)) => {

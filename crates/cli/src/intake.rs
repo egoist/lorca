@@ -30,6 +30,16 @@ pub const NOTHING_TO_DO: &str = "Nothing to do for this request.";
 pub const RUN_FAILED: &str = "Its run failed before it finished.";
 pub const STOPPED_BY_USER: &str = "Stopped by the user.";
 
+// A Device that runs no bots has no Task runs to ask about.
+#[cfg(not(feature = "runner"))]
+pub fn reached_thread(_app: &crate::app::App, _task: &crate::tasks::Task, _since: f64) -> bool {
+    false
+}
+#[cfg(not(feature = "runner"))]
+pub fn background_live(_app: &crate::app::App, _task: &crate::tasks::Task) -> bool {
+    false
+}
+
 /// The most rules and people a channel's intake holds.
 pub const MAX_RULES: usize = 16;
 pub const MAX_PEOPLE: usize = 64;
@@ -38,8 +48,9 @@ pub const MAX_RULE_INSTRUCTION: usize = 1_000;
 
 /// What a channel takes on by itself, in the owner's words. A channel without one gives each
 /// message it takes a turn.
+/// Fields it doesn't know are ignored: a Runner's machine blob carries this to every Device, and one
+/// that a newer Runner adds a field to still reads.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
 pub struct IntakeSpec {
     #[serde(default)]
     pub mode: Mode,
@@ -67,7 +78,6 @@ pub enum Mode {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
 pub struct Person {
     /// Telegram's numeric user id, Slack's `U…`. A name can be changed by its owner, so only this
     /// counts.
@@ -77,7 +87,6 @@ pub struct Person {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
 pub struct Rule {
     pub id: String,
     pub name: String,

@@ -55,6 +55,11 @@ pub struct Decision {
     pub strength: Option<Strength>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub addressed: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub forwarded: bool,
+    /// The thread it is in on the service, for a conversation that holds a whole Slack channel.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub thread_id: String,
     /// What the work is; empty unless it became or would have become work.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub title: String,
@@ -67,8 +72,8 @@ pub struct Decision {
     pub evidence: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
-    /// It reached a Task and has not been read there: a running turn takes it at its next step,
-    /// else the Task's next run does.
+    /// Someone entitled wrote it, and no turn of its Task has read it: a running turn takes it at its
+    /// next step, else it starts the next run.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub waiting: bool,
     /// Its messages as they are in the Task's work chat, while unread.

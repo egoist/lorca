@@ -157,6 +157,8 @@ impl Envelope {
 #[serde(rename_all = "snake_case")]
 enum DeliveryState {
     Pending,
+    /// Intake left it to the channel's task, and its turn waits for room.
+    Replying,
     /// A channel's intake is reading it. It only reads, so a restart puts it back to pending.
     Assessing,
     Running,
@@ -237,6 +239,31 @@ fn deliveries_of(
         .collect()
 }
 
+/// A subscription's deliveries that are not settled, in order. Tick asks every two seconds, and a
+/// channel reading a whole group settles thousands, so it starts past the ones it knows are: settled
+/// deliveries never reopen.
+#[cfg(feature = "runner")]
+fn open_deliveries_of(app: &App, db: &Connection, key: &crate::keys::AccountKeys, subscription_id: &str) -> anyhow::Result<Vec<Delivery>> {
+    let floor = app.channels.inbox_floor.lock().unwrap().get(subscription_id).copied().unwrap_or(0);
+    let mut statement = db.prepare("SELECT position, ciphertext FROM event_inbox WHERE subscription_id=?1 AND position>?2 ORDER BY position")?;
+    let rows = statement.query_map(params![subscription_id, floor], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))?;
+    let (mut open, mut next_floor, mut contiguous) = (Vec::new(), floor, true);
+    for row in rows {
+        let (position, bytes) = row?;
+        let item: Delivery = crypto::decrypt_json(key, INBOX_KIND, &bytes)?;
+        if matches!(item.state, DeliveryState::Done | DeliveryState::Filtered | DeliveryState::Coalesced) {
+            if contiguous {
+                next_floor = position;
+            }
+        } else {
+            contiguous = false;
+            open.push(item);
+        }
+    }
+    app.channels.inbox_floor.lock().unwrap().insert(subscription_id.to_string(), next_floor);
+    Ok(open)
+}
+
 fn delivery(db: &Connection, key: &crate::keys::AccountKeys, id: &str) -> anyhow::Result<Delivery> {
     let bytes: Vec<u8> = db
         .query_row(
@@ -253,6 +280,12 @@ fn save_delivery(db: &Connection, key: &crate::keys::AccountKeys, item: &Deliver
     db.execute("INSERT INTO event_inbox (id, subscription_id, ciphertext) VALUES (?1, ?2, ?3) ON CONFLICT(id) DO UPDATE SET ciphertext=excluded.ciphertext",
         params![item.id, item.envelope.subscription_id, crypto::encrypt_json(key, INBOX_KIND, item)?])?;
     Ok(())
+}
+
+/// A channel's delivery id for a message, for a test that hands it over again.
+#[cfg(test)]
+pub(crate) fn delivery_id_for_test(subscription_id: &str, chat_id: &str, message_id: &str) -> String {
+    delivery_key(&Envelope { version: 1, subscription_id: subscription_id.into(), generation: 1, delivery_id: format!("{chat_id}:{message_id}"), occurred_at: 0, event_type: String::new(), payload: String::new(), signature: String::new() })
 }
 
 fn delivery_key(envelope: &Envelope) -> String {
@@ -406,6 +439,9 @@ pub fn serve(app: &Arc<App>, method: &str, body: &Value) -> anyhow::Result<Value
     if method == "events.create" || method == "events.update" {
         validate_config(app, &serde_json::from_value(body["config"].clone())?)?;
     }
+    // What the owner changes about a channel's intake reaches the Tasks that run under it.
+    #[cfg(feature = "runner")]
+    let intake_before = (method == "events.update").then(|| channel_config(app, id).ok()).flatten();
     if matches!(
         method,
         "events.pause" | "events.resume" | "events.reconnect" | "events.route"
@@ -520,6 +556,12 @@ pub fn serve(app: &Arc<App>, method: &str, body: &Value) -> anyhow::Result<Value
         }
         "events.retry" | "events.discard" => {
             let mut item = delivery(&tx, &key, id)?;
+            // An intake channel's ordinary turn settled as it ended, and its message isn't held. A
+            // Resume from its limits has nothing to put back.
+            #[cfg(feature = "runner")]
+            if item.state == DeliveryState::Done && method == "events.retry" && crate::intake::spec_of(&subscription(&tx, &key, &item.envelope.subscription_id)?.config).is_some() {
+                return Ok(json!({"id": item.id, "state": item.state}));
+            }
             if !matches!(
                 item.state,
                 DeliveryState::Failed | DeliveryState::Uncertain | DeliveryState::Pending
@@ -555,6 +597,12 @@ pub fn serve(app: &Arc<App>, method: &str, body: &Value) -> anyhow::Result<Value
     if let Some(source) = deleted.and_then(|bot_id| dm_source(app, &bot_id)) {
         crate::attention::settle(app, &source, &held_prefix(id));
         crate::attention::settle(app, &source, &auth_prefix(id));
+    }
+    #[cfg(feature = "runner")]
+    if let Some(before) = intake_before {
+        if let Ok(after) = channel_config(app, id) {
+            crate::intake::intake_changed(app, id, crate::intake::spec_of(&before), crate::intake::spec_of(&after));
+        }
     }
     if method != "events.list" {
         channels_changed(app);
@@ -1029,7 +1077,11 @@ pub fn finished(
     }
     let mut sub = subscription(&tx, &key, &item.envelope.subscription_id)?;
     let stopped = stopped && sub.config.is_channel();
-    let success = stopped || outcome != crate::runtime::TurnOutcome::Skipped;
+    let finished_well = stopped || outcome != crate::runtime::TurnOutcome::Skipped;
+    // An intake channel's ordinary turn holds nobody else's message: the owner hears instead.
+    let intake_on = crate::intake::spec_of(&sub.config).is_some();
+    let success = finished_well || intake_on;
+    let conversation = job.chat_id.clone();
     item.state = if success {
         DeliveryState::Done
     } else {
@@ -1060,6 +1112,9 @@ pub fn finished(
     if !success {
         report_held(app, &sub.id);
     }
+    if !finished_well && intake_on {
+        crate::intake::reply_failed(app, &conversation, None, &sub.config.bot_id, &sub.config.name, &item.id);
+    }
     Ok(())
 }
 
@@ -1074,10 +1129,22 @@ pub fn recover(app: &App) -> anyhow::Result<()> {
         item.state = DeliveryState::Pending;
         save_delivery(&tx, &key, &item)?;
     }
+    let mut failed_replies = Vec::new();
     for mut item in deliveries(&tx, &key)?
         .into_iter()
         .filter(|d| d.state == DeliveryState::Running)
     {
+        let sub = subscription(&tx, &key, &item.envelope.subscription_id)?;
+        // An intake channel's ordinary turn holds nobody else's message: the owner hears instead.
+        if crate::intake::spec_of(&sub.config).is_some() {
+            let conversation = serde_json::from_str::<Value>(&item.envelope.payload).ok().and_then(|payload| payload["chat_id"].as_str().map(str::to_string)).unwrap_or_default();
+            failed_replies.push((conversation, sub.config.bot_id.clone(), sub.config.name.clone(), item.id.clone()));
+            item.state = DeliveryState::Done;
+            item.envelope.payload.clear();
+            item.task = None;
+            save_delivery(&tx, &key, &item)?;
+            continue;
+        }
         item.state = DeliveryState::Uncertain;
         save_delivery(&tx, &key, &item)?;
         held.insert(item.envelope.subscription_id.clone());
@@ -1086,6 +1153,9 @@ pub fn recover(app: &App) -> anyhow::Result<()> {
     drop(db);
     for sub_id in held {
         report_held(app, &sub_id);
+    }
+    for (conversation, bot_id, name, id) in failed_replies {
+        crate::intake::reply_failed(app, &conversation, None, &bot_id, &name, &id);
     }
     Ok(())
 }
@@ -1197,15 +1267,31 @@ pub fn tick(app: &Arc<App>) -> anyhow::Result<()> {
         if serde_json::to_value(&current.config)? != serde_json::to_value(&sub.config)? {
             continue;
         }
-        let mut items = deliveries_of(&tx, &key, &sub.id)?;
-        // Failures/uncertain effects block later deliveries until explicit retry or discard.
-        if items.iter().any(|d| {
+        let mut items = open_deliveries_of(app, &tx, &key, &sub.id)?;
+        let intake_on = crate::intake::spec_of(&sub.config).is_some();
+        if intake_on {
+            // Ordinary turns wait their turn apart, one per conversation and only so many at once, while
+            // assessing goes on: nobody's other messages wait on them.
+            let running: Vec<String> = items.iter().filter(|d| d.state == DeliveryState::Running).filter_map(|d| serde_json::from_str::<Value>(&d.envelope.payload).ok()?["chat_id"].as_str().map(str::to_string)).collect();
+            let next = items.iter().find(|d| d.state == DeliveryState::Replying && !running.iter().any(|chat| Some(chat.as_str()) == serde_json::from_str::<Value>(&d.envelope.payload).ok().and_then(|p| p["chat_id"].as_str().map(str::to_string)).as_deref())).map(|d| d.id.clone());
+            let start_reply = next.filter(|_| running.len() < crate::intake::MAX_REPLY_TURNS);
+            if let Some(delivery_id) = start_reply {
+                tx.commit()?;
+                drop(db);
+                turn_from_intake(app, &sub.id, &delivery_id)?;
+                continue;
+            }
+            if items.iter().any(|d| d.state == DeliveryState::Assessing) {
+                continue;
+            }
+        } else if items.iter().any(|d| {
             d.envelope.subscription_id == sub.id
                 && matches!(
                     d.state,
                     DeliveryState::Assessing | DeliveryState::Running | DeliveryState::Failed | DeliveryState::Uncertain
                 )
         }) {
+            // Failures/uncertain effects block later deliveries until explicit retry or discard.
             continue;
         }
         if crate::intake::backing_off(app, &sub.id) {
@@ -1231,22 +1317,39 @@ pub fn tick(app: &Arc<App>) -> anyhow::Result<()> {
                 }
             },
         };
-        // A channel with intake reads the message before anything runs: this conversation's
-        // waiting messages together, so a burst costs one request, one batch per channel at a time.
-        if crate::intake::spec_of(&sub.config).is_some() {
+        // A channel with intake reads the message before anything runs: one person's waiting messages
+        // in this conversation together, as one exchange, up to anyone else's next word. A batch has one
+        // sender, so nobody's words borrow another's standing, and a message handed back goes alone.
+        if intake_on {
             let conversation = chat_id;
-            let mut batch = Vec::new();
+            let mut batch: Vec<crate::intake::Delivered> = Vec::new();
             for item in items.iter_mut().filter(|d| d.state == DeliveryState::Pending) {
                 let delivered = crate::intake::Delivered::of(&item.id, &serde_json::from_str::<Value>(&item.envelope.payload).unwrap_or_default());
-                if delivered.chat_id == conversation && batch.len() < crate::intake::MAX_BATCH {
-                    item.state = DeliveryState::Assessing;
-                    save_delivery(&tx, &key, item)?;
-                    batch.push(delivered);
+                if delivered.chat_id != conversation {
+                    continue;
                 }
+                // A forward stands alone too: those are someone else's words, whoever passed them on.
+                let joins = batch.first().is_none_or(|first| first.sender_id == delivered.sender_id && first.forwarded == delivered.forwarded && !first.forwarded && first.handed_back.is_none() && delivered.handed_back.is_none());
+                if !joins || batch.len() >= crate::intake::MAX_BATCH {
+                    break;
+                }
+                item.state = DeliveryState::Assessing;
+                save_delivery(&tx, &key, item)?;
+                batch.push(delivered);
             }
             tx.commit()?;
             drop(db);
-            tokio::spawn(crate::intake::assess_batch(app.clone(), sub.id.clone(), sub.config.clone(), batch));
+            let ids: Vec<String> = batch.iter().map(|item| item.delivery_id.clone()).collect();
+            let assessing = tokio::spawn(crate::intake::assess_batch(app.clone(), sub.id.clone(), sub.config.clone(), batch));
+            // Should the assessment panic, its messages go back in the queue, not stuck until a restart.
+            let app = app.clone();
+            tokio::spawn(async move {
+                if assessing.await.is_err() {
+                    if let Err(error) = requeue_assessed(&app, &ids) {
+                        tracing::error!(%error, "queueing what intake could not decide");
+                    }
+                }
+            });
             continue;
         }
         // A routine on events runs its task as it stands now.
@@ -1327,6 +1430,20 @@ pub fn requeue_assessed(app: &App, ids: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Intake left a message to the channel's own task: its turn starts when there is room, one per
+/// conversation and only so many at once, and a restart keeps its place.
+#[cfg(feature = "runner")]
+pub fn queue_reply(app: &App, delivery_id: &str) -> anyhow::Result<()> {
+    let key = dek(app)?;
+    let db = app.store.connection.lock().unwrap();
+    let mut item = delivery(&db, &key, delivery_id)?;
+    if item.state == DeliveryState::Assessing {
+        item.state = DeliveryState::Replying;
+        save_delivery(&db, &key, &item)?;
+    }
+    Ok(())
+}
+
 /// Intake left a message to the channel's own task: it starts the ordinary turn the channel gives
 /// a message without intake, unattended and under the same checks.
 #[cfg(feature = "runner")]
@@ -1341,7 +1458,7 @@ pub fn turn_from_intake(app: &Arc<App>, channel_id: &str, delivery_id: &str) -> 
     let tx = db.transaction()?;
     let sub = subscription(&tx, &key, channel_id)?;
     let mut item = delivery(&tx, &key, delivery_id)?;
-    if item.state != DeliveryState::Assessing {
+    if !matches!(item.state, DeliveryState::Assessing | DeliveryState::Replying) {
         return Ok(());
     }
     let Some((chat_id, message_id, data)) = conversation_of(&conversations, &item.envelope) else {
@@ -1386,7 +1503,9 @@ fn conversation_of(conversations: &[String], event: &Envelope) -> Option<(String
     let payload: Value = serde_json::from_str(&event.payload).ok()?;
     let chat_id = conversations.iter().find(|id| Some(id.as_str()) == payload["chat_id"].as_str())?;
     let message_id = payload["message_id"].as_str()?.to_string();
-    Some((chat_id.clone(), message_id, crate::channels::cue(payload["external_id"].as_str().unwrap_or_default())))
+    // A conversation that holds a whole Slack channel: the turn answers in the message's thread.
+    let thread = if event.event_type == "slack.message" { payload["thread_id"].as_str().unwrap_or_default() } else { "" };
+    Some((chat_id.clone(), message_id, crate::channels::cue(payload["external_id"].as_str().unwrap_or_default(), thread)))
 }
 
 pub fn event_cue(event: &Envelope) -> String {

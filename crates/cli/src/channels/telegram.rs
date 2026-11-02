@@ -264,6 +264,7 @@ pub fn incoming(account_id: &str, me: &Identity, update: &Value) -> Option<Incom
         sender,
         sender_id: id_text(&from["id"]).unwrap_or_default(),
         addressed: false,
+        forwarded: message.get("forward_origin").is_some() || message.get("forward_from").is_some() || message.get("forward_from_chat").is_some(),
         text,
         date: message["date"].as_i64().unwrap_or(0),
         mentions_bot,

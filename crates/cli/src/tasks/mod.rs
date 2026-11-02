@@ -4,6 +4,12 @@
 mod execution;
 mod model;
 pub use execution::{start, RESTARTED_DURING_RUN};
+#[cfg(feature = "runner")]
+pub(crate) use execution::run_starts;
+#[cfg(test)]
+pub(crate) use execution::wait_on_background_for_test;
+#[cfg(feature = "runner")]
+pub(crate) use execution::{background_ended, reply_of, BackgroundEnd};
 pub(crate) use execution::{admit, claim, finished};
 #[cfg(test)]
 use execution::{budget_block_reason, deliver_finish, recover, Finish};
@@ -275,6 +281,8 @@ fn mutate_with(app: &Arc<App>, method: &str, params: &Value, mandate: Option<cra
                     task.revision
                 ));
             }
+            // What the user deleted is no longer linked, and no Task freezes over it.
+            task.chat_ids.retain(|id| app.chat(id).is_some());
             let before = task.clone();
             if method == "tasks.update" {
                 patch(app, &mut task, params)?;
@@ -310,6 +318,7 @@ fn mutate_with(app: &Arc<App>, method: &str, params: &Value, mandate: Option<cra
         (task, job, cancel)
     };
     changed(app, &task);
+    stop_what_a_cancelled_task_left(app, &task);
     if let Some(run) = cancel {
         cancel_run(app, &run);
     }
@@ -475,14 +484,18 @@ fn validate(app: &App, task: &Task, before: Option<&Task>) -> Result<(), String>
             "Task goal, next action, or acceptance criteria exceed their size limit.".into(),
         );
     }
-    let bot = app.bot(&task.owner_bot_id).ok_or("Unknown owning bot")?;
-    if bot.runner_id != task.runner_id {
-        return Err("Task Runner must match the owning bot's assigned Runner.".into());
+    // What the Task was for can be gone, and it must still be possible to close.
+    if !task.state.terminal() {
+        let bot = app.bot(&task.owner_bot_id).ok_or("Unknown owning bot")?;
+        if bot.runner_id != task.runner_id {
+            return Err("Task Runner must match the owning bot's assigned Runner.".into());
+        }
+        if !app.device(&task.runner_id).is_some_and(|d| d.is_runner()) {
+            return Err("Task must be assigned to a Runner.".into());
+        }
     }
-    if !app.device(&task.runner_id).is_some_and(|d| d.is_runner()) {
-        return Err("Task must be assigned to a Runner.".into());
-    }
-    if task.chat_ids.is_empty()
+    // A chat can be deleted out from under a Task, which must still be possible to close.
+    if (task.chat_ids.is_empty() && !task.state.terminal())
         || task.chat_ids.len() > 64
         || task.dependencies.len() > 64
         || task.links.len() > 64
@@ -490,7 +503,7 @@ fn validate(app: &App, task: &Task, before: Option<&Task>) -> Result<(), String>
     {
         return Err("Task needs linked chats and at most 64 chats/dependencies/links and 128 evidence references.".into());
     }
-    let mut has_run_chat = false;
+    let mut has_run_chat = task.state.terminal();
     for id in &task.chat_ids {
         let chat = app
             .chat(id)
@@ -762,6 +775,15 @@ fn commit(
     Ok(())
 }
 
+#[cfg(feature = "runner")]
+fn stop_what_a_cancelled_task_left(app: &Arc<App>, task: &Task) {
+    if task.mandate.is_some() && task.state == TaskState::Cancelled {
+        crate::intake::stop_background(app, task);
+    }
+}
+#[cfg(not(feature = "runner"))]
+fn stop_what_a_cancelled_task_left(_app: &Arc<App>, _task: &Task) {}
+
 fn changed(app: &App, task: &Task) {
     app.emit(crate::events::Event::TaskChanged { task: task.clone() });
     if app.this_device_id().as_deref() == Some(task.authority_runner_id.as_str()) {
@@ -858,7 +880,9 @@ pub(crate) fn context(app: &App, bot_id: &str, chat_id: &str) -> Option<String> 
     let mut tasks = list(app)
         .unwrap_or_default()
         .into_iter()
-        .filter(|t| !t.state.terminal() && (t.owner_bot_id == bot_id || t.chat_ids.iter().any(|id| id == chat_id)))
+        // What a channel took on stays with its own chats: its goal came from outside words, which no
+        // other turn of the bot should read, and a busy group would crowd out the bot's real work.
+        .filter(|t| !t.state.terminal() && (t.chat_ids.iter().any(|id| id == chat_id) || (t.owner_bot_id == bot_id && t.mandate.is_none())))
         .collect::<Vec<_>>();
     if tasks.is_empty() {
         return None;
@@ -868,7 +892,7 @@ pub(crate) fn context(app: &App, bot_id: &str, chat_id: &str) -> Option<String> 
     let mut out = format!("{CONTEXT_MARKER} use tasks get/list for full records).\n");
     for task in tasks.iter().take(20) {
         let summary = json!({"id":task.id,"revision":task.revision,"owner_bot_id":task.owner_bot_id,"runner_id":task.runner_id,"state":task.state,
-            "goal":task.goal,"acceptance_criteria":task.acceptance_criteria,"dependencies":task.dependencies,"next_action":task.next_action,"reason":task.reason,
+            "from_outside":task.mandate.is_some(),"goal":task.goal,"acceptance_criteria":task.acceptance_criteria,"dependencies":task.dependencies,"next_action":task.next_action,"reason":task.reason,
             "result":task.result,"evidence":task.evidence,"active_run":task.active_run});
         let line = summary.to_string();
         if out.len() + line.len() > 32_000 {

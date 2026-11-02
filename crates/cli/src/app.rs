@@ -1908,7 +1908,7 @@ impl App {
         };
         // No list shows a Task's work chat, so nothing there marks anything unread or alerts:
         // a result reaches people in their thread, and a blocker reaches the owner in Attention.
-        if work_chat {
+        if work_chat && message.notification != Some(crate::attention::Notification::Urgent) {
             message.notification = Some(crate::attention::Notification::Quiet);
         }
         let _order = self.message_order.lock().unwrap();

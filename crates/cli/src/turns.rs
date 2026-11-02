@@ -104,15 +104,20 @@ async fn run_budgeted_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) 
     // from the message that started it, and a run's task as it stood when the run began. An
     // event's turn opens with "Event · Name"; its task is the one its inbox admitted, and a
     // routine it targets is not run.
+    if crate::intake::wake_refused(app, job) {
+        return TurnOutcome::Skipped;
+    }
+    let mandated = crate::intake::mandated_task(app, job);
     let event = if job.kind == "event" {
         match crate::event_triggers::task_for_job(app, job) {
             Ok(event) => Some(event),
             Err(error) => { tracing::warn!(%error, "event turn was not admitted"); return TurnOutcome::Skipped; }
         }
-    } else if job.kind == "task" {
-        // A Task a channel accepted runs unattended, under its Mandate's words.
-        crate::intake::task_event(app, job)
-    } else { None };
+    } else {
+        // A Task a channel took on runs unattended under its Mandate's words, and so does what a coding
+        // agent or a command it left going wakes.
+        mandated.as_ref().and_then(|task| crate::intake::task_event(app, job, task))
+    };
     let mut trigger = Trigger { message_id: job.trigger_message_id.clone(), routine: None, event: event.clone() };
     if let Some(event) = &event {
         // A channel's turn opens with the contact's message itself.
@@ -159,7 +164,12 @@ async fn run_budgeted_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) 
     };
     let Some(chat) = app.chat(&job.chat_id) else { return TurnOutcome::Skipped };
     // A channel's message: its chat sees the bot typing until the reply goes out or the turn ends.
-    let _typing = event.as_ref().filter(|event| event.message_id.is_some()).and_then(|_| crate::channels::typing(app, &chat, &job.id, &cancel));
+    // Not for work nobody asked for, which may be working silently, or what wakes a Task later.
+    let shows_typing = match &mandated {
+        Some(task) => job.kind == "task" && task.mandate.as_ref().is_some_and(|mandate| mandate.strength == crate::intake::Strength::Explicit),
+        None => true,
+    };
+    let _typing = event.as_ref().filter(|event| event.message_id.is_some() && shows_typing).and_then(|_| crate::channels::typing(app, &chat, &job.id, &cancel));
 
     let workdir = bot.working_directory(&app.config.home);
     if let Err(error) = std::fs::create_dir_all(&workdir) {
@@ -195,7 +205,7 @@ async fn run_budgeted_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) 
     if let Some(event) = &event {
         if event.message_id.is_some() {
             system_prompt.push_str(&format!("\nThis is an unattended turn of your channel \"{}\": a message came in. The owner configured this task for each message:\n{}\nNobody answers questions now. Use stage_review for anything that should wait for the user. Answer PASS when the user needs nothing from this turn.\n", event.name, event.prompt));
-            if let Some(task) = job.task_context.as_ref().filter(|_| job.kind == "task") {
+            if let Some(task) = &mandated {
                 system_prompt.push_str(&crate::intake::run_prompt(task));
             }
         } else {
@@ -218,14 +228,14 @@ async fn run_budgeted_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) 
         Arc::new(crate::channels::ChannelsTool { app: app.clone(), bot: bot.clone(), user_started: matches!(job.kind.as_str(), "turn" | "room_turn") }),
         Arc::new(crate::feedback::FeedbackTool { app: app.clone(), bot_id: bot.id.clone() }),
         Arc::new(crate::review_execution::StageReview { app: app.clone(), bot: bot.clone(), chat_id: chat.meta.id.clone(), trigger: trigger.clone() }),
-        Arc::new(crate::tasks::TasksTool { app: app.clone(), bot_id: bot.id.clone(), chat_id: chat.meta.id.clone(), job_id: job.id.clone() }),
+        Arc::new(crate::tasks::TasksTool { app: app.clone(), bot_id: bot.id.clone(), chat_id: chat.meta.id.clone(), job_id: job.id.clone(), user_started: matches!(job.kind.as_str(), "turn" | "room_turn") }),
         Arc::new(crate::outputs::PublishOutputTool { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone(), workdir: workdir.clone() }),
         Arc::new(SearchPlugins { app: app.clone() }),
         Arc::new(InstallPlugin { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone(), unattended }),
         Arc::new(ConnectPlugin { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone() }),
         Arc::new(crate::secrets::RequestSecret { app: app.clone(), chat_id: chat.meta.id.clone(), bot: bot.clone(), unattended }),
     ];
-    if let Some(task) = job.task_context.as_ref().filter(|task| job.kind == "task" && task.mandate.is_some()) {
+    if let Some(task) = &mandated {
         tools.push(Arc::new(crate::intake::TaskHandback { app: app.clone(), task_id: task.id.clone() }));
         tools.push(Arc::new(crate::intake::TaskStop { app: app.clone(), task_id: task.id.clone() }));
     }
@@ -359,7 +369,7 @@ async fn run_budgeted_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) 
     };
     let notes = TurnNotes {
         recent_work: recent_work_brief(app, &bot, &chat.meta.id, now_secs() as i64),
-        cue: if job.kind == "room_turn" { Some(room_turn_cue(app, &chat, &bot, job)) } else { event.as_ref().map(|e| e.data.clone()).or(command_end.clone()).or(check_found).map(|cue| without_secrets(app, cue)) },
+        cue: if job.kind == "room_turn" { Some(room_turn_cue(app, &chat, &bot, job)) } else { event.as_ref().map(|e| e.data.clone()).filter(|data| !data.is_empty()).or(command_end.clone()).or(check_found).map(|cue| without_secrets(app, cue)) },
         setup: job.setup.as_ref().map(|setup| setup_cue(app, setup)),
     };
     let (mut messages, mut cache_points) = with_turn_notes(messages, &notes);
@@ -678,6 +688,13 @@ pub(crate) fn steer_contact(app: &App, message: &Message) -> bool {
     let Ok(data) = serde_json::to_value(message) else { return false };
     queue.push(AgentMessage::Custom { kind: STEERING_MESSAGE_KIND.into(), data, timestamp: (message.created_at * 1000.0) as u64 });
     true
+}
+
+/// Tells a running turn in this chat something from Lorca at its next step, if one is running.
+pub(crate) fn steer_note(app: &App, chat_id: &str, note: &str) {
+    if let Some(queue) = app.steering_queue(chat_id) {
+        queue.push(user(note, (crate::config::now_secs() * 1000.0) as u64));
+    }
 }
 
 /// A message from someone on a channel as a model reads it: their words marked as data wherever
@@ -1840,7 +1857,11 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
             prompt.push_str("\nThis exchange is wrapping up: PASS unless something essential is missing.\n");
         }
     } else if chat.meta.channel.is_some() {
-        prompt.push_str("\nThis is one of your channel's conversations, described below. The user reads it here.\n");
+        if chat.meta.channel.as_ref().is_some_and(|channel| channel.task_id.is_some()) {
+            prompt.push_str("\nThis chat is a task's own, described below. Nobody in the thread reads it.\n");
+        } else {
+            prompt.push_str("\nThis is one of your channel's conversations, described below. The user reads it here.\n");
+        }
     } else {
         prompt.push_str(
             "\nThis is your direct chat with the user. You always answer here. When the user mentions another bot with @, \
@@ -2120,7 +2141,7 @@ const RECENT_WORK_MAX_CHARS: usize = 1_400;
 /// transcript, since in the system prompt it would change the prompt each time the bot speaks
 /// elsewhere. `None` when there is nothing to tell.
 fn recent_work_brief(app: &App, bot: &Bot, current_chat_id: &str, now: i64) -> Option<String> {
-    let chats: Vec<Chat> = app.state.lock().unwrap().chats.iter().filter(|c| c.meta.id != current_chat_id && c.meta.bot_ids.contains(&bot.id)).cloned().collect();
+    let chats: Vec<Chat> = app.state.lock().unwrap().chats.iter().filter(|c| c.meta.id != current_chat_id && c.meta.bot_ids.contains(&bot.id) && !c.meta.channel.as_ref().is_some_and(|channel| channel.task_id.is_some())).cloned().collect();
     let mut rows: Vec<(i64, String)> = Vec::new();
     for chat in &chats {
         let Some(message) = app.store.last_bot_text(&chat.meta.id, &bot.id).unwrap_or(None) else {
