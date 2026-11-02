@@ -17,6 +17,10 @@ pub fn chat_source(app: &App, chat: &Chat) -> String {
             chat.meta.bot_ids.iter().map(|id| name_of(app, id)).collect::<Vec<_>>().join(", ")
         });
         format!("group \"{title}\"")
+    } else if chat.meta.channel.as_ref().is_some_and(|channel| channel.task_id.is_some()) {
+        "a task a channel took on".into()
+    } else if chat.meta.channel.is_some() {
+        "a channel's conversation".into()
     } else {
         "your chat with the user".into()
     }
@@ -119,6 +123,8 @@ pub fn cancel_chat(app: &Arc<App>, chat_id: &str) {
     {
         app.shell_sessions.stop_chat(chat_id);
         app.coding_agents.stop_chat(app, chat_id);
+        // A Task waiting on what it left running holds this as a stop, as one whose run was going does.
+        crate::intake::stopped_in_app(app, chat_id);
     }
     for (job_id, runner_id) in app.cancel_chat(chat_id) {
         let Some(runner) = app.device(&runner_id).filter(|runner| !runner.box_pubkey.is_empty()) else { continue };
@@ -258,7 +264,7 @@ impl TurnOutcome {
     }
 }
 
-fn begin_job(
+pub(crate) fn begin_job(
     app: &App,
     job_id: &str,
     chat_id: &str,
@@ -301,7 +307,7 @@ fn begin_job(
     true
 }
 
-fn finish_job(app: &App, job_id: &str) {
+pub(crate) fn finish_job(app: &App, job_id: &str) {
     let job = app.running_jobs.lock().unwrap().remove(job_id);
     if job.is_some_and(|job| job.runner_id.is_some()) {
         if let Err(error) = app.store.remove_sent_job(job_id) {
@@ -656,14 +662,22 @@ pub fn spawn_local_job(app: Arc<App>, job: Job, remote_blob_id: Option<String>) 
                 result => {
                     if let Err(error) = result { app.notice(&job.chat_id, format!("Task run did not start: {error}")); }
                     finish_job(&app, &job.id);
-                    crate::tasks::finished(&app, &job, TurnOutcome::Skipped).await;
+                    crate::tasks::finished(&app, &job, TurnOutcome::Skipped, false).await;
                     if let Some(id) = remote_blob_id { crate::sync::delete_remote_blob(&app, &id).await; }
                     return;
                 }
             }
         }
         let outcome = run_job_started(&app, job.clone(), cancel.clone()).await;
-        if job.kind == "task" { crate::tasks::finished(&app, &job, if cancel.is_cancelled() { TurnOutcome::Skipped } else { outcome }).await; }
+        #[cfg(feature = "runner")]
+        if matches!(job.kind.as_str(), "agent" | "command") {
+            crate::intake::wake_finished(&app, &job, outcome, cancel.is_cancelled()).await;
+        }
+        if job.kind == "task" { crate::tasks::finished(&app, &job, if cancel.is_cancelled() { TurnOutcome::Skipped } else { outcome }, cancel.is_cancelled()).await; }
+        #[cfg(feature = "runner")]
+        if job.kind == "task" {
+            crate::intake::run_ended(&app);
+        }
         // An event turn settles its delivery; it is not a run of the routine it targets.
         if job.kind == "event" {
             // The event turn of a routine on events is its run; the delivery's event is read

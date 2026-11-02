@@ -97,6 +97,8 @@ fn fixture(remote: bool) -> Fixture {
             history: Vec::new(),
             created_at: now_secs(),
             updated_at: now_secs(),
+            mandate: None,
+            follows: Vec::new(),
         },
     )
     .unwrap();

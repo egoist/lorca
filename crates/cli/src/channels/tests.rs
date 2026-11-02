@@ -200,9 +200,9 @@ async fn a_channel_is_the_bots_own_and_checked_on_its_runner() {
     assert!(run_tool(&tool(app, false), json!({ "action": "create", "listen": { "mentions": true }, "task": "Answer" })).await.unwrap_err().contains("No Telegram or Slack account"));
     let telegram = account(app, TELEGRAM, "Community", &[(telegram::TOKEN, "1:abc")]);
     let gmail = crate::plugins::accounts::install(app, crate::marketplace::current(app).plugin("gmail").cloned().unwrap(), "marketplace", Some("Work")).unwrap();
-    let wrong = config_for(&bot(app).id, TELEGRAM, "Wrong", "Answer", ChannelSpec { account_id: gmail.id.clone(), chats: vec![], listen: Listen { mentions: true, ..Listen::default() } });
+    let wrong = config_for(&bot(app).id, TELEGRAM, "Wrong", "Answer", ChannelSpec { account_id: gmail.id.clone(), chats: vec![], listen: Listen { mentions: true, ..Listen::default() }, intake: None });
     assert!(crate::event_triggers::serve(app, "events.create", &json!({ "config": wrong })).unwrap_err().to_string().contains("Telegram account"));
-    let nothing = config_for(&bot(app).id, TELEGRAM, "Nothing", "Answer", ChannelSpec { account_id: telegram.clone(), chats: vec![], listen: Listen::default() });
+    let nothing = config_for(&bot(app).id, TELEGRAM, "Nothing", "Answer", ChannelSpec { account_id: telegram.clone(), chats: vec![], listen: Listen::default(), intake: None });
     assert!(crate::event_triggers::serve(app, "events.create", &json!({ "config": nothing })).is_err(), "a filter must take something");
     assert!(run_tool(&tool(app, true), json!({ "action": "create", "account": "Telegram · Community", "listen": { "every": true }, "task": "Answer" })).await.is_err(), "a message's turn cannot open a channel");
     let made = run_tool(&tool(app, false), json!({ "action": "create", "account": "Telegram · Community", "listen": { "mentions": true, "tags": ["#Feedback"] }, "task": "File feedback" })).await.unwrap();
@@ -287,7 +287,7 @@ async fn messages_land_in_their_conversation_once_and_paused_channels_take_none(
     assert_eq!(ingest(app, &old).unwrap(), 0, "a message from before the channel listened is left out");
     crate::event_triggers::serve(app, "events.pause", &json!({ "id": channel.id })).unwrap();
     assert_eq!(ingest(app, &Incoming { message_id: "60".into(), ..sample(&account_id, "#feedback while paused") }).unwrap(), 0);
-    let only = config_for(&bot(app).id, TELEGRAM, "Beta", "File it", ChannelSpec { account_id: account_id.clone(), chats: vec![ChannelChat { id: "-2002".into(), title: "Beta".into() }], listen: Listen { every: true, ..Listen::default() } });
+    let only = config_for(&bot(app).id, TELEGRAM, "Beta", "File it", ChannelSpec { account_id: account_id.clone(), chats: vec![ChannelChat { id: "-2002".into(), title: "Beta".into() }], listen: Listen { every: true, ..Listen::default() }, intake: None });
     crate::event_triggers::serve(app, "events.create", &json!({ "config": only })).unwrap();
     assert_eq!(ingest(app, &Incoming { message_id: "61".into(), ..sample(&account_id, "elsewhere") }).unwrap(), 0, "a channel with chats listens only there");
     assert!(app.channels.statuses().iter().all(|status| status.requests.is_empty()), "a chat another channel of the account listens in does not ask");

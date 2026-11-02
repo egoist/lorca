@@ -262,6 +262,9 @@ pub fn incoming(account_id: &str, me: &Identity, update: &Value) -> Option<Incom
         message_id: id_text(&message["message_id"])?,
         reply_to: (!opens_topic).then(|| id_text(&reply["message_id"])).flatten(),
         sender,
+        sender_id: id_text(&from["id"]).unwrap_or_default(),
+        addressed: false,
+        forwarded: message.get("forward_origin").is_some() || message.get("forward_from").is_some() || message.get("forward_from_chat").is_some(),
         text,
         date: message["date"].as_i64().unwrap_or(0),
         mentions_bot,
@@ -491,6 +494,9 @@ impl crate::plugins::builtin::Service for Server {
                 }
                 if super::holds_secret(app, text) {
                     return text_result(super::SECRET_REFUSED, true);
+                }
+                if crate::intake::reply_too_long(app, &context, text) {
+                    return text_result(crate::intake::REPLY_TOO_LONG, true);
                 }
                 let reply_to = id_text(&args["reply_to_message_id"]).filter(|id| !id.is_empty());
                 let thread = id_text(&args["message_thread_id"]).filter(|id| !id.is_empty());

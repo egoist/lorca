@@ -3,7 +3,13 @@
 //! sync content use the account key. Remote mutations fail explicitly when authority is offline.
 mod execution;
 mod model;
-pub use execution::start;
+pub use execution::{start, RESTARTED_DURING_RUN};
+#[cfg(feature = "runner")]
+pub(crate) use execution::run_starts;
+#[cfg(test)]
+pub(crate) use execution::wait_on_background_for_test;
+#[cfg(feature = "runner")]
+pub(crate) use execution::{background_ended, reply_of, BackgroundEnd};
 pub(crate) use execution::{admit, claim, finished};
 #[cfg(test)]
 use execution::{budget_block_reason, deliver_finish, recover, Finish};
@@ -198,13 +204,71 @@ fn receipt(app: &App, method: &str, params: &Value) -> Result<Option<Task>, Stri
 }
 
 fn mutate(app: &Arc<App>, method: &str, params: &Value) -> Result<Value, String> {
+    mutate_with(app, method, params, None)
+}
+
+/// A Task a channel's intake accepted, with its Mandate, which no other way of making or editing a
+/// Task can set. An identical retry returns the Task it made.
+#[cfg(feature = "runner")]
+pub(crate) fn create_mandated(app: &Arc<App>, params: &Value, mandate: crate::intake::Mandate) -> Result<Task, String> {
+    serde_json::from_value(mutate_with(app, "tasks.create", params, Some(mandate))?).map_err(err)
+}
+
+/// Starts a mandated Task's run in its work chat, on the message in `trigger` (its opening message
+/// when empty).
+#[cfg(feature = "runner")]
+pub(crate) fn run_mandated(app: &Arc<App>, task: &Task, request_id: &str, trigger: &str) -> Result<(), String> {
+    mutate(app, "tasks.run", &json!({ "id": task.id, "expected_revision": task.revision, "request_id": request_id, "trigger_message_id": trigger })).map(|_| ())
+}
+
+#[cfg(feature = "runner")]
+pub(crate) fn requeue_mandated(app: &Arc<App>, task: &Task, request_id: &str) -> Result<Task, String> {
+    serde_json::from_value(mutate(app, "tasks.update", &json!({ "id": task.id, "expected_revision": task.revision, "request_id": request_id, "state": "queued", "reason": null }))?).map_err(err)
+}
+
+#[cfg(feature = "runner")]
+pub(crate) fn cancel_mandated(app: &Arc<App>, task: &Task, reason: &str) -> Result<(), String> {
+    let request_id = format!("intake-stop-{}-{}", task.id, task.revision);
+    mutate(app, "tasks.update", &json!({ "id": task.id, "expected_revision": task.revision, "request_id": request_id, "state": "cancelled", "reason": reason })).map(|_| ())
+}
+
+/// Makes a Task follow one more conversation, also during its run: what it follows lends it no
+/// authority, so this is not an edit of its scope.
+#[cfg(feature = "runner")]
+pub(crate) fn follow_mandated(app: &Arc<App>, task_id: &str, conversation: &str) -> Result<(), String> {
+    let task = {
+        let _order = app.task_order.lock().unwrap();
+        let mut task = get(app, task_id)?;
+        authority_here(app, &task)?;
+        if task.follows.iter().any(|id| id == conversation) {
+            return Ok(());
+        }
+        let expected = task.revision;
+        task.follows.push(conversation.to_string());
+        if !task.chat_ids.iter().any(|id| id == conversation) {
+            task.chat_ids.push(conversation.to_string());
+        }
+        task.revision += 1;
+        task.updated_at = now_secs();
+        task.record_change();
+        commit(app, &task, Some(expected), None, None)?;
+        task
+    };
+    changed(app, &task);
+    Ok(())
+}
+
+fn mutate_with(app: &Arc<App>, method: &str, params: &Value, mandate: Option<crate::intake::Mandate>) -> Result<Value, String> {
     let (task, job, cancel) = {
         let _order = app.task_order.lock().unwrap();
         if let Some(task) = receipt(app, method, params)? {
             return Ok(json!(task));
         }
         let (mut task, expected, before) = if method == "tasks.create" {
-            (create(app, params)?, None, None)
+            let mut task = create(app, params)?;
+            task.follows = mandate.as_ref().map(|mandate| vec![mandate.chat_id.clone()]).unwrap_or_default();
+            task.mandate = mandate;
+            (task, None, None)
         } else {
             let mut task = get(app, &text(params, "id")?)?;
             authority_here(app, &task)?;
@@ -217,6 +281,8 @@ fn mutate(app: &Arc<App>, method: &str, params: &Value) -> Result<Value, String>
                     task.revision
                 ));
             }
+            // What the user deleted is no longer linked, and no Task freezes over it.
+            task.chat_ids.retain(|id| app.chat(id).is_some());
             let before = task.clone();
             if method == "tasks.update" {
                 patch(app, &mut task, params)?;
@@ -252,6 +318,7 @@ fn mutate(app: &Arc<App>, method: &str, params: &Value) -> Result<Value, String>
         (task, job, cancel)
     };
     changed(app, &task);
+    stop_what_a_cancelled_task_left(app, &task);
     if let Some(run) = cancel {
         cancel_run(app, &run);
     }
@@ -306,6 +373,8 @@ fn create(app: &App, params: &Value) -> Result<Task, String> {
         history: Vec::new(),
         created_at: now_secs(),
         updated_at: now_secs(),
+        mandate: None,
+        follows: Vec::new(),
     })
 }
 
@@ -415,14 +484,18 @@ fn validate(app: &App, task: &Task, before: Option<&Task>) -> Result<(), String>
             "Task goal, next action, or acceptance criteria exceed their size limit.".into(),
         );
     }
-    let bot = app.bot(&task.owner_bot_id).ok_or("Unknown owning bot")?;
-    if bot.runner_id != task.runner_id {
-        return Err("Task Runner must match the owning bot's assigned Runner.".into());
+    // What the Task was for can be gone, and it must still be possible to close.
+    if !task.state.terminal() {
+        let bot = app.bot(&task.owner_bot_id).ok_or("Unknown owning bot")?;
+        if bot.runner_id != task.runner_id {
+            return Err("Task Runner must match the owning bot's assigned Runner.".into());
+        }
+        if !app.device(&task.runner_id).is_some_and(|d| d.is_runner()) {
+            return Err("Task must be assigned to a Runner.".into());
+        }
     }
-    if !app.device(&task.runner_id).is_some_and(|d| d.is_runner()) {
-        return Err("Task must be assigned to a Runner.".into());
-    }
-    if task.chat_ids.is_empty()
+    // A chat can be deleted out from under a Task, which must still be possible to close.
+    if (task.chat_ids.is_empty() && !task.state.terminal())
         || task.chat_ids.len() > 64
         || task.dependencies.len() > 64
         || task.links.len() > 64
@@ -430,7 +503,7 @@ fn validate(app: &App, task: &Task, before: Option<&Task>) -> Result<(), String>
     {
         return Err("Task needs linked chats and at most 64 chats/dependencies/links and 128 evidence references.".into());
     }
-    let mut has_run_chat = false;
+    let mut has_run_chat = task.state.terminal();
     for id in &task.chat_ids {
         let chat = app
             .chat(id)
@@ -563,9 +636,9 @@ fn run(app: &App, task: &mut Task, params: &Value) -> Result<Job, String> {
             return Err(format!("Dependency {id} is not completed."));
         }
     }
-    let chat_id = params["chat_id"]
-        .as_str()
-        .map(str::to_string)
+    // A mandated Task runs in its own chat, wherever it was started from.
+    let chat_id = task.mandate.as_ref().map(|mandate| mandate.work_chat_id.clone())
+        .or_else(|| params["chat_id"].as_str().map(str::to_string))
         .or_else(|| {
             task.chat_ids
                 .iter()
@@ -603,7 +676,8 @@ fn run(app: &App, task: &mut Task, params: &Value) -> Result<Job, String> {
         task_context: None,
         handoff: None,
         kind: "task".into(),
-        trigger_message_id: String::new(),
+        // A mandated run starts on a message in its work chat.
+        trigger_message_id: if task.mandate.is_some() { params["trigger_message_id"].as_str().unwrap_or_default().to_string() } else { String::new() },
         routine_id: None,
         check: None,
         requested_by: task.authority_runner_id.clone(),
@@ -701,6 +775,15 @@ fn commit(
     Ok(())
 }
 
+#[cfg(feature = "runner")]
+fn stop_what_a_cancelled_task_left(app: &Arc<App>, task: &Task) {
+    if task.mandate.is_some() && task.state == TaskState::Cancelled {
+        crate::intake::stop_background(app, task);
+    }
+}
+#[cfg(not(feature = "runner"))]
+fn stop_what_a_cancelled_task_left(_app: &Arc<App>, _task: &Task) {}
+
 fn changed(app: &App, task: &Task) {
     app.emit(crate::events::Event::TaskChanged { task: task.clone() });
     if app.this_device_id().as_deref() == Some(task.authority_runner_id.as_str()) {
@@ -797,7 +880,9 @@ pub(crate) fn context(app: &App, bot_id: &str, chat_id: &str) -> Option<String> 
     let mut tasks = list(app)
         .unwrap_or_default()
         .into_iter()
-        .filter(|t| !t.state.terminal() && (t.owner_bot_id == bot_id || t.chat_ids.iter().any(|id| id == chat_id)))
+        // What a channel took on stays with its own chats: its goal came from outside words, which no
+        // other turn of the bot should read, and a busy group would crowd out the bot's real work.
+        .filter(|t| !t.state.terminal() && (t.chat_ids.iter().any(|id| id == chat_id) || (t.owner_bot_id == bot_id && t.mandate.is_none())))
         .collect::<Vec<_>>();
     if tasks.is_empty() {
         return None;
@@ -807,7 +892,7 @@ pub(crate) fn context(app: &App, bot_id: &str, chat_id: &str) -> Option<String> 
     let mut out = format!("{CONTEXT_MARKER} use tasks get/list for full records).\n");
     for task in tasks.iter().take(20) {
         let summary = json!({"id":task.id,"revision":task.revision,"owner_bot_id":task.owner_bot_id,"runner_id":task.runner_id,"state":task.state,
-            "goal":task.goal,"acceptance_criteria":task.acceptance_criteria,"dependencies":task.dependencies,"next_action":task.next_action,"reason":task.reason,
+            "from_outside":task.mandate.is_some(),"goal":task.goal,"acceptance_criteria":task.acceptance_criteria,"dependencies":task.dependencies,"next_action":task.next_action,"reason":task.reason,
             "result":task.result,"evidence":task.evidence,"active_run":task.active_run});
         let line = summary.to_string();
         if out.len() + line.len() > 32_000 {

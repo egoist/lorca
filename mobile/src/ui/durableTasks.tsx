@@ -3,7 +3,7 @@
 // of `app/tasks` are a chat's terminal commands, not these.)
 
 import { Platform, PlatformColor, type ColorValue } from "react-native";
-import type { DurableTaskState } from "../core/model";
+import { taskFoundNothingToDo, type DurableTask, type DurableTaskState } from "../core/model";
 import { t } from "../i18n";
 import { accentColor, usePalette } from "./theme";
 
@@ -22,6 +22,11 @@ export function taskStateTitle(state: DurableTaskState): string {
     case "cancelled":
       return t("Cancelled");
   }
+}
+
+/// Where a task stands: its state in words, except that a task with nothing to do was not cancelled.
+export function taskTitle(task: Pick<DurableTask, "state" | "reason">): string {
+  return taskFoundNothingToDo(task) ? t("Nothing to do") : taskStateTitle(task.state);
 }
 
 /// The state's color: orange for a blocked task, the tint for one ready for review, quiet

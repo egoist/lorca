@@ -192,7 +192,9 @@ struct Live {
 }
 
 fn live(app: &App, with_tasks: bool) -> Live {
-    let tasks = with_tasks.then(|| crate::tasks::list(app).unwrap_or_default().into_iter().map(|task| task.id).collect());
+    // What a channel took on and finished lets go of its limits: there can be many, every Device reads
+    // this, and a new run sets them again.
+    let tasks = with_tasks.then(|| crate::tasks::list(app).unwrap_or_default().into_iter().filter(|task| task.mandate.is_none() || !task.state.terminal()).map(|task| task.id).collect());
     let state = app.state.lock().unwrap();
     Live {
         chats: state.chats.iter().map(|c| c.meta.id.clone()).collect(),

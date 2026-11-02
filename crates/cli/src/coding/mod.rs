@@ -239,6 +239,11 @@ impl Agent {
         self.driver().is_some()
     }
 
+    /// Whether it is at work now, as a Task waits on it. `idle` is done.
+    pub(crate) fn is_working(&self) -> bool {
+        matches!(self.record.lock().unwrap().state.as_str(), "starting" | "working")
+    }
+
     fn is_open(&self) -> bool {
         matches!(self.record.lock().unwrap().state.as_str(), "starting" | "working" | "idle")
     }

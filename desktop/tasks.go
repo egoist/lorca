@@ -25,7 +25,7 @@ func (m *mainWindow) inspectorDurableTasks(c *ui.Context, chat *model.Chat) {
 		}
 	}, func(k *card) {
 		for _, task := range shown {
-			detail := task.State.Title()
+			detail := task.StateTitle()
 			if chat.IsGroup() {
 				if owner := store.Bot(task.OwnerBotID); owner != nil {
 					detail += " · " + owner.Name
@@ -33,7 +33,7 @@ func (m *mainWindow) inspectorDurableTasks(c *ui.Context, chat *model.Chat) {
 			}
 			id := task.ID
 			ui.Box(c.Key(task.ID)).Children(func() {
-				if taskRow(c, k, task.State.Symbol(), taskTint(p, task.State), task.Goal, detail) {
+				if taskRow(c, k, task.StateSymbol(), taskTint(p, task.State), task.Goal, detail) {
 					if current := store.DurableTask(id); current != nil {
 						m.presentDurableTask(chatID, current)
 					}
