@@ -3,7 +3,7 @@
 //! sync content use the account key. Remote mutations fail explicitly when authority is offline.
 mod execution;
 mod model;
-pub use execution::start;
+pub use execution::{start, RESTARTED_DURING_RUN};
 pub(crate) use execution::{admit, claim, finished};
 #[cfg(test)]
 use execution::{budget_block_reason, deliver_finish, recover, Finish};
@@ -198,13 +198,71 @@ fn receipt(app: &App, method: &str, params: &Value) -> Result<Option<Task>, Stri
 }
 
 fn mutate(app: &Arc<App>, method: &str, params: &Value) -> Result<Value, String> {
+    mutate_with(app, method, params, None)
+}
+
+/// A Task a channel's intake accepted, with its Mandate, which no other way of making or editing a
+/// Task can set. An identical retry returns the Task it made.
+#[cfg(feature = "runner")]
+pub(crate) fn create_mandated(app: &Arc<App>, params: &Value, mandate: crate::intake::Mandate) -> Result<Task, String> {
+    serde_json::from_value(mutate_with(app, "tasks.create", params, Some(mandate))?).map_err(err)
+}
+
+/// Starts a mandated Task's run in its work chat, on the message in `trigger` (its opening message
+/// when empty).
+#[cfg(feature = "runner")]
+pub(crate) fn run_mandated(app: &Arc<App>, task: &Task, request_id: &str, trigger: &str) -> Result<(), String> {
+    mutate(app, "tasks.run", &json!({ "id": task.id, "expected_revision": task.revision, "request_id": request_id, "trigger_message_id": trigger })).map(|_| ())
+}
+
+#[cfg(feature = "runner")]
+pub(crate) fn requeue_mandated(app: &Arc<App>, task: &Task, request_id: &str) -> Result<Task, String> {
+    serde_json::from_value(mutate(app, "tasks.update", &json!({ "id": task.id, "expected_revision": task.revision, "request_id": request_id, "state": "queued", "reason": null }))?).map_err(err)
+}
+
+#[cfg(feature = "runner")]
+pub(crate) fn cancel_mandated(app: &Arc<App>, task: &Task, reason: &str) -> Result<(), String> {
+    let request_id = format!("intake-stop-{}-{}", task.id, task.revision);
+    mutate(app, "tasks.update", &json!({ "id": task.id, "expected_revision": task.revision, "request_id": request_id, "state": "cancelled", "reason": reason })).map(|_| ())
+}
+
+/// Makes a Task follow one more conversation, also during its run: what it follows lends it no
+/// authority, so this is not an edit of its scope.
+#[cfg(feature = "runner")]
+pub(crate) fn follow_mandated(app: &Arc<App>, task_id: &str, conversation: &str) -> Result<(), String> {
+    let task = {
+        let _order = app.task_order.lock().unwrap();
+        let mut task = get(app, task_id)?;
+        authority_here(app, &task)?;
+        if task.follows.iter().any(|id| id == conversation) {
+            return Ok(());
+        }
+        let expected = task.revision;
+        task.follows.push(conversation.to_string());
+        if !task.chat_ids.iter().any(|id| id == conversation) {
+            task.chat_ids.push(conversation.to_string());
+        }
+        task.revision += 1;
+        task.updated_at = now_secs();
+        task.record_change();
+        commit(app, &task, Some(expected), None, None)?;
+        task
+    };
+    changed(app, &task);
+    Ok(())
+}
+
+fn mutate_with(app: &Arc<App>, method: &str, params: &Value, mandate: Option<crate::intake::Mandate>) -> Result<Value, String> {
     let (task, job, cancel) = {
         let _order = app.task_order.lock().unwrap();
         if let Some(task) = receipt(app, method, params)? {
             return Ok(json!(task));
         }
         let (mut task, expected, before) = if method == "tasks.create" {
-            (create(app, params)?, None, None)
+            let mut task = create(app, params)?;
+            task.follows = mandate.as_ref().map(|mandate| vec![mandate.chat_id.clone()]).unwrap_or_default();
+            task.mandate = mandate;
+            (task, None, None)
         } else {
             let mut task = get(app, &text(params, "id")?)?;
             authority_here(app, &task)?;
@@ -306,6 +364,8 @@ fn create(app: &App, params: &Value) -> Result<Task, String> {
         history: Vec::new(),
         created_at: now_secs(),
         updated_at: now_secs(),
+        mandate: None,
+        follows: Vec::new(),
     })
 }
 
@@ -563,9 +623,9 @@ fn run(app: &App, task: &mut Task, params: &Value) -> Result<Job, String> {
             return Err(format!("Dependency {id} is not completed."));
         }
     }
-    let chat_id = params["chat_id"]
-        .as_str()
-        .map(str::to_string)
+    // A mandated Task runs in its own chat, wherever it was started from.
+    let chat_id = task.mandate.as_ref().map(|mandate| mandate.work_chat_id.clone())
+        .or_else(|| params["chat_id"].as_str().map(str::to_string))
         .or_else(|| {
             task.chat_ids
                 .iter()
@@ -603,7 +663,8 @@ fn run(app: &App, task: &mut Task, params: &Value) -> Result<Job, String> {
         task_context: None,
         handoff: None,
         kind: "task".into(),
-        trigger_message_id: String::new(),
+        // A mandated run starts on a message in its work chat.
+        trigger_message_id: if task.mandate.is_some() { params["trigger_message_id"].as_str().unwrap_or_default().to_string() } else { String::new() },
         routine_id: None,
         check: None,
         requested_by: task.authority_runner_id.clone(),

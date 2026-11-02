@@ -1,7 +1,8 @@
 // One durable task, slid in from the chat's details, after the desktop app's task sheet: where it
 // stands, why when it is blocked or cancelled, its result and what supports it, the one step the
 // state allows (Start, Resume, Mark Complete, Reopen), and its Limits; then the goal, owner, next
-// step, and what done looks like, which Save writes back, and what it waits for and links to.
+// step, and what done looks like, which Save writes back, and what it waits for and links to. A task
+// a channel's intake took on also says who it came from, why, and what work it covers.
 // `new` as the id is the same form for a new task in the chat; once created, the screen shows it.
 //
 // Edits start from the version the screen showed. A change from elsewhere replaces an untouched
@@ -12,11 +13,12 @@ import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import { Platform, PlatformColor, ScrollView, StyleSheet, Text, View } from "react-native";
 import { engine } from "../../../src/core/engine";
-import { CANCELLED_BY_USER, taskCanStart, taskIsFinished, taskSymbol, type DurableTask, type TaskEvidence } from "../../../src/core/model";
+import { CANCELLED_BY_USER, taskCanStart, taskFoundNothingToDo, taskGlyph, taskIsFinished, type DurableTask, type TaskEvidence } from "../../../src/core/model";
 import { useBotMap, useBudget, useDurableTask, useStore } from "../../../src/core/store";
 import { t, useLanguage } from "../../../src/i18n";
 import { alert } from "../../../src/ui/alert";
-import { taskStateTitle, useTaskTint } from "../../../src/ui/durableTasks";
+import { mandateFrom, mandateWhy } from "../../../src/ui/channels";
+import { taskTitle, useTaskTint } from "../../../src/ui/durableTasks";
 import { daySeparator } from "../../../src/ui/format";
 import { FieldRow, Row, Section } from "../../../src/ui/forms";
 import { SaveToolbar } from "../../../src/ui/navigation";
@@ -213,7 +215,7 @@ export default function DurableTaskScreen() {
         action = { title: t("Reopen"), icon: "arrow.counterclockwise", run: () => void step("queued") };
         break;
       case "cancelled":
-        detail = task.reason === CANCELLED_BY_USER ? "" : task.reason ?? "";
+        detail = task.reason === CANCELLED_BY_USER || taskFoundNothingToDo(task) ? "" : task.reason ?? "";
         action = { title: t("Reopen"), icon: "arrow.counterclockwise", run: () => void step("queued") };
         break;
     }
@@ -230,7 +232,7 @@ export default function DurableTaskScreen() {
       <ScrollView contentInsetAdjustmentBehavior="automatic" contentContainerStyle={{ paddingBottom: 40 }} keyboardDismissMode="on-drag" keyboardShouldPersistTaps="handled">
         {task && (
           <Section>
-            <Row title={taskStateTitle(task.state)} subtitle={detail || undefined} subtitleLines={6} leading={<Symbol name={taskSymbol(task.state)} size={20} color={tint(task.state)} />} />
+            <Row title={taskTitle(task)} subtitle={detail || undefined} subtitleLines={6} leading={<Symbol name={taskGlyph(task)} size={20} color={tint(task.state)} />} />
             {task.result ? (
               <View style={styles.result}>
                 <Text style={[styles.resultText, { color: p.label }]} selectable numberOfLines={12}>
@@ -249,6 +251,14 @@ export default function DurableTaskScreen() {
               chevron
               onPress={() => openLimits(task)}
             />
+          </Section>
+        )}
+
+        {task?.mandate && (
+          <Section>
+            <Row title={t("From")} subtitle={mandateFrom(task.mandate)} subtitleLines={2} />
+            {mandateWhy(task.mandate) ? <Row title={t("Why")} subtitle={mandateWhy(task.mandate)} subtitleLines={3} /> : null}
+            {task.mandate.scope ? <Row title={t("Work")} subtitle={task.mandate.scope} subtitleLines={6} /> : null}
           </Section>
         )}
 
@@ -280,8 +290,8 @@ export default function DurableTaskScreen() {
                 <Row
                   key={each}
                   title={dependency?.goal ?? t("A task on another Device")}
-                  subtitle={dependency ? taskStateTitle(dependency.state) : undefined}
-                  leading={<Symbol name={dependency ? taskSymbol(dependency.state) : "circle"} size={20} color={dependency ? tint(dependency.state) : p.tertiaryLabel} />}
+                  subtitle={dependency ? taskTitle(dependency) : undefined}
+                  leading={<Symbol name={dependency ? taskGlyph(dependency) : "circle"} size={20} color={dependency ? tint(dependency.state) : p.tertiaryLabel} />}
                 />
               );
             })}

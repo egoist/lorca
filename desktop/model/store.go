@@ -232,6 +232,8 @@ type Store struct {
 	outputMessages map[string][]*Message
 	outputRequests map[string]bool
 	staleOutputs   map[string]bool
+	// intakeWrites is each channel's latest intake change on its way, which the next one waits for.
+	intakeWrites map[string]chan struct{}
 
 	mockWorkflows        map[string]*demoSetup
 	mockWorkflowAccounts map[string][]WorkflowAccount
@@ -268,6 +270,7 @@ func NewStore(transport Transport, post func(func()), mock bool) *Store {
 		attachmentErrors:   map[string]string{},
 		outputMessages:     map[string][]*Message{},
 		outputRequests:     map[string]bool{},
+		intakeWrites:       map[string]chan struct{}{},
 		staleOutputs:       map[string]bool{},
 		mockMcp:            map[string][]McpServer{},
 		mockFeedback:       map[string]BotFeedback{},
@@ -1119,6 +1122,17 @@ func (s *Store) sortChats() {
 		return b.Compare(a)
 	})
 	s.Chats = chats
+}
+
+// FirstChat is the chat to show when none is picked: the first in the store's order that the
+// sidebar can list.
+func (s *Store) FirstChat() *Chat {
+	for _, chat := range s.Chats {
+		if !chat.IsWorkChat() {
+			return chat
+		}
+	}
+	return nil
 }
 
 // DM is the one DM with this bot, created on first use. DMs are keyed by the bot, so opening one
@@ -2120,11 +2134,12 @@ func (s *Store) Channel(id string) *Channel {
 	return nil
 }
 
-// Conversations are the conversations a channel keeps, the latest first.
+// Conversations are the conversations a channel keeps, the latest first, without its Tasks' work
+// chats.
 func (s *Store) Conversations(channelID string) []*Chat {
 	var kept []*Chat
 	for _, chat := range s.Chats {
-		if chat.Channel != nil && chat.Channel.ChannelID == channelID {
+		if chat.Channel != nil && chat.Channel.ChannelID == channelID && !chat.IsWorkChat() {
 			kept = append(kept, chat)
 		}
 	}

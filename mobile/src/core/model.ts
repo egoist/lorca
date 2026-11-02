@@ -834,6 +834,8 @@ export interface ChatChannel {
   account_id: string;
   chat_id: string;
   thread_id?: string | null;
+  /// The chat is a Task's own, apart from the conversation people see: its runs happen here.
+  task_id?: string | null;
 }
 
 /// What a channel takes.
@@ -863,6 +865,59 @@ export interface ChannelStatus {
   /// Chats that wrote to the account's bot or added it to a group, waiting for the user to allow
   /// them; the bot answers nothing there meanwhile. Newest first.
   requests?: ChatRequest[];
+  /// What the channel takes on by itself; without one, each message it takes starts a turn.
+  intake?: ChannelIntake | null;
+}
+
+/// A channel's rules for what becomes work, in the owner's words. Empty lists stay off the wire.
+export interface ChannelIntake {
+  /// `off` gives each message a turn and keeps the people and rules; `observe` only records what a rule would take on; `auto` takes it on. A direct request from a
+  /// listed person is taken in either.
+  mode: "off" | "observe" | "auto";
+  people?: IntakePerson[];
+  rules?: IntakeRule[];
+}
+
+/// Who may ask the bot for work directly, by the service's own user id.
+export interface IntakePerson {
+  id: string;
+  name?: string;
+}
+
+/// A kind of work the bot takes on when nobody asked it directly. A rule written with an empty id
+/// gets one from the CLI.
+export interface IntakeRule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  instruction: string;
+}
+
+export type IntakeDecisionKind = "accepted" | "would_accept" | "attached" | "stopped" | "replied" | "ignored" | "unavailable";
+
+/// What a channel's intake decided about a message, as its Runner records it. The title, sender,
+/// and reason come from outside Lorca.
+export interface IntakeDecision {
+  id: string;
+  channel_id: string;
+  /// Unix seconds.
+  at: number;
+  kind: IntakeDecisionKind;
+  conversation_id: string;
+  message_ids: string[];
+  sender: string;
+  sender_id: string;
+  strength?: "explicit" | "inferred" | null;
+  addressed?: boolean;
+  title?: string;
+  scope?: string;
+  reason: string;
+  rules?: { rule_id: string; matched: boolean; reason: string }[];
+  evidence?: string[];
+  task_id?: string | null;
+  waiting?: boolean;
+  copies?: string[];
+  policy_version?: string;
 }
 
 /// A chat asking to be allowed in a channel.
@@ -877,6 +932,11 @@ export interface ChatRequest {
 /// The one DM a bot has with the user: a direct chat that is not a channel's conversation.
 export function isBotDM(chat: ChatMeta): boolean {
   return chat.kind === "dm" && !chat.channel;
+}
+
+/// A Task's private work chat: no list shows it, though search may find it.
+export function isWorkChat(chat: ChatMeta): boolean {
+  return !!chat.channel?.task_id;
 }
 
 /// A transcript with more than one speaker on the bots' side: a group, or a channel's
@@ -1378,6 +1438,37 @@ export interface DurableTask {
   active_run?: { id: string; bot_id: string; runner_id: string; chat_id: string; started_at: number } | null;
   created_at: number;
   updated_at: number;
+  /// Why the work may be done, for a task a channel's intake accepted. The host sets it once.
+  mandate?: TaskMandate | null;
+  /// The channel conversations whose messages reach this task.
+  follows?: string[];
+}
+
+/// What an accept grants a task. Its sender, scope, and reason come from outside Lorca.
+export interface TaskMandate {
+  channel_id: string;
+  channel_name: string;
+  channel_task: string;
+  service: string;
+  /// The task's own chat, which holds its runs.
+  work_chat_id: string;
+  /// The conversation it came from, and the contact's message that started it.
+  chat_id: string;
+  message_id: string;
+  external_id: string;
+  sender_id: string;
+  sender: string;
+  /// `explicit`: a listed person asked. `inferred`: a rule covered it.
+  strength: "explicit" | "inferred";
+  /// The rules it matched, in the owner's words as they stood; none for a direct request.
+  rules?: IntakeRule[];
+  request?: string;
+  scope: string;
+  context?: string;
+  policy_version: string;
+  reason: string;
+  evidence?: string[];
+  at: number;
 }
 
 export type DurableTaskState = "queued" | "working" | "blocked" | "awaiting_review" | "completed" | "cancelled";
@@ -1398,6 +1489,12 @@ export interface TaskEvidence {
 /// Why a task the user cancelled in the app stopped, for its bot to read; the apps show the state
 /// alone for it.
 export const CANCELLED_BY_USER = "Cancelled by the user.";
+
+/// Why a mandated task whose run found no work ended, which the CLI writes: nobody cancelled it,
+/// and a later message can resume it.
+export const NOTHING_TO_DO = "Nothing to do for this request.";
+
+export const taskFoundNothingToDo = (task: Pick<DurableTask, "state" | "reason">) => task.state === "cancelled" && task.reason === NOTHING_TO_DO;
 
 export const taskIsFinished = (state: DurableTaskState) => state === "completed" || state === "cancelled";
 
@@ -1420,6 +1517,11 @@ export function taskSymbol(state: DurableTaskState): string {
     default:
       return "circle";
   }
+}
+
+/// The symbol for a task: its state's, except that a task with nothing to do was not cancelled.
+export function taskGlyph(task: Pick<DurableTask, "state" | "reason">): string {
+  return taskFoundNothingToDo(task) ? "checkmark.circle" : taskSymbol(task.state);
 }
 
 /// What waits on the user first, then open work, then finished tasks.

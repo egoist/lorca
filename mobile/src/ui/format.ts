@@ -140,6 +140,15 @@ export function lastSeen(seenUnix: number | undefined): string {
   return t("Last seen {count}d ago", { count: Math.floor(elapsed / 86400) });
 }
 
+/// How long ago something happened: "just now", "5m ago", "3h ago", "2d ago".
+export function ago(unix: number): string {
+  const elapsed = Date.now() / 1000 - unix;
+  if (elapsed < 60) return t("just now");
+  if (elapsed < 3600) return t("{count}m ago", { count: Math.floor(elapsed / 60) });
+  if (elapsed < 86400) return t("{count}h ago", { count: Math.floor(elapsed / 3600) });
+  return t("{count}d ago", { count: Math.floor(elapsed / 86400) });
+}
+
 /// The last thing worth previewing: tool calls never are, except a sent message and a coding
 /// agent's start or a message the bot sent it.
 export function preview(chat: Chat, bots: Map<string, Bot>): string {

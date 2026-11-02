@@ -511,7 +511,7 @@ async fn turn_on_channels(app: &Arc<App>, setup: &mut Setup) -> Result<(), Strin
         }
         // Chats the user narrowed the channel to stay narrowed.
         let chats = existing.and_then(|(_, config)| config.channel.as_ref()).map(|c| c.chats.clone()).unwrap_or_default();
-        let channel = crate::channels::ChannelSpec { account_id: account_id.clone(), chats, listen: spec.listen.clone().normalized() };
+        let channel = crate::channels::ChannelSpec { account_id: account_id.clone(), chats, listen: spec.listen.clone().normalized(), intake: None };
         let config = crate::channels::config_for(&bot_id, &spec.service_id, &spec.name, &spec.task, channel);
         let id = match existing {
             Some((id, _)) => {
@@ -1305,7 +1305,7 @@ mod tests {
         // The user narrowed it to one chat. Turning it on again, even without the record of
         // its id, finds it on the Runner and keeps the chat.
         let chats = vec![crate::channels::ChannelChat { id: "-1001".into(), title: "Acme Community".into() }];
-        let narrowed = crate::channels::config_for(&channel.bot_id, "telegram", &channel.name, &channel.task, crate::channels::ChannelSpec { account_id: telegram.id.clone(), chats, listen: channel.listen.clone() });
+        let narrowed = crate::channels::config_for(&channel.bot_id, "telegram", &channel.name, &channel.task, crate::channels::ChannelSpec { account_id: telegram.id.clone(), chats, listen: channel.listen.clone(), intake: None });
         crate::event_triggers::serve(app, "events.update", &json!({"id":channel.id,"config":narrowed})).unwrap();
         let mut again = get(app, &setup.id).unwrap();
         again.channel_ids.clear();

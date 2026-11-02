@@ -157,6 +157,8 @@ impl Envelope {
 #[serde(rename_all = "snake_case")]
 enum DeliveryState {
     Pending,
+    /// A channel's intake is reading it. It only reads, so a restart puts it back to pending.
+    Assessing,
     Running,
     Done,
     Failed,
@@ -377,6 +379,27 @@ pub fn serve(app: &Arc<App>, method: &str, body: &Value) -> anyhow::Result<Value
         #[cfg(not(feature = "runner"))]
         bail!("Only a Runner has channels");
     }
+    // What a channel's intake decided, which any Device reads from the channel's Runner.
+    if method == "events.decisions" {
+        #[cfg(feature = "runner")]
+        {
+            let limit = body["limit"].as_u64().unwrap_or(100).min(500) as usize;
+            return Ok(json!({ "decisions": crate::intake::decisions_of(app, body["id"].as_str().unwrap_or_default(), limit)? }));
+        }
+        #[cfg(not(feature = "runner"))]
+        bail!("Only a Runner has channels");
+    }
+    // The owner's rules for what a channel takes on: its whole intake, or null to remove it.
+    if method == "events.set_intake" {
+        let id = body["id"].as_str().context("missing id")?;
+        let mut config = channel_config(app, id)?;
+        let spec = config.channel.as_mut().context("That is not a channel")?;
+        spec.intake = match &body["intake"] {
+            Value::Null => None,
+            value => Some(serde_json::from_value::<crate::intake::IntakeSpec>(value.clone())?.checked().map_err(anyhow::Error::msg)?),
+        };
+        return serve(app, "events.update", &json!({ "id": id, "config": config }));
+    }
     let key = dek(app)?;
     let id = body["id"].as_str().unwrap_or_default();
     // Resolve App state before taking the store lock: roster writes acquire them in that order.
@@ -524,6 +547,10 @@ pub fn serve(app: &Arc<App>, method: &str, body: &Value) -> anyhow::Result<Value
     drop(db);
     if let Some(sub_id) = touched {
         report_held(app, &sub_id);
+    }
+    #[cfg(feature = "runner")]
+    if deleted.is_some() {
+        crate::intake::forget_channel(app, id)?;
     }
     if let Some(source) = deleted.and_then(|bot_id| dm_source(app, &bot_id)) {
         crate::attention::settle(app, &source, &held_prefix(id));
@@ -1043,6 +1070,10 @@ pub fn recover(app: &App) -> anyhow::Result<()> {
     let mut db = app.store.connection.lock().unwrap();
     let tx = db.transaction()?;
     let mut held = std::collections::BTreeSet::new();
+    for mut item in deliveries(&tx, &key)?.into_iter().filter(|d| d.state == DeliveryState::Assessing) {
+        item.state = DeliveryState::Pending;
+        save_delivery(&tx, &key, &item)?;
+    }
     for mut item in deliveries(&tx, &key)?
         .into_iter()
         .filter(|d| d.state == DeliveryState::Running)
@@ -1106,6 +1137,11 @@ pub fn tick(app: &Arc<App>) -> anyhow::Result<()> {
     let Some(key) = app.dek() else { return Ok(()) };
     let now = now_unix();
     let last_user = app.store.last_user_at()?;
+    // A week without a message from the user holds a Task's next run as it holds everything else.
+    if !last_user.is_some_and(|at| now - at > crate::routines::AWAY_AFTER_SECS) {
+        crate::intake::start_waiting(app);
+        crate::intake::watch(app);
+    }
     let subs = {
         let db = app.store.connection.lock().unwrap();
         subscriptions(&db, &key)?
@@ -1167,9 +1203,12 @@ pub fn tick(app: &Arc<App>) -> anyhow::Result<()> {
             d.envelope.subscription_id == sub.id
                 && matches!(
                     d.state,
-                    DeliveryState::Running | DeliveryState::Failed | DeliveryState::Uncertain
+                    DeliveryState::Assessing | DeliveryState::Running | DeliveryState::Failed | DeliveryState::Uncertain
                 )
         }) {
+            continue;
+        }
+        if crate::intake::backing_off(app, &sub.id) {
             continue;
         }
         let Some(item) = items
@@ -1192,6 +1231,24 @@ pub fn tick(app: &Arc<App>) -> anyhow::Result<()> {
                 }
             },
         };
+        // A channel with intake reads the message before anything runs: this conversation's
+        // waiting messages together, so a burst costs one request, one batch per channel at a time.
+        if crate::intake::spec_of(&sub.config).is_some() {
+            let conversation = chat_id;
+            let mut batch = Vec::new();
+            for item in items.iter_mut().filter(|d| d.state == DeliveryState::Pending) {
+                let delivered = crate::intake::Delivered::of(&item.id, &serde_json::from_str::<Value>(&item.envelope.payload).unwrap_or_default());
+                if delivered.chat_id == conversation && batch.len() < crate::intake::MAX_BATCH {
+                    item.state = DeliveryState::Assessing;
+                    save_delivery(&tx, &key, item)?;
+                    batch.push(delivered);
+                }
+            }
+            tx.commit()?;
+            drop(db);
+            tokio::spawn(crate::intake::assess_batch(app.clone(), sub.id.clone(), sub.config.clone(), batch));
+            continue;
+        }
         // A routine on events runs its task as it stands now.
         let routine = sub.config.receiver.as_ref().and(sub.config.routine_id.as_deref()).and_then(|id| app.routine(id));
         item.state = DeliveryState::Running;
@@ -1225,6 +1282,100 @@ pub fn tick(app: &Arc<App>) -> anyhow::Result<()> {
         drop(db);
         crate::runtime::start_turn(app, job);
     }
+    Ok(())
+}
+
+/// What intake decided about a batch has been recorded: its deliveries are done.
+#[cfg(feature = "runner")]
+pub fn settle_assessed(app: &App, ids: &[String]) -> anyhow::Result<()> {
+    let key = dek(app)?;
+    let mut db = app.store.connection.lock().unwrap();
+    let tx = db.transaction()?;
+    let mut channel = None;
+    for id in ids {
+        let mut item = delivery(&tx, &key, id)?;
+        if item.state == DeliveryState::Assessing {
+            item.state = DeliveryState::Done;
+            item.envelope.payload.clear();
+            save_delivery(&tx, &key, &item)?;
+            channel = Some(item.envelope.subscription_id);
+        }
+    }
+    if let Some(channel) = channel {
+        let mut sub = subscription(&tx, &key, &channel)?;
+        sub.health.last_success_at = Some(now_unix());
+        save_subscription(&tx, &key, &sub)?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// An assessment did not finish: its messages wait in their place for the next one.
+#[cfg(feature = "runner")]
+pub fn requeue_assessed(app: &App, ids: &[String]) -> anyhow::Result<()> {
+    let key = dek(app)?;
+    let mut db = app.store.connection.lock().unwrap();
+    let tx = db.transaction()?;
+    for id in ids {
+        let mut item = delivery(&tx, &key, id)?;
+        if item.state == DeliveryState::Assessing {
+            item.state = DeliveryState::Pending;
+            save_delivery(&tx, &key, &item)?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// Intake left a message to the channel's own task: it starts the ordinary turn the channel gives
+/// a message without intake, unattended and under the same checks.
+#[cfg(feature = "runner")]
+pub fn turn_from_intake(app: &Arc<App>, channel_id: &str, delivery_id: &str) -> anyhow::Result<()> {
+    let key = dek(app)?;
+    let conversations: Vec<String> = app.state.lock().unwrap().chats.iter()
+        .filter(|chat| chat.meta.channel.as_ref().is_some_and(|c| c.channel_id == channel_id && c.task_id.is_none()))
+        .map(|chat| chat.meta.id.clone())
+        .collect();
+    let requested_by = app.this_device_id().unwrap_or_default();
+    let mut db = app.store.connection.lock().unwrap();
+    let tx = db.transaction()?;
+    let sub = subscription(&tx, &key, channel_id)?;
+    let mut item = delivery(&tx, &key, delivery_id)?;
+    if item.state != DeliveryState::Assessing {
+        return Ok(());
+    }
+    let Some((chat_id, message_id, data)) = conversation_of(&conversations, &item.envelope) else {
+        item.state = DeliveryState::Done;
+        item.envelope.payload.clear();
+        save_delivery(&tx, &key, &item)?;
+        tx.commit()?;
+        return Ok(());
+    };
+    item.state = DeliveryState::Running;
+    item.task = Some(EventTask { name: sub.config.name.clone(), prompt: sub.config.prompt.clone(), data, message_id: Some(message_id) });
+    save_delivery(&tx, &key, &item)?;
+    let job = crate::model::Job {
+        id: format!("event-{}", item.id),
+        chat_id,
+        bot_id: sub.config.bot_id.clone(),
+        kind: "event".into(),
+        trigger_message_id: item.id.clone(),
+        routine_id: None,
+        check: None,
+        requested_by,
+        from_bot_id: None,
+        hops: 0,
+        round: 0,
+        is_winding_down: false,
+        setup: None,
+        task_id: None,
+        task_context: None,
+        handoff: None,
+        created_at: crate::config::now_secs(),
+    };
+    tx.commit()?;
+    drop(db);
+    crate::runtime::start_turn(app, job);
     Ok(())
 }
 
@@ -1818,7 +1969,7 @@ mod tests {
         crate::plugins::set_variables(app, &account.id, &[("TELEGRAM_BOT_TOKEN".to_string(), "1:abc".to_string())].into_iter().collect()).unwrap();
         let bot = config(app, QueuePolicy::Fifo).bot_id;
         let listen = crate::channels::Listen { tags: vec!["feedback".into()], ..Default::default() };
-        let channel = crate::channels::config_for(&bot, "telegram", "Feedback", "File it", crate::channels::ChannelSpec { account_id: account.id, chats: vec![], listen });
+        let channel = crate::channels::config_for(&bot, "telegram", "Feedback", "File it", crate::channels::ChannelSpec { account_id: account.id, chats: vec![], listen, intake: None });
         let id = serve(app, "events.create", &json!({ "config": channel })).unwrap()["id"].as_str().unwrap().to_string();
         assert_eq!(app.channels.statuses()[0].state, "listening");
         {

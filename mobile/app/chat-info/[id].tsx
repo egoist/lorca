@@ -4,7 +4,7 @@ import { MenuView, type MenuComponentRef } from "@expo/ui/community/menu";
 import { ActivityIndicator, Platform, PlatformColor, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import { Pressable } from "../../src/ui/Pressable";
 import { chatTitle, engine } from "../../src/core/engine";
-import { agentTitle, pullRequestLabel, BROWSER_PLUGIN_ID, isMuted, PROJECT_KINDS, projectSymbol, skillScopeOf, providerKinds, providerLabel, providerModels, PROVIDER_KINDS, taskSymbol, thinkingLabel, thinkingLevels, withCustomModels, type Bot, type Routine } from "../../src/core/model";
+import { agentTitle, pullRequestLabel, BROWSER_PLUGIN_ID, isMuted, PROJECT_KINDS, projectSymbol, skillScopeOf, providerKinds, providerLabel, providerModels, PROVIDER_KINDS, taskGlyph, thinkingLabel, thinkingLevels, withCustomModels, type Bot, type Routine } from "../../src/core/model";
 import { deviceIsOnline, useBotMap, useBudget, useChannels, useChat, useDurableTasks, useOpenReviews, useOutputs, useProject, useRoutines, useSkills, useStoppedTurn, useStore, useWorkingBotIds } from "../../src/core/store";
 import { channelProblem, listenSummary, serviceSymbol } from "../../src/ui/channels";
 import { t, tc, useLanguage } from "../../src/i18n";
@@ -22,7 +22,7 @@ import { AndroidIcons, CloseToolbar } from "../../src/ui/navigation";
 import { haptic } from "../../src/ui/haptics";
 import { alert, prompt } from "../../src/ui/alert";
 import { OutputRow } from "../../src/ui/outputs";
-import { taskStateTitle, useTaskTint } from "../../src/ui/durableTasks";
+import { taskTitle, useTaskTint } from "../../src/ui/durableTasks";
 import { agentMark, agentStatusWord, chatAgents } from "../../src/ui/codingAgents";
 import { reviewHeadline, reviewStateWord, reviewSymbol } from "../../src/ui/reviews";
 import { loadFeedback, useFeedback } from "../../src/core/feedback";
@@ -247,8 +247,8 @@ export default function ChatInfoScreen() {
           <Row
             key={task.id}
             title={task.goal}
-            subtitle={isGroup && bots.get(task.owner_bot_id) ? `${taskStateTitle(task.state)} · ${bots.get(task.owner_bot_id)!.name}` : taskStateTitle(task.state)}
-            leading={<Symbol name={taskSymbol(task.state)} size={20} color={taskTint(task.state)} />}
+            subtitle={isGroup && bots.get(task.owner_bot_id) ? `${taskTitle(task)} · ${bots.get(task.owner_bot_id)!.name}` : taskTitle(task)}
+            leading={<Symbol name={taskGlyph(task)} size={20} color={taskTint(task.state)} />}
             chevron
             onPress={() => router.push({ pathname: "/chat-info/durable-task/[id]", params: { id: task.id, chat: chat.id } })}
           />

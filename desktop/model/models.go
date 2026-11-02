@@ -2346,7 +2346,13 @@ type ChatChannel struct {
 	AccountID string
 	ChatID    string
 	ThreadID  string
+	// TaskID makes the chat a Task's private work chat: its runs happen there, and no list shows it.
+	TaskID string
 }
+
+// IsWorkChat is a Task's private work chat, which the sidebar and a channel's Conversations leave
+// out in every group. Search can still find it.
+func (c *Chat) IsWorkChat() bool { return c.Channel != nil && c.Channel.TaskID != "" }
 
 // ChannelListen is what a channel takes.
 type ChannelListen struct {
@@ -2421,6 +2427,8 @@ type Channel struct {
 	Detail       string
 	HeldDelivery string
 	Requests     []ChatRequest
+	// Intake is what the channel takes on by itself; nil gives each message it takes a turn.
+	Intake *ChannelIntake
 }
 
 // ServiceName is the service as people call it.

@@ -8,6 +8,9 @@ and the update window shows it.
 
 - A Device's pane in Settings has that Device look for a newer app and CLI as it opens, so it shows
   what is out. Before, it could say Up to date for up to a day after a release.
+- A channel can decide by itself what becomes work: its sheet has Takes on work (Off, Only Record,
+  On), who can ask directly, your rules, and its latest decisions. A task it took on says who it
+  came from and why.
 
 ## [0.1.21]
 

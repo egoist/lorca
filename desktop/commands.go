@@ -117,7 +117,11 @@ var commandTable = []command{
 			return L("Show in Sidebar")
 		}
 		return L("Hide Chat")
-	}, enabled: chatSelected},
+	}, enabled: func() bool {
+		// A Task's work chat stays out of the sidebar whatever its flag says.
+		chat := selectedChat()
+		return chat != nil && !chat.IsWorkChat()
+	}},
 	{id: "newSection", title: func() string { return L("New Section…") }, opensMain: true},
 	{id: "newSkill", title: func() string { return L("New Skill…") }, enabled: func() bool {
 		if !chatSelected() {

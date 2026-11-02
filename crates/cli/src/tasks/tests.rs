@@ -51,7 +51,7 @@ async fn finished_run_awaits_review_and_runtime_redelivery_preserves_live_cancel
         ),
         false,
     );
-    finished(app, &job, TurnOutcome::Sent).await;
+    finished(app, &job, TurnOutcome::Sent, false).await;
     let review = get(app, &task.id).unwrap();
     assert_eq!(review.state, TaskState::AwaitingReview);
     assert_eq!(review.result.as_deref(), Some("Verified result"));
@@ -544,6 +544,7 @@ fn unclaimed_intent_survives_restart_and_wrong_runner_outcomes_are_refused() {
         reason: None,
         result: Some("Done".into()),
         evidence: Vec::new(),
+        dropped: false,
     };
     assert!(finish_here(&reloaded, finish, "wrong-runner").is_err());
     assert!(get(&reloaded, &task.id).unwrap().active_run.is_some());
@@ -654,7 +655,7 @@ fn unrelated_edits_keep_unresolved_run_evidence_and_completion_resolves_it() {
     let mut evidence = message_evidence(app, &task);
     // The run's reply that the authority has not synced yet.
     evidence.message_id = Some("not-synced-yet".into());
-    let finish = Finish { task_id: task.id.clone(), run_id: job.id.clone(), result: Some("Fix ready".into()), evidence: vec![evidence], reason: None };
+    let finish = Finish { task_id: task.id.clone(), run_id: job.id.clone(), result: Some("Fix ready".into()), evidence: vec![evidence], reason: None, dropped: false };
     finish_here(app, finish, &task.runner_id).unwrap();
     let review = get(app, &task.id).unwrap();
     assert_eq!(review.state, TaskState::AwaitingReview);
@@ -692,7 +693,7 @@ fn outputs_published_for_the_task_are_its_evidence() {
     assert_eq!(evidence[0].message_id.as_deref(), Some(second.id.as_str()));
     assert_eq!(evidence[0].output_id, first.output.as_ref().map(|o| o.id.clone()));
     assert_eq!(evidence[0].version, Some(2));
-    let finish = Finish { task_id: task.id.clone(), run_id: job.id.clone(), result: Some("Report ready".into()), evidence, reason: None };
+    let finish = Finish { task_id: task.id.clone(), run_id: job.id.clone(), result: Some("Report ready".into()), evidence, reason: None, dropped: false };
     finish_here(app, finish, &task.runner_id).unwrap();
     let review = get(app, &task.id).unwrap();
     let done = update(app, &review, json!({"state":"completed"}), "complete").unwrap();
@@ -711,7 +712,7 @@ async fn a_task_stopped_at_its_limits_is_blocked_with_the_limit_and_its_runs_sha
     let (_, job) = launch(app, &task);
     let refused = crate::budgets::for_job(app, &job).err().unwrap();
     assert!(refused.contains("token limit"), "{refused}");
-    finished(app, &job, TurnOutcome::Skipped).await;
+    finished(app, &job, TurnOutcome::Skipped, false).await;
     let blocked = get(app, &task.id).unwrap();
     assert_eq!(blocked.state, TaskState::Blocked);
     assert_eq!(blocked.reason.as_deref(), Some(refused.as_str()));

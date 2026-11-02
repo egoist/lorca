@@ -1,13 +1,16 @@
 //! Durable admission, run outcomes, cancellation, and interruption recovery.
 use super::*;
 
+/// How the reason of a run a restart cut off begins, which intake's watchdog recognizes.
+pub const RESTARTED_DURING_RUN: &str = "Runner restarted during this run.";
+
 pub(super) fn recover(app: &App) -> Result<Vec<Job>, String> {
     let Some(dek) = app.dek() else {
         return Ok(Vec::new());
     };
     for (id, bytes) in app.store.task_runs("claimed").map_err(err)? {
         let job = crypto::decrypt_json::<Job>(&dek, "task-run", &bytes).map_err(err)?;
-        let finish=Finish{task_id:job.task_id.clone().unwrap_or_default(),run_id:id,result:None,evidence:Vec::new(),reason:Some("Runner restarted during this run. Its effects may have occurred; inspect them before requeueing.".into())};
+        let finish=Finish{task_id:job.task_id.clone().unwrap_or_default(),run_id:id,result:None,evidence:Vec::new(),reason:Some(format!("{RESTARTED_DURING_RUN} Its effects may have occurred; inspect them before requeueing.")),dropped:false};
         save_finish(app, &job, &finish)?;
     }
     app.store
@@ -110,6 +113,9 @@ pub(super) struct Finish {
     pub(super) result: Option<String>,
     pub(super) evidence: Vec<TaskEvidence>,
     pub(super) reason: Option<String>,
+    /// A mandated run found nothing to do, and ends its Task quietly.
+    #[serde(default)]
+    pub(super) dropped: bool,
 }
 
 pub(super) fn finish_here(app: &Arc<App>, finish: Finish, sender: &str) -> Result<Value, String> {
@@ -131,11 +137,16 @@ pub(super) fn finish_here(app: &Arc<App>, finish: Finish, sender: &str) -> Resul
         let expected = task.revision;
         task.active_run = None;
         if task.state == TaskState::Working {
-            if finish.reason.is_some() {
+            if finish.dropped {
+                task.state = TaskState::Cancelled;
+                task.reason = Some(crate::intake::NOTHING_TO_DO.into());
+            } else if finish.reason.is_some() {
                 task.state = TaskState::Blocked;
                 task.reason = finish.reason;
             } else {
-                task.state = TaskState::AwaitingReview;
+                // A mandated Task's result went to the people who asked, in their thread, and it
+                // needs no second reading by the owner unless it has nothing to show for itself.
+                task.state = if task.mandate.is_some() && !finish.evidence.is_empty() { TaskState::Completed } else { TaskState::AwaitingReview };
                 task.reason = None;
                 task.result = finish.result;
                 for evidence in finish.evidence {
@@ -181,7 +192,7 @@ pub(super) fn published_outputs(app: &App, job: &Job, task_id: &str) -> Vec<Task
     newest
 }
 
-pub(crate) async fn finished(app: &Arc<App>, job: &Job, outcome: TurnOutcome) {
+pub(crate) async fn finished(app: &Arc<App>, job: &Job, outcome: TurnOutcome, stopped: bool) {
     let Some(id) = job.task_id.as_ref() else {
         return;
     };
@@ -222,12 +233,21 @@ pub(crate) async fn finished(app: &Arc<App>, job: &Job, outcome: TurnOutcome) {
         })
         .unwrap_or_default();
     evidence.extend(published_outputs(app, job, id));
+    let mandated = job.task_context.as_ref().is_some_and(|task| task.mandate.is_some());
+    let dropped = mandated && outcome == TurnOutcome::Pass && result.is_none();
     let reason = if let Some(reason) = budget_block_reason(
         &app.snapshot(),
         id,
         &app.this_device_id().unwrap_or_default(),
     ) {
         Some(reason)
+    } else if mandated && stopped {
+        Some(crate::intake::STOPPED_BY_USER.to_string())
+    } else if mandated && outcome == TurnOutcome::Skipped {
+        Some(crate::intake::RUN_FAILED.to_string())
+    } else if mandated && outcome == TurnOutcome::Pass {
+        // It answered in the thread and had nothing more to say, or found nothing to do.
+        None
     } else if outcome != TurnOutcome::Sent {
         Some(format!(
             "Task turn ended {}. Inspect the chat and effects before requeueing.",
@@ -244,6 +264,7 @@ pub(crate) async fn finished(app: &Arc<App>, job: &Job, outcome: TurnOutcome) {
         result,
         evidence,
         reason,
+        dropped,
     };
     if let Err(error) = save_finish(app, job, &finish) {
         tracing::error!(%error,"persisting task outcome");

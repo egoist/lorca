@@ -656,14 +656,14 @@ pub fn spawn_local_job(app: Arc<App>, job: Job, remote_blob_id: Option<String>) 
                 result => {
                     if let Err(error) = result { app.notice(&job.chat_id, format!("Task run did not start: {error}")); }
                     finish_job(&app, &job.id);
-                    crate::tasks::finished(&app, &job, TurnOutcome::Skipped).await;
+                    crate::tasks::finished(&app, &job, TurnOutcome::Skipped, false).await;
                     if let Some(id) = remote_blob_id { crate::sync::delete_remote_blob(&app, &id).await; }
                     return;
                 }
             }
         }
         let outcome = run_job_started(&app, job.clone(), cancel.clone()).await;
-        if job.kind == "task" { crate::tasks::finished(&app, &job, if cancel.is_cancelled() { TurnOutcome::Skipped } else { outcome }).await; }
+        if job.kind == "task" { crate::tasks::finished(&app, &job, if cancel.is_cancelled() { TurnOutcome::Skipped } else { outcome }, cancel.is_cancelled()).await; }
         // An event turn settles its delivery; it is not a run of the routine it targets.
         if job.kind == "event" {
             // The event turn of a routine on events is its run; the delivery's event is read
