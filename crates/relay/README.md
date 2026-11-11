@@ -74,6 +74,21 @@ Both keys go in as text, so the service needs no volume and the Postgres setup k
 | `LORCA_RELAY_METRICS_TOKEN` | unset | Serves `GET /metrics` in Prometheus' text format to a scraper that sends this as a bearer token: `openssl rand -hex 32`. Unset, the route answers `404`. With more than one replica a scrape reaches one of them; request, push, and sweep counters carry its `instance`, and the totals are the same from each. |
 | `RUST_LOG` | `info` | `info,lorca_relay=debug` also logs each rate-limited request with the address it counted against. |
 
+## Published image
+
+Pushing a `relay-vX.Y.Z` tag runs [Release relay](../../.github/workflows/release-relay.yml), which builds `crates/relay/Dockerfile` from the tagged commit and publishes `ghcr.io/egoist/lorca-relay` for Linux amd64 and arm64. It uses the workflow's `GITHUB_TOKEN` with `packages: write`; no registry secret is needed.
+
+```bash
+git tag relay-v1.0.0
+git push origin relay-v1.0.0
+```
+
+That release publishes `:1.0.0`, `:sha-<full commit SHA>`, and `:latest`. `latest` follows the last successfully published release, including a release of an older version. Pin a version or image digest in production.
+
+In Dokploy, use the Docker image source with `ghcr.io/egoist/lorca-relay:1.0.0`, route the domain to port `8787`, and check `/v1/health`. Set `LORCA_RELAY_DB` to the Postgres connection URL and copy the relay, bucket, push, and receiver settings. Railway's `${{Postgres.DATABASE_URL}}` interpolation is specific to Railway; use the actual connection URL on another host. The `RAILWAY_*` variables configure Railway and are not needed by the image. Give the container at least 10 seconds to stop gracefully.
+
+GHCR packages initially have private visibility. For anonymous pulls, make the package public in GitHub's package settings after the first publication; for private pulls, configure the host's registry credentials with a token that has `read:packages`.
+
 ## Run the image elsewhere
 
 The image builds from the repo root and listens on 8787 when `PORT` is unset. The variables above go in with `-e`.
