@@ -18,6 +18,8 @@ mod sweep;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use anyhow::Context;
+use base64::Engine;
 use rand::RngCore;
 
 #[derive(usage::Cli, Debug)]
@@ -127,7 +129,7 @@ struct Args {
     apns_topic: String,
 
     /// A Firebase service account, for pushes to Android phones: the JSON itself or the path
-    /// of the file.
+    /// of the file, or base64-encoded JSON prefixed with base64:.
     #[usage(long, env = "LORCA_RELAY_FCM_SERVICE_ACCOUNT", hide_env_values = true)]
     fcm_service_account: Option<String>,
 
@@ -183,10 +185,15 @@ fn receivers(args: &Args) -> anyhow::Result<receivers::Receivers> {
     Ok(found)
 }
 
-/// A key given as its text or as the path of a file. The text form lets a deploy with no
-/// volume carry the key in a variable.
+/// A key given as its text, base64: followed by encoded text, or the path of a file.
+/// The text forms let a deploy with no volume carry the key in a variable.
 fn key_text(value: &str) -> anyhow::Result<String> {
     let text = value.trim();
+    if let Some(encoded) = text.strip_prefix("base64:") {
+        let encoded: String = encoded.chars().filter(|ch| !ch.is_ascii_whitespace()).collect();
+        let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).context("invalid base64 key or service account")?;
+        return String::from_utf8(bytes).context("base64 key or service account is not UTF-8");
+    }
     if text.starts_with("-----BEGIN") {
         return Ok(text.replace("\\n", "\n"));
     }
@@ -210,10 +217,13 @@ fn pusher(args: &Args) -> anyhow::Result<push::Pusher> {
         None => None,
     };
     let fcm = match &args.fcm_service_account {
-        Some(account) => Some(push::Fcm::new(
-            &key_text(account)?,
-            std::env::var("LORCA_RELAY_FCM_URL").ok(),
-        )?),
+        Some(account) => Some(
+            push::Fcm::new(
+                &key_text(account).context("reading LORCA_RELAY_FCM_SERVICE_ACCOUNT")?,
+                std::env::var("LORCA_RELAY_FCM_URL").ok(),
+            )
+            .context("initializing FCM from LORCA_RELAY_FCM_SERVICE_ACCOUNT")?,
+        ),
         None => None,
     };
     Ok(push::Pusher::new(apns, fcm))
@@ -392,6 +402,20 @@ async fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::key_text;
+    use base64::Engine;
+
+    #[test]
+    fn base64_credentials_preserve_json_quotes_and_pem_newlines() {
+        let json = r#"{"private_key":"-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n"}"#;
+        let pem = "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n";
+        for text in [json, pem] {
+            let encoded = base64::engine::general_purpose::STANDARD.encode(text);
+            let wrapped = format!(" base64:\n{}\n{}\n", &encoded[..8], &encoded[8..]);
+            assert_eq!(key_text(&wrapped).unwrap(), text);
+        }
+        assert!(key_text("base64:invalid!").unwrap_err().to_string().contains("invalid base64"));
+        assert!(key_text("base64:/w==").unwrap_err().to_string().contains("not UTF-8"));
+    }
 
     #[test]
     fn a_key_is_its_text_or_the_path_of_a_file() {

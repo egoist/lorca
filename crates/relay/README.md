@@ -59,6 +59,14 @@ Attachments go to the bucket because a deploy replaces the container's disk. The
 | `LORCA_RELAY_APNS_TOPIC` | The phone app's bundle id; `app.lorca` by default. |
 | `LORCA_RELAY_FCM_SERVICE_ACCOUNT` | The JSON of a key from Firebase console › Project settings › Service accounts. |
 
+For Dokploy and other environment editors, encode the complete Firebase JSON as base64 and prefix it with `base64:` in the same variable. Generate the environment line locally (replace the filename with your downloaded service-account file):
+
+```bash
+printf 'LORCA_RELAY_FCM_SERVICE_ACCOUNT=base64:%s\n' "$(base64 < firebase-service-account.json | tr -d '\r\n')"
+```
+
+Paste the generated line into Dokploy's environment editor and redeploy an image containing base64 support. The relay decodes standard base64 to UTF-8 before parsing JSON, preserving the quotes and private-key escapes. Wrapped base64 is accepted too. `LORCA_RELAY_APNS_KEY` and `LORCA_RELAY_GITHUB_PRIVATE_KEY` also accept `base64:` followed by their encoded PEM text.
+
 Both keys go in as text, so the service needs no volume and the Postgres setup keeps its deploys without a gap. A key with `\n` in place of its line breaks works too. Either variable also takes the path of a file (`/data/apns.p8`), for a relay that has a volume anyway. The relay's first log line shows `push=apns`, `push=fcm`, or `push=apns+fcm`.
 
 ### Optional

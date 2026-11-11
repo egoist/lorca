@@ -73,6 +73,7 @@ One doc per subject under `docs/architecture/`, each short enough to read in one
 | --- | --- |
 | [Identity](docs/architecture/identity.md) | Key pairs and the identity device, pairing and unpairing, Devices and Runners, what the relay sees, the account's provider credentials |
 | [Relay](docs/architecture/relay.md) | `crates/relay`: storage on SQLite or Postgres, files, housekeeping, quotas, metrics, rate limits, auth, tables and migrations, the blob, sync socket, and push APIs, deploys |
+| [Relay deployment](docs/architecture/relay-deployment.md) | Container builds, Railway, GHCR release tags, native build runners, and Dokploy deployment |
 | [Relay trust](docs/architecture/relay-trust.md) | What a Device takes from the relay and how it checks it: Device records and unpaired keys, signed envelopes, the challenge nonce, the pairing reply key, the account key's generations and their rotation on unpair |
 | [Protocols](docs/architecture/protocols.md) | The app ↔ CLI websocket and the CLI ↔ relay requests and blobs |
 | [Requests between Devices](docs/architecture/requests.md) | What one Device asks a Runner through the relay, sealed: timeouts and each verb |
