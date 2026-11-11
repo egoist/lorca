@@ -78,6 +78,8 @@ Both keys go in as text, so the service needs no volume and the Postgres setup k
 
 Pushing a `relay-vX.Y.Z` tag runs [Release relay](../../.github/workflows/release-relay.yml), which builds `crates/relay/Dockerfile` from the tagged commit and publishes `ghcr.io/egoist/lorca-relay` for Linux amd64 and arm64. It uses the workflow's `GITHUB_TOKEN` with `packages: write`; no registry secret is needed.
 
+The build matrix compiles each architecture on its native GitHub runner: `ubuntu-24.04` for amd64 and `ubuntu-24.04-arm` for arm64. Each pushes an image by digest with a separate build cache; after both succeed, the publish job combines their digests into one multi-platform image under the release tags. Dokploy deployment follows publication of that combined image.
+
 ```bash
 git tag relay-v1.0.0
 git push origin relay-v1.0.0
