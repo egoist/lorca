@@ -83,11 +83,25 @@ git tag relay-v1.0.0
 git push origin relay-v1.0.0
 ```
 
-That release publishes `:1.0.0`, `:sha-<full commit SHA>`, and `:latest`. `latest` follows the last successfully published release, including a release of an older version. Pin a version or image digest in production.
+That release publishes `:1.0.0`, `:sha-<full commit SHA>`, and `:latest`. `latest` follows the last successfully published release, including a release of an older version. Use a version or image digest for a manually pinned deployment, or `:latest` for the workflow's automatic deployment.
 
 In Dokploy, use the Docker image source with `ghcr.io/egoist/lorca-relay:1.0.0`, route the domain to port `8787`, and check `/v1/health`. Set `LORCA_RELAY_DB` to the Postgres connection URL and copy the relay, bucket, push, and receiver settings. Railway's `${{Postgres.DATABASE_URL}}` interpolation is specific to Railway; use the actual connection URL on another host. The `RAILWAY_*` variables configure Railway and are not needed by the image. Give the container at least 10 seconds to stop gracefully.
 
 GHCR packages initially have private visibility. For anonymous pulls, make the package public in GitHub's package settings after the first publication; for private pulls, configure the host's registry credentials with a token that has `read:packages`.
+
+### Automatic Dokploy deployment
+
+Configure the Dokploy application with Docker image source `ghcr.io/egoist/lorca-relay:latest`. After publication succeeds, the workflow's separate `deploy` job calls [`POST /api/application.deploy`](https://docs.dokploy.com/docs/core/auto-deploy#api-method). The request queues a deployment; its success does not mean the rollout is healthy. Check Dokploy's deployment logs and the relay's health endpoint. The workflow triggers deployment directly, so keep repository-push deployment triggers off for this application.
+
+Create an API key in Dokploy's profile settings and copy the relay application's id. Set these repository secrets (`DOKPLOY_URL` is the Dokploy dashboard's base URL, not the relay URL):
+
+```bash
+gh secret set DOKPLOY_URL --repo egoist/lorca --body 'https://dokploy.example.com'
+gh secret set DOKPLOY_APPLICATION_ID --repo egoist/lorca --body 'your-application-id'
+gh secret set DOKPLOY_API_KEY --repo egoist/lorca
+```
+
+The last command prompts for the key. All three secrets are required by the deployment job. GitHub-hosted runners need network access to the Dokploy API, and Dokploy needs access to GHCR. A failed deployment job can be rerun without rebuilding the successfully published image; it deploys whatever `:latest` points at then.
 
 ## Run the image elsewhere
 

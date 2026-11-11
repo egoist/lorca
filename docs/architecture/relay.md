@@ -32,6 +32,8 @@ The image (`crates/relay/Dockerfile`) builds from the repo root, since the relay
 
 The [Release relay workflow](../../.github/workflows/release-relay.yml) publishes `ghcr.io/egoist/lorca-relay` from a `relay-vX.Y.Z` tag for Linux amd64 and arm64, using the repo root and the same Dockerfile. Image tags are `X.Y.Z`, `sha-<full commit SHA>`, and `latest`, which follows the last successful publication. The workflow authenticates to GHCR with its `GITHUB_TOKEN` and `packages: write`. Hosts such as Dokploy pull a version or digest, route HTTPS and WebSocket traffic to port 8787, and check `/v1/health`; the database, file store, push, and receiver settings are the same as a source build. [Published image](../../crates/relay/README.md#published-image) covers publishing and registry access.
 
+After publishing, the workflow's `deploy` job calls Dokploy's `/api/application.deploy` using the `DOKPLOY_URL`, `DOKPLOY_API_KEY`, and `DOKPLOY_APPLICATION_ID` repository secrets. The Dokploy application uses `ghcr.io/egoist/lorca-relay:latest`, so the requested deployment pulls the published image. A successful API response acknowledges the deployment request; Dokploy's deployment logs and the relay health endpoint establish rollout success. [Automatic Dokploy deployment](../../crates/relay/README.md#automatic-dokploy-deployment) covers configuration and retries.
+
 Auth is per machine:
 
 1. `POST /v1/auth/challenge { machine_pubkey }` → nonce.

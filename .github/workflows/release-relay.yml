@@ -1,4 +1,4 @@
-# A relay-vX.Y.Z tag publishes the relay image to GHCR for Linux amd64 and arm64.
+# A relay-vX.Y.Z tag publishes the relay image to GHCR and asks Dokploy to deploy it.
 # The version and full commit SHA identify a build; latest follows the last published tag.
 name: Release relay
 
@@ -60,3 +60,30 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=relay
           cache-to: type=gha,mode=max,scope=relay
+
+  deploy:
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Deploy the published image in Dokploy
+        env:
+          DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
+          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+          DOKPLOY_APPLICATION_ID: ${{ secrets.DOKPLOY_APPLICATION_ID }}
+        shell: bash
+        run: |
+          for name in DOKPLOY_URL DOKPLOY_API_KEY DOKPLOY_APPLICATION_ID; do
+            if [[ -z ${!name} ]]; then
+              echo "::error::Missing GitHub Actions secret: $name"
+              exit 1
+            fi
+          done
+          jq -n --arg id "$DOKPLOY_APPLICATION_ID" '{applicationId: $id}' > "$RUNNER_TEMP/deploy.json"
+          curl --fail-with-body --silent --show-error \
+            --connect-timeout 10 --max-time 60 \
+            --request POST "${DOKPLOY_URL%/}/api/application.deploy" \
+            --header "x-api-key: $DOKPLOY_API_KEY" \
+            --header "Content-Type: application/json" \
+            --data-binary @"$RUNNER_TEMP/deploy.json"
+          echo "Dokploy accepted the deployment request; check its deployment logs for rollout status." >> "$GITHUB_STEP_SUMMARY"
