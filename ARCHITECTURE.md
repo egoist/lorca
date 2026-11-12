@@ -57,6 +57,7 @@ Device   1──* Plugin       (an MCP server installed on a Runner or in its mc
 Bot      1──* Job          (a turn on the bot's Runner)
 Bot      1──* Handoff      (a durable delegated request with attempts and result reports)
 Identity 1──* Task         (durable work; an owning Bot, assigned Runner, and linked Chats)
+Task     0──1 Mandate      (why a Task a channel took on may be done, and how far it may go)
 ```
 
 Where each entity is kept on a Device, and what the relay holds of it: [Relay surface](docs/architecture/identity.md#relay-surface).
@@ -104,6 +105,7 @@ One doc per subject under `docs/architecture/`, each short enough to read in one
 | [Event triggers](docs/architecture/event-triggers.md) | Runner event subscriptions, the gateways users run to sign and seal a service's events, the encrypted inbox, ordering and recovery |
 | [Hosted receivers](docs/architecture/receivers.md) | The relay's receivers for routines on events: the Lorca GitHub App and its install and bind, routine webhooks with their URL and key, what the relay sees, setup |
 | [Channels](docs/architecture/channels.md) | A bot listening on Telegram and Slack: the accounts and their builtin servers, filters, the chats the user allows and the ones asking, conversations and what people write there, replies, the feedback collector |
+| [Intake](docs/architecture/intake.md) | A channel deciding which messages are work: rules and people, the gate, the assessment, decisions, the Mandate, a Task's work chat, later messages, recovery |
 | [Channel readers](docs/architecture/channel-readers.md) | How the Runner reads Telegram and Slack, what it takes, Telegram's photos and albums |
 | [Durable tasks](docs/architecture/tasks.md) | Work that spans turns: owner, revisions, runs and recovery, evidence, the apps' Tasks section |
 | [Coordinator attention](docs/architecture/attention.md) | Consolidated reviews, blockers, commitments and changes, coordinator briefs, deduplication, encrypted records and notification preferences |

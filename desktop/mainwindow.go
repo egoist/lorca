@@ -181,8 +181,8 @@ func (m *mainWindow) restoreSelection() {
 	id := ""
 	if saved.IsChat() && (store.Chat(saved.ChatID) != nil || !store.IsConnected) {
 		id = saved.ChatID
-	} else if len(store.Chats) > 0 {
-		id = store.Chats[0].ID
+	} else if first := store.FirstChat(); first != nil {
+		id = first.ID
 	}
 	if id != "" {
 		m.setSelection(model.Selection{ChatID: id})
@@ -229,8 +229,8 @@ func (m *mainWindow) showSettingsDevice(id string) {
 func (m *mainWindow) closeSettings() {
 	if chat := store.Chat(m.lastChatID); chat != nil {
 		m.selectChat(chat.ID)
-	} else if len(store.Chats) > 0 {
-		m.selectChat(store.Chats[0].ID)
+	} else if first := store.FirstChat(); first != nil {
+		m.selectChat(first.ID)
 	} else {
 		m.selectNone()
 		m.focusComposer = true
@@ -290,8 +290,8 @@ func (m *mainWindow) storeChanged(event model.Event) {
 		m.restoreSelection()
 	case model.EventChatsChanged:
 		if m.selection.IsChat() && store.Chat(m.selection.ChatID) == nil && store.IsConnected {
-			if len(store.Chats) > 0 {
-				m.selectChat(store.Chats[0].ID)
+			if first := store.FirstChat(); first != nil {
+				m.selectChat(first.ID)
 			} else {
 				m.selectNone()
 			}

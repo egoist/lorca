@@ -210,9 +210,24 @@ export function Row({
 }
 
 /// A setting that is on or off: UIKit's switch on iOS; on Android Material 3's (Compose), with the
-/// whole row toggling it, as a Material list item with a switch does.
-export function ToggleRow({ title, value, onValueChange, icon }: { title: string; value: boolean; onValueChange: (value: boolean) => void; icon?: string }) {
+/// whole row toggling it, as a Material list item with a switch does. With `onPress` the row opens
+/// something and only the switch toggles.
+export function ToggleRow({ title, value, onValueChange, icon, onPress }: { title: string; value: boolean; onValueChange: (value: boolean) => void; icon?: string; onPress?: () => void }) {
   const p = usePalette();
+  if (onPress) {
+    // The responder keeps a tap on Compose's switch from reaching the row too; UIKit's has its own.
+    const toggle =
+      Platform.OS === "android" ? (
+        <View onStartShouldSetResponder={() => true}>
+          <ComposeHost matchContents>
+            <ComposeSwitch value={value} onCheckedChange={onValueChange} />
+          </ComposeHost>
+        </View>
+      ) : (
+        <Switch value={value} onValueChange={onValueChange} />
+      );
+    return <Row title={title} icon={icon} onPress={onPress} accessory={toggle} />;
+  }
   if (Platform.OS === "android")
     return (
       <Pressable onPress={() => onValueChange(!value)} style={styles.row} accessibilityRole="switch" accessibilityState={{ checked: value }} accessibilityLabel={title}>

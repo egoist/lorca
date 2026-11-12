@@ -168,8 +168,8 @@ func paletteChats(m *mainWindow) []paletteItem {
 			keywords = append(keywords, bot.Name)
 		}
 		id := chat.ID
-		// A hidden chat is out of the list until a query finds it.
-		items = append(items, paletteItem{bots: bots, title: store.Title(chat), subtitle: store.Subtitle(chat), keywords: keywords, searchOnly: chat.IsHidden, chatID: id, run: func() { m.open(id) }})
+		// A hidden chat or a Task's work chat is out of the list until a query finds it.
+		items = append(items, paletteItem{bots: bots, title: store.Title(chat), subtitle: store.Subtitle(chat), keywords: keywords, searchOnly: chat.IsHidden || chat.IsWorkChat(), chatID: id, run: func() { m.open(id) }})
 	}
 	return items
 }

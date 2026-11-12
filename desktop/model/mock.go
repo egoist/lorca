@@ -93,7 +93,8 @@ func mockDevices() []*Device {
 	}
 }
 
-// mockChannels has the Feedback Collector listening in the community's Telegram group.
+// mockChannels has the Feedback Collector listening in the community's Telegram group, only
+// recording what it would take on.
 func mockChannels() []Channel {
 	return []Channel{{
 		ID: "ev-feedback", BotID: "bot-tally", Name: "Community feedback", Service: "telegram", AccountID: "telegram-5f0c",
@@ -102,7 +103,24 @@ func mockChannels() []Channel {
 		Task:     "Decide whether the new message is product feedback. If it is, find the matching open issue in acme/app and comment on it, or open a new one labeled feedback with the person's words quoted. Then reply to the person in their thread in one line with the issue number.",
 		State:    ChannelListening,
 		Requests: []ChatRequest{{ID: "-1002218840551", Title: "Acme Beta Testers", From: "Priya Nair"}},
+		Intake: &ChannelIntake{Mode: IntakeObserve, People: []IntakePerson{}, Rules: []IntakeRule{{
+			ID: "rule-bugs", Name: "Bug reports", Enabled: true,
+			Instruction: "When someone reports a bug in the app, file or update an issue in acme/app with their words quoted. Don't change any code.",
+		}}},
 	}}
+}
+
+// mockDecisions is what the Feedback Collector's intake recorded in the community's group.
+func mockDecisions(channelID string) []IntakeDecision {
+	if channelID != "ev-feedback" {
+		return nil
+	}
+	at := func(minutes float64) float64 { return float64(minutesAgo(minutes).Unix()) }
+	return []IntakeDecision{
+		{ID: "decision-filter", At: at(12), Kind: DecisionWouldAccept, ConversationID: "chat-community", Sender: "Maya", SenderID: "5120033", Title: "Dashboard forgets the last filter", Reason: "Matches Bug reports: the dashboard loses a setting."},
+		{ID: "decision-android", At: at(41), Kind: DecisionIgnored, ConversationID: "chat-community", Sender: "Ben Ortiz", SenderID: "5120041", Reason: "Agrees with an earlier report and asks for nothing new."},
+		{ID: "decision-csv", At: at(64), Kind: DecisionReplied, ConversationID: "chat-community", Sender: "Alice Chen", SenderID: "5120007", Reason: "Tagged #feedback, which the channel's own task answers."},
+	}
 }
 
 func mockProviders() []ProviderCredential {

@@ -53,6 +53,8 @@ Every bot maintains structured reviews, blockers, commitments and changes throug
 
 A routine is a task a bot runs on a schedule in its direct chat, on its assigned Runner. The roster carries its schedule, timezone, missed-run policy, and check health. See [Routines](routines.md) for scheduling, read-only checks, recovery, and how the apps show them.
 
+A channel can also decide by itself which messages are work ([Intake](intake.md)), taking each on as a durable task in a chat of its own.
+
 A service's events start work in a bot's DM too, through [event subscriptions](event-triggers.md) on its Runner: each runs the subscription's own task, unattended as a routine's run is, and one that targets a routine waits while the routine is paused.
 
 A workflow adds the routines it needs paused, and `routines.set_enabled` keeps one it added off until the user has read the workflow's sample; a routine of the user's that a workflow reuses keeps its own state: [Workflow onboarding](workflows.md).

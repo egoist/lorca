@@ -211,6 +211,7 @@ type WireChannel struct {
 		Private bool   `json:"private"`
 		From    string `json:"from"`
 	} `json:"requests"`
+	Intake *ChannelIntake `json:"intake"`
 }
 
 // WireChatChannel is where a channel's conversation happens.
@@ -220,6 +221,7 @@ type WireChatChannel struct {
 	AccountID string  `json:"account_id"`
 	ChatID    string  `json:"chat_id"`
 	ThreadID  *string `json:"thread_id"`
+	TaskID    *string `json:"task_id"`
 }
 
 type WireBody struct {
@@ -871,6 +873,7 @@ func ToChannel(wire WireChannel) Channel {
 	channel := Channel{
 		ID: wire.ID, BotID: wire.BotID, Name: wire.Name, Service: wire.Service, AccountID: wire.AccountID,
 		Listen: wire.Listen, Task: wire.Task, State: ChannelState(wire.State), Detail: wire.Detail, HeldDelivery: wire.HeldDelivery,
+		Intake: wire.Intake,
 	}
 	switch channel.State {
 	case ChannelListening, ChannelPaused, ChannelHeld, ChannelOffline:
@@ -1040,7 +1043,7 @@ func ToChat(wire WireChat, existing *Chat) *Chat {
 		chat.CustomTitle = str(wire.Title)
 		chat.Channel = &ChatChannel{
 			ChannelID: wire.Channel.ChannelID, Service: wire.Channel.Service, AccountID: wire.Channel.AccountID,
-			ChatID: wire.Channel.ChatID, ThreadID: str(wire.Channel.ThreadID),
+			ChatID: wire.Channel.ChatID, ThreadID: str(wire.Channel.ThreadID), TaskID: str(wire.Channel.TaskID),
 		}
 	}
 	chat.OwnerBotID = str(wire.OwnerBotID)

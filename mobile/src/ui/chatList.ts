@@ -1,9 +1,9 @@
 // What the chat list shows, after the desktop app's sidebar: the pinned chats; each section under
 // its header with its chats, then the chats in no section under Chats; and the hidden chats under
 // Hidden. Without sections the chats are one list with no header, and without hidden chats there is
-// no Hidden. A folded group shows its header alone.
+// no Hidden. A folded group shows its header alone. A Task's work chat is in none of them.
 
-import type { Chat, Section } from "../core/model";
+import { isWorkChat, type Chat, type Section } from "../core/model";
 
 export type ChatGroup = { kind: "section"; id: string } | { kind: "others" } | { kind: "hidden" };
 
@@ -19,8 +19,9 @@ export function chatListRows(chats: Chat[], sections: Section[], showsHidden: bo
     rows.push({ kind: "header", key: groupKey(group), group, collapsed });
     if (!collapsed) rows.push(...members.map(chatRow));
   };
-  const listed = chats.filter((chat) => !chat.is_hidden);
-  const hidden = chats.filter((chat) => chat.is_hidden);
+  const kept = chats.filter((chat) => !isWorkChat(chat));
+  const listed = kept.filter((chat) => !chat.is_hidden);
+  const hidden = kept.filter((chat) => chat.is_hidden);
   if (!sections.length) {
     rows.push(...listed.map(chatRow));
   } else {
@@ -43,6 +44,7 @@ export function groupKey(group: ChatGroup): string {
 
 /// The group a chat shows under, when the list has groups for it.
 export function groupOf(chat: Chat, sections: Section[]): ChatGroup | null {
+  if (isWorkChat(chat)) return null;
   if (chat.is_hidden) return { kind: "hidden" };
   if (!sections.length || chat.is_pinned) return null;
   return chat.section_id && sections.some((section) => section.id === chat.section_id) ? { kind: "section", id: chat.section_id } : { kind: "others" };

@@ -157,10 +157,11 @@ func (a *appDelegate) storeChanged(event model.Event) {
 func unreadBadge() int {
 	count := 0
 	if store.HasIdentity == nil || *store.HasIdentity {
-		// A muted chat keeps its count in the sidebar but leaves the badge alone.
+		// A muted chat keeps its count in the sidebar but leaves the badge alone, and a Task's work
+		// chat has no row to read it from.
 		now := time.Now()
 		for _, chat := range store.Chats {
-			if !chat.IsMuted(now) {
+			if !chat.IsMuted(now) && !chat.IsWorkChat() {
 				count += chat.UnreadCount
 			}
 		}

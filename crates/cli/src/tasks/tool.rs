@@ -10,6 +10,9 @@ pub(crate) struct TasksTool {
     pub bot_id: String,
     pub chat_id: String,
     pub job_id: String,
+    /// The user started this turn: only then does the tool change a Task a channel took on, beyond
+    /// that Task's own run recording where it stands.
+    pub user_started: bool,
 }
 
 #[async_trait]
@@ -70,6 +73,24 @@ impl Tool for TasksTool {
         if action == "get" {
             object.entry("refresh").or_insert(json!(true));
         }
+        // A turn nobody started reads a Task a channel took on only from that Task's own chats: its
+        // goal, results, and who asked belong to the chat it came from.
+        if action == "get" && !self.user_started {
+            let hidden = object.get("id").and_then(|id| id.as_str()).and_then(|id| super::get(&self.app, id).ok()).is_some_and(|task| task.mandate.is_some() && !task.chat_ids.contains(&self.chat_id));
+            if hidden {
+                return Err(ToolError("That task belongs to another chat.".into()));
+            }
+        }
+        if matches!(action.as_str(), "update" | "run") && !self.user_started {
+            let mandated = object.get("id").and_then(|id| id.as_str()).and_then(|id| super::get(&self.app, id).ok()).filter(|task| task.mandate.is_some());
+            if let Some(task) = mandated {
+                let own_run = task.active_run.as_ref().is_some_and(|run| run.id == self.job_id);
+                let state = object.get("state").and_then(|state| state.as_str()).unwrap_or_default();
+                if action == "run" || !own_run || matches!(state, "cancelled" | "completed" | "awaiting_review") {
+                    return Err(ToolError("A task a channel took on changes only as its own run reports it: record it blocked, call task_stop for someone who asked to stop, or answer in the thread and it finishes by itself. The user can do anything else.".into()));
+                }
+            }
+        }
         // A task run that records its own outcome says so, and the authority leaves its turn
         // to end on this result instead of cancelling it.
         if action == "update" && self.job_id.starts_with("task-run-") {
@@ -80,6 +101,11 @@ impl Tool for TasksTool {
         let result = super::dispatch(&self.app, &format!("tasks.{action}"), args)
             .await
             .map_err(ToolError)?;
+        let result = if action == "list" && !self.user_started {
+            json!(result.as_array().into_iter().flatten().filter(|task| task["mandate"].is_null() || task["chat_ids"].as_array().is_some_and(|chats| chats.iter().any(|id| id == self.chat_id.as_str()))).cloned().collect::<Vec<_>>())
+        } else {
+            result
+        };
         let stops_this_run = action == "update"
             && result["active_run"]["id"] == self.job_id
             && result["state"] != "working";

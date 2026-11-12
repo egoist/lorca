@@ -165,6 +165,20 @@ func LastSeen(t time.Time) string {
 	return L("Last seen %dd ago", int(elapsed/86400))
 }
 
+// Ago is how long ago something happened: "just now", "5m ago", "3h ago", "2d ago".
+func Ago(t time.Time) string {
+	elapsed := Now().Sub(t).Seconds()
+	switch {
+	case elapsed < 60:
+		return L("just now")
+	case elapsed < 3600:
+		return L("%dm ago", int(elapsed/60))
+	case elapsed < 86400:
+		return L("%dh ago", int(elapsed/3600))
+	}
+	return L("%dd ago", int(elapsed/86400))
+}
+
 // Upcoming is "today 9:00 AM", "tomorrow 9:00 AM", "Monday 9:00 AM", "Oct 1 9:00 AM": when a run
 // is due.
 func Upcoming(t time.Time) string {

@@ -28,6 +28,7 @@ pub mod drafts;
 pub mod envelope;
 pub mod events;
 pub mod event_triggers;
+pub mod intake;
 pub mod routine_events;
 pub mod files;
 pub mod feedback;

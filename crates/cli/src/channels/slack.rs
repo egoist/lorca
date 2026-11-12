@@ -183,6 +183,7 @@ pub fn incoming(account_id: &str, me: &Identity, event: &Value) -> Option<Incomi
         message_id: ts,
         reply_to: None,
         sender: user.to_string(),
+        sender_id: user.to_string(),
         mentions_bot: kind == "app_mention" || (!me.user_id.is_empty() && text.contains(&mention)),
         replies_to_bot: thread_ts.is_some() && event["parent_user_id"].as_str() == Some(me.user_id.as_str()),
         text,
@@ -293,6 +294,9 @@ impl crate::plugins::builtin::Service for Server {
         }
         if super::holds_secret(app, text) {
             return text_result(super::SECRET_REFUSED, true);
+        }
+        if crate::intake::reply_too_long(app, &context, text) {
+            return text_result(crate::intake::REPLY_TOO_LONG, true);
         }
         let thread_ts = args["thread_ts"].as_str().map(str::trim).filter(|ts| !ts.is_empty()).map(str::to_string);
         let mut body = json!({ "channel": channel, "text": text });
