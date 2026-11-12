@@ -507,24 +507,38 @@ impl App {
         }
     }
 
-    /// Changes the account's credential of `kind`: saved here, sent to the other Devices, and
-    /// shown by the apps.
+    /// Changes the account's credential of `kind`: saved here, sent to the other Devices unless
+    /// this one keeps it, and shown by the apps.
     pub fn update_credentials(&self, kind: &str, update: impl FnOnce(&mut Credentials)) -> anyhow::Result<()> {
         {
             let mut credentials = self.credentials.lock().unwrap();
             update(&mut credentials);
             credentials.touch(kind);
         }
+        self.credentials_changed()
+    }
+
+    /// Keeps `kind` on this Device (`sync` false) or sends it to every Device (`sync` true):
+    /// the others take it, or lose it, with the next set this one sends.
+    pub fn set_provider_sync(&self, kind: &str, sync: bool) -> anyhow::Result<()> {
+        self.credentials.lock().unwrap().set_sync(kind, Some(sync));
+        self.credentials_changed()
+    }
+
+    /// Saves the credentials, sends the other Devices what they share, tells them which
+    /// providers this one keeps, and shows the apps.
+    pub fn credentials_changed(&self) -> anyhow::Result<()> {
         self.save_credentials()?;
         self.push_credentials();
+        self.push_machine_blob_if_changed();
         self.emit(self.roster_summary());
         Ok(())
     }
 
-    /// Queues the account's credentials for the other Devices.
+    /// Queues the credentials this Device shares for the other Devices: all but the kept ones.
     pub fn push_credentials(&self) {
         let Some(dek) = self.dek() else { return };
-        let credentials = self.credentials.lock().unwrap().clone();
+        let credentials = self.credentials.lock().unwrap().shared();
         match crate::crypto::encrypt_json(&dek, "credentials", &credentials) {
             Ok(ciphertext) => {
                 self.state.lock().unwrap().credentials_uploaded = true;
@@ -719,6 +733,7 @@ impl App {
             box_pubkey: keys.box_pubkey(),
             plugins: self.plugins.lock().unwrap().statuses(),
             channels: self.channels.statuses(),
+            providers: self.credentials.lock().unwrap().kept_statuses(),
             version: config::VERSION.into(),
             update: self.update_status(),
             app: self.app_status(),
@@ -909,7 +924,7 @@ impl App {
         let budgets = self.budgets.local_snapshots(self);
         let watching = self.watched_chat.lock().unwrap().clone();
         let fingerprint = format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
             device.id,
             device.name,
             device.model,
@@ -917,6 +932,7 @@ impl App {
             device.os_version,
             serde_json::to_string(&device.plugins).unwrap_or_default(),
             serde_json::to_string(&device.channels).unwrap_or_default(),
+            serde_json::to_string(&device.providers).unwrap_or_default(),
             device.version,
             serde_json::to_string(&device.update).unwrap_or_default(),
             serde_json::to_string(&device.app).unwrap_or_default(),
@@ -1243,7 +1259,7 @@ impl App {
             routines: self.routines_out(&state),
             auto_review: state.auto_review.clone(),
             shared_links: state.shared_links.iter().map(crate::templates::links::SharedLink::out).collect(),
-            providers: self.credentials.lock().unwrap().statuses(),
+            providers: self.provider_statuses_in(&state),
             models: models_out(),
             playbooks: crate::playbooks::summaries(self),
         }
@@ -2258,6 +2274,39 @@ impl App {
 
     // MARK: - Snapshot
 
+    /// The account's providers as the apps show them: this Device's, each with the Runners that
+    /// keep it to themselves, and the custom providers only other Runners keep.
+    pub fn provider_statuses(&self) -> Vec<ProviderStatus> {
+        let state = self.state.lock().unwrap();
+        self.provider_statuses_in(&state)
+    }
+
+    fn provider_statuses_in(&self, state: &State) -> Vec<ProviderStatus> {
+        let mut statuses = self.credentials.lock().unwrap().statuses();
+        let this_id = self.this_device_id();
+        for status in statuses.iter_mut().filter(|status| status.kept && status.is_connected) {
+            status.runners.extend(this_id.clone());
+        }
+        for device in state.devices.iter().filter(|device| Some(&device.id) != this_id.as_ref() && device.is_runner()) {
+            for kept in &device.providers {
+                match statuses.iter_mut().find(|status| status.kind == kept.kind) {
+                    Some(status) => status.runners.push(device.id.clone()),
+                    None => statuses.push(ProviderStatus { is_connected: false, kept: false, runners: vec![device.id.clone()], ..kept.clone() }),
+                }
+            }
+        }
+        for status in statuses.iter_mut().filter(|status| !status.is_connected && !status.runners.is_empty()) {
+            let names: Vec<String> = status
+                .runners
+                .iter()
+                .filter_map(|id| state.devices.iter().find(|device| &device.id == id))
+                .map(|device| state.device_names.get(&device.id).unwrap_or(&device.name).clone())
+                .collect();
+            status.detail = format!("Kept on {}", names.join(", "));
+        }
+        statuses
+    }
+
     fn devices_out(&self, state: &State) -> Vec<Value> {
         let this_id = self.this_device_id();
         let name = |device: &Device| state.device_names.get(&device.id).unwrap_or(&device.name).clone();
@@ -2349,7 +2398,7 @@ impl App {
             "tasks": crate::tasks::list(self).unwrap_or_default(),
             "auto_review": state.auto_review,
             "shared_links": state.shared_links.iter().map(crate::templates::links::SharedLink::out).collect::<Vec<_>>(),
-            "providers": self.credentials.lock().unwrap().statuses(),
+            "providers": self.provider_statuses_in(&state),
             "models": models_out(),
             "playbooks": crate::playbooks::summaries(self),
             "running_chat_ids": self.running_chat_ids(),

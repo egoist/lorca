@@ -236,7 +236,18 @@ pub fn thinking_level(bot: &crate::model::Bot) -> Option<ThinkingLevel> {
 }
 
 pub fn provider_for(app: &Arc<App>, kind: &str, model: Option<&str>, thinking: Option<ThinkingLevel>) -> Result<Arc<dyn Provider>, String> {
-    unmetered_provider_for(app, kind, model, thinking).map(|provider| crate::budgets::wrap_provider(app, provider))
+    unmetered_provider_for(app, kind, model, thinking).map(|provider| crate::budgets::wrap_provider(app, provider)).map_err(|error| kept_elsewhere(app, kind).unwrap_or(error))
+}
+
+/// Why a provider this Runner lacks is out of reach: another Runner keeps it to itself.
+fn kept_elsewhere(app: &App, kind: &str) -> Option<String> {
+    if app.credentials.lock().unwrap().connected_kinds().iter().any(|connected| connected == kind) {
+        return None;
+    }
+    let status = app.provider_statuses().into_iter().find(|status| status.kind == kind && !status.runners.is_empty())?;
+    let name = status.name.clone().unwrap_or_else(|| app.credentials.lock().unwrap().label(kind));
+    let place = status.detail.strip_prefix("Kept on ").unwrap_or(&status.detail);
+    Some(format!("{name} is kept on {place}. Connect it on this Device too, or sync it from there."))
 }
 
 fn unmetered_provider_for(app: &Arc<App>, kind: &str, model: Option<&str>, thinking: Option<ThinkingLevel>) -> Result<Arc<dyn Provider>, String> {

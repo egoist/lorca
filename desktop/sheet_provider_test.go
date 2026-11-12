@@ -204,11 +204,43 @@ func TestRenderConnectProviderSheet(t *testing.T) {
 		t.Errorf("after Connect: %q", tt.Texts())
 	}
 
-	_, tt = sheetATester(t, func(m *mainWindow) { m.presentConnectProvider("chatgpt", "", nil) })
-	for _, text := range []string{"Connect ChatGPT", "Sign in with ChatGPT…", "Sign-in uses the same OAuth flow as the Codex CLI. It needs a ChatGPT subscription."} {
+	_, tt = sheetATester(t, func(m *mainWindow) { m.presentConnectProvider("grok", "", nil) })
+	for _, text := range []string{"Connect Grok", "Sign in with Grok…", "Sign-in uses the same OAuth flow as xAI's Grok CLI. It needs a SuperGrok or X Premium+ subscription.", "Sync to your other Devices"} {
 		if !tt.HasText(text) {
 			t.Errorf("no %q in %q", text, tt.Texts())
 		}
 	}
-	sheetARender(t, tt, "connect-chatgpt")
+	// Off, the sign-in stays on this Device.
+	if err := tt.Click("Sync to your other Devices"); err != nil {
+		t.Fatal(err)
+	}
+	sheetASettle(tt)
+	if !tt.HasText("Your browser opens a Grok sign-in. The tokens are kept on this Device.") {
+		t.Errorf("after the switch: %q", tt.Texts())
+	}
+	// The switch slides on the tester's clock.
+	tt.Advance(300 * time.Millisecond)
+	tt.Frame()
+	sheetARender(t, tt, "connect-grok")
+
+	// A signed-in subscription opens to change where it syncs, or to disconnect.
+	m, tt := sheetATester(t, func(m *mainWindow) { m.presentConnectProvider("chatgpt", "", nil) })
+	for _, text := range []string{"Sign-in uses the same OAuth flow as the Codex CLI. It needs a ChatGPT subscription.", "Disconnect", "Save"} {
+		if !tt.HasText(text) {
+			t.Errorf("no %q in %q", text, tt.Texts())
+		}
+	}
+	if err := tt.Click("Sync to your other Devices"); err != nil {
+		t.Fatal(err)
+	}
+	sheetASettle(tt)
+	if err := tt.Click("Save"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	sheetASettle(tt)
+	if credential := store.Credential("chatgpt"); credential == nil || !credential.Kept {
+		t.Errorf("ChatGPT is not kept: %+v", credential)
+	}
+	_ = m
 }

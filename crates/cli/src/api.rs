@@ -249,7 +249,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         // has brought its credentials.
         "sync.account" => {
             crate::sync::wait_for_account(app, crate::sync::ACCOUNT_WAIT).await;
-            Ok(json!({ "providers": app.credentials.lock().unwrap().statuses() }))
+            Ok(json!({ "providers": app.provider_statuses() }))
         }
         // The app came back to the foreground: ask the relay again now, not after the backoff.
         "sync.wake" => {
@@ -1045,23 +1045,23 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         }
         #[cfg(feature = "provider-auth")]
         "providers.connect_deepseek" => {
-            provider_auth::connect_deepseek(app, &string(&params, "api_key")?, opt_string(&params, "base_url").as_deref()).await?;
-            Ok(json!({ "providers": app.credentials.lock().unwrap().statuses() }))
+            provider_auth::connect_deepseek(app, &string(&params, "api_key")?, opt_string(&params, "base_url").as_deref(), params["sync"].as_bool()).await?;
+            Ok(json!({ "providers": app.provider_statuses() }))
         }
         #[cfg(feature = "provider-auth")]
         "providers.connect_anthropic" => {
-            provider_auth::connect_anthropic(app, &string(&params, "api_key")?, opt_string(&params, "base_url").as_deref()).await?;
-            Ok(json!({ "providers": app.credentials.lock().unwrap().statuses() }))
+            provider_auth::connect_anthropic(app, &string(&params, "api_key")?, opt_string(&params, "base_url").as_deref(), params["sync"].as_bool()).await?;
+            Ok(json!({ "providers": app.provider_statuses() }))
         }
         #[cfg(feature = "provider-auth")]
         "providers.connect_opencode" => {
-            provider_auth::connect_opencode(app, &string(&params, "api_key")?, opt_string(&params, "base_url").as_deref()).await?;
-            Ok(json!({ "providers": app.credentials.lock().unwrap().statuses() }))
+            provider_auth::connect_opencode(app, &string(&params, "api_key")?, opt_string(&params, "base_url").as_deref(), params["sync"].as_bool()).await?;
+            Ok(json!({ "providers": app.provider_statuses() }))
         }
         #[cfg(feature = "provider-auth")]
         "providers.connect_opencode_go" => {
-            provider_auth::connect_opencode_go(app, &string(&params, "api_key")?, opt_string(&params, "base_url").as_deref()).await?;
-            Ok(json!({ "providers": app.credentials.lock().unwrap().statuses() }))
+            provider_auth::connect_opencode_go(app, &string(&params, "api_key")?, opt_string(&params, "base_url").as_deref(), params["sync"].as_bool()).await?;
+            Ok(json!({ "providers": app.provider_statuses() }))
         }
         // The chat models a custom provider's server lists, for the model picker.
         #[cfg(feature = "provider-auth")]
@@ -1080,42 +1080,53 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                 base_url: params["base_url"].as_str().unwrap_or_default().to_string(),
                 api_key: params["api_key"].as_str().unwrap_or_default().to_string(),
                 models: params["models"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect(),
+                sync: params["sync"].as_bool(),
             };
             let kind = provider_auth::connect_custom(app, input).await?;
-            Ok(json!({ "kind": kind, "providers": app.credentials.lock().unwrap().statuses() }))
+            Ok(json!({ "kind": kind, "providers": app.provider_statuses() }))
         }
         #[cfg(feature = "provider-auth")]
         "providers.connect_chatgpt" => {
             let cancel = app.begin_provider_auth();
             let opener = app.clone();
-            let login = provider_auth::connect_chatgpt(app, move |url| open_provider_auth(&opener, "chatgpt", url));
+            let login = provider_auth::connect_chatgpt(app, params["sync"].as_bool(), move |url| open_provider_auth(&opener, "chatgpt", url));
             let tokens = tokio::select! {
                 result = login => result?,
                 _ = cancel.cancelled() => return Err("Sign-in cancelled".into()),
             };
-            Ok(json!({ "email": tokens.email, "providers": app.credentials.lock().unwrap().statuses() }))
+            Ok(json!({ "email": tokens.email, "providers": app.provider_statuses() }))
         }
         #[cfg(feature = "provider-auth")]
         "providers.connect_grok" => {
             let cancel = app.begin_provider_auth();
             let opener = app.clone();
-            let login = provider_auth::connect_grok(app, move |url| open_provider_auth(&opener, "grok", url));
+            let login = provider_auth::connect_grok(app, params["sync"].as_bool(), move |url| open_provider_auth(&opener, "grok", url));
             let tokens = tokio::select! {
                 result = login => result?,
                 _ = cancel.cancelled() => return Err("Sign-in cancelled".into()),
             };
-            Ok(json!({ "email": tokens.email, "providers": app.credentials.lock().unwrap().statuses() }))
+            Ok(json!({ "email": tokens.email, "providers": app.provider_statuses() }))
         }
         #[cfg(feature = "provider-auth")]
         "providers.auth.cancel" => {
             app.cancel_provider_auth();
             Ok(Value::Null)
         }
+        // Keeps a connected provider on this Device (`sync` false) or sends it to every Device.
+        "providers.set_sync" => {
+            let kind = string(&params, "kind")?;
+            let sync = params["sync"].as_bool().ok_or("sync must be true or false")?;
+            if !app.credentials.lock().unwrap().connected_kinds().contains(&kind) {
+                return Err(format!("{} is not connected on this Device", app.credentials.lock().unwrap().label(&kind)));
+            }
+            app.set_provider_sync(&kind, sync).map_err(|e| e.to_string())?;
+            Ok(json!({ "providers": app.provider_statuses() }))
+        }
         #[cfg(feature = "provider-auth")]
         "providers.disconnect" => {
             app.cancel_provider_auth();
             provider_auth::disconnect(app, &string(&params, "kind")?)?;
-            Ok(json!({ "providers": app.credentials.lock().unwrap().statuses() }))
+            Ok(json!({ "providers": app.provider_statuses() }))
         }
         // Asks lorca.app for a newer model catalog now, even within the hour of the last check.
         "models.reload" => {

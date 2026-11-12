@@ -35,6 +35,16 @@ lorca provider set chatgpt
 lorca provider list
 ```
 
+### Keep a provider on one device
+
+A provider syncs to all your devices by default. To keep one on a single computer, turn off **Sync to your other Devices** when you connect it, or later in its sheet. Its key or sign-in then stays on that computer, and your other devices drop any copy they had. Only bots on that computer use it. Other devices still list it, as kept on that computer, so a new bot there can pick it.
+
+```bash
+lorca provider set deepseek --keep
+lorca provider sync deepseek --off
+lorca provider sync deepseek
+```
+
 ### Custom API endpoint
 
 For a proxy or a compatible server, fill in **Base URL** when you connect any API-key provider. The key is checked against that endpoint.
@@ -84,7 +94,7 @@ If a bot's provider is not connected, its turn ends with a note that says to con
 
 ## Disconnect
 
-**Disconnect** removes the credential from every device. For Grok it also revokes the sign-in. **Delete** removes a custom provider from every device; `lorca provider remove` does the same from a terminal, with the kind `lorca provider list` shows, such as `custom:openrouter`.
+**Disconnect** removes the credential from every device. A provider kept on one computer is removed from that computer only. For Grok it also revokes the sign-in. **Delete** removes a custom provider from every device; `lorca provider remove` does the same from a terminal, with the kind `lorca provider list` shows, such as `custom:openrouter`.
 
 ## Cost
 

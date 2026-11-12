@@ -3289,9 +3289,10 @@ func (s *Store) ProviderAPIKey(kind ProviderKind, done func(SavedKey, error)) {
 	Async(s, func() (SavedKey, error) { return call[SavedKey](s, "providers.api_key", map[string]any{"kind": kind}) }, done)
 }
 
-// ConnectAPIKey connects an API-key provider. An empty base URL means the provider's own API.
-func (s *Store) ConnectAPIKey(kind ProviderKind, apiKey, baseURL string, done func(error)) {
-	params := map[string]any{"api_key": apiKey}
+// ConnectAPIKey connects an API-key provider. An empty base URL means the provider's own API; sync
+// false keeps the key on this Device.
+func (s *Store) ConnectAPIKey(kind ProviderKind, apiKey, baseURL string, sync bool, done func(error)) {
+	params := map[string]any{"api_key": apiKey, "sync": sync}
 	if trimmed := strings.TrimSpace(baseURL); trimmed != "" {
 		params["base_url"] = trimmed
 	}
@@ -3299,9 +3300,27 @@ func (s *Store) ConnectAPIKey(kind ProviderKind, apiKey, baseURL string, done fu
 }
 
 // ConnectSignIn runs a subscription sign-in (`providers.connect_chatgpt`, `providers.connect_grok`):
-// the CLI opens the browser on this computer and the tokens go to the whole account.
-func (s *Store) ConnectSignIn(kind ProviderKind, done func(error)) {
-	Async(s, func() (struct{}, error) { return struct{}{}, s.request(ConnectMethod(kind), nil, nil) }, func(_ struct{}, err error) { done(err) })
+// the CLI opens the browser on this computer and the tokens go to the whole account, or stay on
+// this Device when sync is false.
+func (s *Store) ConnectSignIn(kind ProviderKind, sync bool, done func(error)) {
+	params := map[string]any{"sync": sync}
+	Async(s, func() (struct{}, error) { return struct{}{}, s.request(ConnectMethod(kind), params, nil) }, func(_ struct{}, err error) { done(err) })
+}
+
+// SetProviderSync sends a connected provider to every Device, or keeps it on this one
+// (`providers.set_sync`).
+func (s *Store) SetProviderSync(kind ProviderKind, sync bool, done func(error)) {
+	if s.IsMock {
+		if credential := s.Credential(kind); credential != nil {
+			credential.Kept = !sync
+		}
+		s.rosterTouched("")
+		s.post(func() { done(nil) })
+		return
+	}
+	Async(s, func() (struct{}, error) {
+		return struct{}{}, s.request("providers.set_sync", map[string]any{"kind": kind, "sync": sync}, nil)
+	}, func(_ struct{}, err error) { done(err) })
 }
 
 // CancelSignIn stops a sign-in that is waiting on the browser.
@@ -3371,6 +3390,8 @@ type CustomProvider struct {
 	APIKey  string
 	// Models are the ids it offers, the default first; empty takes every model the server lists.
 	Models []string
+	// Sync sends it to every Device; false keeps it on this one.
+	Sync bool
 }
 
 // SaveCustomProvider adds a custom provider, or saves the one Kind names, once the CLI has heard
@@ -3389,7 +3410,7 @@ func (s *Store) SaveCustomProvider(options CustomProvider, done func(ProviderKin
 		if kind == "" {
 			kind = "custom:" + strings.ReplaceAll(strings.ToLower(name), " ", "-")
 		}
-		saved := ProviderCredential{Kind: kind, IsConnected: true, Detail: baseURL, BaseURL: baseURL, Name: name, API: options.API}
+		saved := ProviderCredential{Kind: kind, IsConnected: true, Detail: baseURL, BaseURL: baseURL, Name: name, API: options.API, Kept: !options.Sync}
 		if len(models) > 0 {
 			saved.ReviewModel = models[0]
 		}
@@ -3410,7 +3431,7 @@ func (s *Store) SaveCustomProvider(options CustomProvider, done func(ProviderKin
 		s.post(func() { done(kind, nil) })
 		return
 	}
-	params := map[string]any{"name": name, "api": string(options.API), "base_url": baseURL, "api_key": strings.TrimSpace(options.APIKey), "models": models}
+	params := map[string]any{"name": name, "api": string(options.API), "base_url": baseURL, "api_key": strings.TrimSpace(options.APIKey), "models": models, "sync": options.Sync}
 	if options.Kind != "" {
 		params["kind"] = options.Kind
 	}

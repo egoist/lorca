@@ -1,7 +1,8 @@
 //! The account's provider credentials: API keys with an optional base URL, the ChatGPT and
 //! Grok sign-ins, and the custom providers the user added. They travel as one `credentials`
 //! blob under the account DEK, so every Device holds the same set in its private core folder;
-//! a Runner builds its providers from them (`runner` feature).
+//! a Runner builds its providers from them (`runner` feature). A provider the user keeps on one
+//! Device stays in that Device's file alone: the blob it sends carries none of it.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -157,6 +158,11 @@ pub struct Credentials {
     /// disconnect is an entry here with no credential beside it.
     #[serde(default)]
     pub changed_at: BTreeMap<String, f64>,
+    /// The kinds this Device keeps to itself, and when it began to: their credentials stay in
+    /// its own file, the set it sends carries each as removed at that time, and the sets that
+    /// arrive never replace them. Never part of the blob.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub kept: BTreeMap<String, f64>,
 }
 
 /// What `Credentials::merge` found.
@@ -200,7 +206,14 @@ impl Credentials {
         let custom: BTreeSet<&String> = self.changed_at.keys().chain(other.changed_at.keys()).filter(|kind| is_custom(kind)).collect();
         let kinds: Vec<String> = PROVIDER_KINDS.iter().map(|kind| kind.to_string()).chain(custom.into_iter().cloned()).collect();
         for kind in kinds {
-            let (ours, theirs) = (self.changed_at.get(&kind).copied(), other.changed_at.get(&kind).copied());
+            let theirs = other.changed_at.get(&kind).copied();
+            // A kind kept here is never taken; the set this Device sends removes it as of when
+            // it was kept, which a set without that removal still needs.
+            if let Some(kept_at) = self.kept.get(&kind).copied() {
+                merge.is_ahead |= theirs.is_none_or(|theirs| kept_at > theirs);
+                continue;
+            }
+            let ours = self.changed_at.get(&kind).copied();
             match (ours, theirs) {
                 (ours, Some(theirs)) if ours.is_none_or(|ours| theirs > ours) => {
                     match kind.as_str() {
@@ -233,6 +246,49 @@ impl Credentials {
         config::write_json_private(&config.credentials_path(), self)
     }
 
+    /// The set the other Devices get: every kind kept here is removed, as of when it was kept.
+    pub fn shared(&self) -> Credentials {
+        let mut shared = self.clone();
+        for (kind, kept_at) in std::mem::take(&mut shared.kept) {
+            shared.clear(&kind);
+            shared.changed_at.insert(kind, kept_at);
+        }
+        shared
+    }
+
+    /// Whether this Device keeps `kind` to itself.
+    pub fn is_kept(&self, kind: &str) -> bool {
+        self.kept.contains_key(kind)
+    }
+
+    /// Keeps `kind` on this Device (`sync` false) or sends it to the other Devices (`sync`
+    /// true); `None` leaves it as it is. A kind that starts syncing is changed now, so the
+    /// other Devices take it; one that stops goes from their sets.
+    pub fn set_sync(&mut self, kind: &str, sync: Option<bool>) {
+        match sync {
+            Some(true) if self.kept.remove(kind).is_some() => self.touch(kind),
+            Some(false) if !self.is_kept(kind) => {
+                self.kept.insert(kind.to_string(), config::now_secs());
+            }
+            _ => {}
+        }
+    }
+
+    /// Removes the credential of `kind` from this set.
+    pub fn clear(&mut self, kind: &str) {
+        match kind {
+            "deepseek" => self.deepseek = None,
+            "anthropic" => self.anthropic = None,
+            "opencode" => self.opencode = None,
+            "opencode-go" => self.opencode_go = None,
+            "chatgpt" => self.chatgpt = None,
+            "grok" => self.grok = None,
+            _ => {
+                self.custom.remove(kind);
+            }
+        }
+    }
+
     pub(crate) fn api_key(&self, kind: &str) -> Option<&ApiKeyCredential> {
         match kind {
             "deepseek" => self.deepseek.as_ref(),
@@ -241,6 +297,16 @@ impl Credentials {
             "opencode-go" => self.opencode_go.as_ref(),
             _ => None,
         }
+    }
+
+    /// What this Device tells the others of the providers it keeps: each one connected, with
+    /// its name, protocol, and models, and without its key, URL, or detail.
+    pub fn kept_statuses(&self) -> Vec<ProviderStatus> {
+        self.statuses()
+            .into_iter()
+            .filter(|status| status.kept && status.is_connected)
+            .map(|status| ProviderStatus { detail: String::new(), base_url: None, review_model: None, ..status })
+            .collect()
     }
 
     pub fn connected_kinds(&self) -> Vec<String> {
@@ -337,6 +403,7 @@ impl Credentials {
                 detail: detail.unwrap_or_else(|| "Not connected".into()),
                 review_model: self.review_model(kind),
                 base_url: self.api_key(kind).and_then(|c| c.base_url.clone()),
+                kept: self.is_kept(kind),
                 ..Default::default()
             }
         });
@@ -348,6 +415,7 @@ impl Credentials {
             };
             ProviderStatus {
                 review_model: self.review_model(&kind),
+                kept: self.is_kept(&kind),
                 kind,
                 is_connected: true,
                 detail,
@@ -363,6 +431,7 @@ impl Credentials {
                         levels: if provider.api.decides() { Vec::new() } else { custom_levels(&model.id, Some(model)) },
                     })
                     .collect(),
+                runners: Vec::new(),
             }
         });
         built_in.chain(custom).collect()
@@ -434,6 +503,58 @@ mod tests {
         assert_eq!(ours.merge(&theirs).taken, vec!["deepseek".to_string()]);
         assert!(ours.deepseek.is_none());
         assert!(ours.connected_kinds().is_empty());
+    }
+
+    #[test]
+    fn a_kept_provider_stays_out_of_the_shared_set_and_removes_it_elsewhere() {
+        let mut ours = Credentials { deepseek: key("mine"), anthropic: key("shared"), ..Default::default() };
+        ours.changed_at.insert("deepseek".into(), 1.0);
+        ours.changed_at.insert("anthropic".into(), 1.0);
+        ours.custom.insert("custom:lab".into(), custom("Lab", 1));
+        ours.changed_at.insert("custom:lab".into(), 1.0);
+        ours.kept.insert("deepseek".into(), 3.0);
+        ours.kept.insert("custom:lab".into(), 3.0);
+
+        let shared = ours.shared();
+        assert!(shared.deepseek.is_none() && shared.custom.is_empty() && shared.kept.is_empty());
+        assert_eq!(shared.anthropic.as_ref().unwrap().api_key, "shared");
+        assert_eq!(shared.changed_at["deepseek"], 3.0, "removed as of when it was kept");
+        assert!(!serde_json::to_string(&shared).unwrap().contains("mine"));
+
+        // Another Device that had the key drops it.
+        let mut other = Credentials { deepseek: key("mine"), ..Default::default() };
+        other.changed_at.insert("deepseek".into(), 1.0);
+        assert!(other.merge(&shared).taken.contains(&"deepseek".to_string()));
+        assert!(other.deepseek.is_none() && other.custom.is_empty());
+        assert_eq!(other.anthropic.as_ref().unwrap().api_key, "shared");
+
+        // One it connected later never replaces the kept key, and one connected before the keep
+        // still owes the removal.
+        let mut later = Credentials { deepseek: key("theirs"), ..Default::default() };
+        later.changed_at.insert("deepseek".into(), 4.0);
+        assert!(ours.merge(&later).taken.is_empty());
+        assert_eq!(ours.deepseek.as_ref().unwrap().api_key, "mine");
+        let mut before = Credentials { deepseek: key("theirs"), ..Default::default() };
+        before.changed_at.insert("deepseek".into(), 2.0);
+        assert!(ours.merge(&before).is_ahead);
+
+        let statuses = ours.kept_statuses();
+        assert_eq!(statuses.iter().map(|s| s.kind.as_str()).collect::<Vec<_>>(), ["deepseek", "custom:lab"]);
+        assert!(statuses.iter().all(|s| s.kept && s.detail.is_empty() && s.base_url.is_none()));
+    }
+
+    #[test]
+    fn syncing_a_kept_provider_again_sends_it_now() {
+        let mut ours = Credentials { deepseek: key("mine"), ..Default::default() };
+        ours.changed_at.insert("deepseek".into(), 1.0);
+        ours.set_sync("deepseek", Some(false));
+        assert!(ours.is_kept("deepseek"));
+        ours.set_sync("deepseek", None);
+        assert!(ours.is_kept("deepseek"), "no choice leaves it kept");
+        ours.set_sync("deepseek", Some(true));
+        assert!(!ours.is_kept("deepseek"));
+        assert!(ours.changed_at["deepseek"] > 1.0);
+        assert_eq!(ours.shared().deepseek.unwrap().api_key, "mine");
     }
 
     fn custom(name: &str, created_at: i64) -> CustomProvider {

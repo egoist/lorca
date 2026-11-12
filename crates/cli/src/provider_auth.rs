@@ -50,7 +50,7 @@ fn custom_base_url(base_url: Option<&str>) -> Result<Option<String>, String> {
 }
 
 /// Checks a DeepSeek key against the API (the given root, or DeepSeek's) before saving both.
-pub async fn connect_deepseek(app: &Arc<App>, api_key: &str, base_url: Option<&str>) -> Result<(), String> {
+pub async fn connect_deepseek(app: &Arc<App>, api_key: &str, base_url: Option<&str>, sync: Option<bool>) -> Result<(), String> {
     let key = api_key.trim();
     if key.is_empty() {
         return Err("Paste a DeepSeek API key".into());
@@ -59,11 +59,11 @@ pub async fn connect_deepseek(app: &Arc<App>, api_key: &str, base_url: Option<&s
     let root = base_url.clone().unwrap_or_else(deepseek_base_url);
     let request = app.http.get(format!("{}/models", root.trim_end_matches("/anthropic"))).bearer_auth(key);
     check_key("DeepSeek", request).await?;
-    save_api_key(app, "deepseek", key, base_url)
+    save_api_key(app, "deepseek", key, base_url, sync)
 }
 
 /// Checks an Anthropic key against the API (the given root, or Anthropic's) before saving both.
-pub async fn connect_anthropic(app: &Arc<App>, api_key: &str, base_url: Option<&str>) -> Result<(), String> {
+pub async fn connect_anthropic(app: &Arc<App>, api_key: &str, base_url: Option<&str>, sync: Option<bool>) -> Result<(), String> {
     let key = api_key.trim();
     if key.is_empty() {
         return Err("Paste an Anthropic API key".into());
@@ -72,13 +72,13 @@ pub async fn connect_anthropic(app: &Arc<App>, api_key: &str, base_url: Option<&
     let root = base_url.clone().unwrap_or_else(anthropic_base_url);
     let request = app.http.get(format!("{root}/v1/models")).header("x-api-key", key).header("anthropic-version", ANTHROPIC_VERSION);
     check_key("Anthropic", request).await?;
-    save_api_key(app, "anthropic", key, base_url)
+    save_api_key(app, "anthropic", key, base_url, sync)
 }
 
 /// Checks an OpenCode Zen key. The model catalog is public, so the account check uses Go's
 /// authenticated usage endpoint; a valid Zen key without a Go subscription answers 403 after
 /// authentication and is still a valid Zen credential.
-pub async fn connect_opencode(app: &Arc<App>, api_key: &str, base_url: Option<&str>) -> Result<(), String> {
+pub async fn connect_opencode(app: &Arc<App>, api_key: &str, base_url: Option<&str>, sync: Option<bool>) -> Result<(), String> {
     let key = api_key.trim();
     if key.is_empty() {
         return Err("Paste an OpenCode Zen API key".into());
@@ -92,11 +92,11 @@ pub async fn connect_opencode(app: &Arc<App>, api_key: &str, base_url: Option<&s
     } else {
         check_key("OpenCode Zen", app.http.get(format!("{root}/v1/models")).bearer_auth(key)).await?;
     }
-    save_api_key(app, "opencode", key, base_url)
+    save_api_key(app, "opencode", key, base_url, sync)
 }
 
 /// Checks both the OpenCode key and its Go entitlement against the authenticated usage route.
-pub async fn connect_opencode_go(app: &Arc<App>, api_key: &str, base_url: Option<&str>) -> Result<(), String> {
+pub async fn connect_opencode_go(app: &Arc<App>, api_key: &str, base_url: Option<&str>, sync: Option<bool>) -> Result<(), String> {
     let key = api_key.trim();
     if key.is_empty() {
         return Err("Paste an OpenCode Go API key".into());
@@ -112,7 +112,7 @@ pub async fn connect_opencode_go(app: &Arc<App>, api_key: &str, base_url: Option
     } else {
         check_key("OpenCode Go", app.http.get(format!("{root}/v1/models")).bearer_auth(key)).await?;
     }
-    save_api_key(app, "opencode-go", key, base_url)
+    save_api_key(app, "opencode-go", key, base_url, sync)
 }
 
 async fn check_key(name: &str, request: reqwest::RequestBuilder) -> Result<(), String> {
@@ -135,14 +135,19 @@ async fn check_opencode_key(name: &str, request: reqwest::RequestBuilder, requir
     }
 }
 
-fn save_api_key(app: &Arc<App>, kind: &str, key: &str, base_url: Option<String>) -> Result<(), String> {
+/// Saves a checked key. `sync` false keeps it on this Device, true sends it to every Device, and
+/// `None` leaves the choice made before (a new provider syncs).
+fn save_api_key(app: &Arc<App>, kind: &str, key: &str, base_url: Option<String>, sync: Option<bool>) -> Result<(), String> {
     let credential = Some(ApiKeyCredential { api_key: key.to_string(), base_url, connected_at: config::now_unix() });
-    let update = |credentials: &mut Credentials| match kind {
-        "deepseek" => credentials.deepseek = credential,
-        "anthropic" => credentials.anthropic = credential,
-        "opencode" => credentials.opencode = credential,
-        "opencode-go" => credentials.opencode_go = credential,
-        _ => unreachable!(),
+    let update = |credentials: &mut Credentials| {
+        match kind {
+            "deepseek" => credentials.deepseek = credential,
+            "anthropic" => credentials.anthropic = credential,
+            "opencode" => credentials.opencode = credential,
+            "opencode-go" => credentials.opencode_go = credential,
+            _ => unreachable!(),
+        }
+        credentials.set_sync(kind, sync);
     };
     app.update_credentials(kind, update).map_err(|e| e.to_string())
 }
@@ -158,6 +163,9 @@ pub struct CustomInput {
     pub api_key: String,
     /// Model ids in the user's order. Empty takes every model the server lists.
     pub models: Vec<String>,
+    /// False keeps it on this Device, true sends it to every Device; `None` leaves the choice
+    /// made before (a new provider syncs).
+    pub sync: Option<bool>,
 }
 
 /// Checks a custom provider's server and saves the provider for the account, answering with
@@ -226,6 +234,7 @@ pub async fn connect_custom(app: &Arc<App>, input: CustomInput) -> Result<String
     let provider = CustomProvider { name, api, base_url, api_key, models, created_at };
     app.update_credentials(&kind, |credentials| {
         credentials.custom.insert(kind.clone(), provider);
+        credentials.set_sync(&kind, input.sync);
     })
     .map_err(|e| e.to_string())?;
     Ok(kind)
@@ -422,44 +431,66 @@ fn declared_levels(entry: &Value) -> Option<Vec<ThinkingLevel>> {
     Some(levels).filter(|levels| !levels.is_empty())
 }
 
+/// Drops the credential of `kind`. A kept one stops being kept, and the set this Device sends
+/// still removes it as of when it was kept, so the others keep any they connected since.
+fn forget(app: &Arc<App>, kind: &str, update: impl FnOnce(&mut Credentials)) -> Result<(), String> {
+    let kept_at = app.credentials.lock().unwrap().kept.get(kind).copied();
+    let Some(kept_at) = kept_at else { return app.update_credentials(kind, update).map_err(|e| e.to_string()) };
+    {
+        let mut credentials = app.credentials.lock().unwrap();
+        update(&mut credentials);
+        credentials.kept.remove(kind);
+        credentials.changed_at.insert(kind.to_string(), kept_at);
+    }
+    app.credentials_changed().map_err(|e| e.to_string())
+}
+
 /// Runs a ChatGPT sign-in, opening its authorization URL through the Device's UI.
 pub async fn connect_chatgpt(
     app: &Arc<App>,
+    sync: Option<bool>,
     open_url: impl FnOnce(&str) -> Result<(), String>,
 ) -> Result<ChatGptTokens, String> {
     let tokens = chatgpt_oauth::login(&app.http, open_url, std::time::Duration::from_secs(5 * 60)).await?;
-    app.update_credentials("chatgpt", |c| c.chatgpt = Some(tokens.clone())).map_err(|e| e.to_string())?;
+    app.update_credentials("chatgpt", |c| {
+        c.chatgpt = Some(tokens.clone());
+        c.set_sync("chatgpt", sync);
+    })
+    .map_err(|e| e.to_string())?;
     Ok(tokens)
 }
 
 /// Runs a Grok sign-in, opening its authorization URL through the Device's UI.
 pub async fn connect_grok(
     app: &Arc<App>,
+    sync: Option<bool>,
     open_url: impl FnOnce(&str) -> Result<(), String>,
 ) -> Result<GrokTokens, String> {
     let endpoints = env_url("LORCA_GROK_ISSUER").map(|issuer| grok_oauth::Endpoints::at(&issuer)).unwrap_or_else(grok_oauth::Endpoints::xai);
     let tokens = grok_oauth::login(&app.http, &endpoints, open_url, std::time::Duration::from_secs(5 * 60)).await?;
-    app.update_credentials("grok", |c| c.grok = Some(tokens.clone())).map_err(|e| e.to_string())?;
+    app.update_credentials("grok", |c| {
+        c.grok = Some(tokens.clone());
+        c.set_sync("grok", sync);
+    })
+    .map_err(|e| e.to_string())?;
     Ok(tokens)
 }
 
 /// Disconnects `kind` for the whole account: every Device drops the credential, and a custom
-/// provider is deleted.
+/// provider is deleted. A provider this Device keeps is dropped here alone.
 pub fn disconnect(app: &Arc<App>, kind: &str) -> Result<(), String> {
     if is_custom(kind) {
         if !app.credentials.lock().unwrap().custom.contains_key(kind) {
             return Err(format!("Unknown provider {kind}"));
         }
-        return app
-            .update_credentials(kind, |credentials| {
-                credentials.custom.remove(kind);
-            })
-            .map_err(|e| e.to_string());
+        return forget(app, kind, |credentials| {
+            credentials.custom.remove(kind);
+        });
     }
     if !PROVIDER_KINDS.contains(&kind) {
         return Err(format!("Unknown provider {kind}"));
     }
-    app.update_credentials(kind, |credentials| match kind {
+    forget(app, kind, |credentials| match kind {
         "deepseek" => credentials.deepseek = None,
         "anthropic" => credentials.anthropic = None,
         "opencode" => credentials.opencode = None,
@@ -479,7 +510,6 @@ pub fn disconnect(app: &Arc<App>, kind: &str) -> Result<(), String> {
         }
         _ => unreachable!(),
     })
-    .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

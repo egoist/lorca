@@ -86,3 +86,39 @@ async fn auto_review_reviews_with_a_connected_providers_model() {
     let jev = snapshot["models"].as_array().unwrap().iter().find(|model| model["id"] == "jev-1.13").unwrap();
     assert_eq!((jev["provider"].as_str(), jev["decides"].as_bool()), (Some("opencode"), Some(true)));
 }
+
+#[tokio::test]
+async fn a_provider_kept_on_one_runner_is_offered_for_its_bots_alone() {
+    let home = Home(std::env::temp_dir().join(format!("lorca-provider-sync-{}", uuid::Uuid::new_v4())));
+    let app = App::load(Config { home: home.0.clone(), port: 0 }).unwrap();
+    app.credentials.lock().unwrap().deepseek = Some(ApiKeyCredential { api_key: "sk-test-kept".into(), base_url: None, connected_at: 1 });
+
+    // Only a connected provider can stop syncing.
+    assert!(api::dispatch(&app, "providers.set_sync", json!({ "kind": "anthropic", "sync": false })).await.is_err());
+    let result = api::dispatch(&app, "providers.set_sync", json!({ "kind": "deepseek", "sync": false })).await.unwrap();
+    let deepseek = result["providers"].as_array().unwrap().iter().find(|p| p["kind"] == "deepseek").unwrap().clone();
+    assert_eq!(deepseek["kept"], true);
+    // The set this Device sends has no key; the file it keeps still does.
+    let shared = serde_json::to_string(&app.credentials.lock().unwrap().shared()).unwrap();
+    assert!(!shared.contains("sk-test-kept") && !shared.contains("\"kept\""));
+    let saved = std::fs::read_to_string(app.config.credentials_path()).unwrap();
+    assert!(saved.contains("sk-test-kept") && saved.contains("\"kept\""));
+
+    // Another Runner's kept provider reaches this Device's statuses through its machine blob.
+    let mut studio: lorca::model::Device = serde_json::from_value(json!({
+        "id": "studio", "name": "Studio", "model": "", "os": "linux", "os_version": "", "box_pubkey": "",
+        "providers": [{ "kind": "anthropic", "is_connected": true, "detail": "", "kept": true }],
+    }))
+    .unwrap();
+    studio.updated_at = 1;
+    app.state.lock().unwrap().devices.push(studio);
+    let statuses = app.provider_statuses();
+    let anthropic = statuses.iter().find(|status| status.kind == "anthropic").unwrap();
+    assert_eq!((anthropic.is_connected, anthropic.runners.as_slice(), anthropic.detail.as_str()), (false, ["studio".to_string()].as_slice(), "Kept on Studio"));
+    let error = lorca::providers::provider_for(&app, "anthropic", None, None).err().unwrap();
+    assert_eq!(error, "Anthropic is kept on Studio. Connect it on this Device too, or sync it from there.");
+
+    // Syncing again sends the key with the next set.
+    api::dispatch(&app, "providers.set_sync", json!({ "kind": "deepseek", "sync": true })).await.unwrap();
+    assert!(serde_json::to_string(&app.credentials.lock().unwrap().shared()).unwrap().contains("sk-test-kept"));
+}

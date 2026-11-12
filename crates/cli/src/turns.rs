@@ -5507,7 +5507,7 @@ mod tests {
                 os: "ios".into(),
                 os_version: String::new(),
                 box_pubkey: phone_keys.box_pubkey(),
-                plugins: Vec::new(), channels: Vec::new(),
+                plugins: Vec::new(), channels: Vec::new(), providers: Vec::new(),
                 version: String::new(),
                 update: None,
                 app: None,

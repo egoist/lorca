@@ -53,6 +53,34 @@ func providerNote(c *ui.Context, text string, tint *ui.Color) ui.Element {
 	return ui.Text(c, text).FontSize(textCaption).LineHeight(1.4).TextColor(color)
 }
 
+// providerSyncRow is the switch that sends a credential to every paired Device or keeps it on this
+// one, with what the choice means under it.
+func providerSyncRow(c *ui.Context, sync *bool, disabled bool) {
+	label := L("Sync to your other Devices")
+	ui.Column(c).Gap(4).Children(func() {
+		// The label flips the switch too.
+		row := ui.Row(c).Gap(8).AlignItems(ui.Center)
+		if !disabled {
+			row.Cursor(ui.CursorPointer)
+		}
+		clicked := row.Clicked()
+		row.Children(func() {
+			ui.Text(c, label).Grow(1).Shrink(1).MinWidth(0).FontSize(12.5)
+			if settingsSwitch(c, sync, label, disabled) {
+				clicked = false
+			}
+		})
+		if clicked && !disabled {
+			*sync = !*sync
+		}
+		note := L("Encrypted with your account key, so a bot uses it on whichever Runner it is assigned to.")
+		if !*sync {
+			note = L("Kept on this Device: only bots on it use it, and your other Devices never get it.")
+		}
+		providerNote(c, note, nil)
+	})
+}
+
 // mcpFormLabelWidth is a form's label column: as wide as the widest of its labels, whichever show,
 // so switching fields moves none.
 func mcpFormLabelWidth(c *ui.Context, labels ...string) float32 {
@@ -234,6 +262,8 @@ type providerCustomSheet struct {
 
 	name, baseURL, key string
 	api                model.CustomAPI
+	// sync sends it to every Device; a provider this Device keeps starts with it off.
+	sync               bool
 	checklist          model.ModelChecklist
 	search             string
 	listing            providerListing
@@ -254,7 +284,7 @@ type providerCustomSheet struct {
 }
 
 func newProviderCustomSheet(existing *model.ProviderCredential, preset *model.CustomPreset, apiKey string, onSave func(model.ProviderKind)) *providerCustomSheet {
-	s := &providerCustomSheet{existing: existing, preset: preset, key: apiKey, onSave: onSave, api: model.APIChatCompletions}
+	s := &providerCustomSheet{existing: existing, preset: preset, key: apiKey, onSave: onSave, api: model.APIChatCompletions, sync: existing == nil || !existing.Kept}
 	if existing != nil {
 		if model.IsCustomKind(existing.Kind) {
 			s.kind = existing.Kind
@@ -428,7 +458,7 @@ func (s *providerCustomSheet) confirm() {
 	}
 	saved := s.savedName()
 	s.begin(L("Checking %@…", saved))
-	store.SaveCustomProvider(model.CustomProvider{Kind: s.kind, Name: saved, API: s.api, BaseURL: s.baseURL, APIKey: s.key, Models: s.checklist.OrderedIDs()},
+	store.SaveCustomProvider(model.CustomProvider{Kind: s.kind, Name: saved, API: s.api, BaseURL: s.baseURL, APIKey: s.key, Models: s.checklist.OrderedIDs(), Sync: s.sync},
 		func(kind model.ProviderKind, err error) {
 			if s.closed {
 				return
@@ -540,6 +570,7 @@ func (s *providerCustomSheet) formView(c *ui.Context) {
 				s.loadModels(500 * time.Millisecond)
 			}
 		})
+		providerSyncRow(c, &s.sync, s.busy)
 	})
 }
 
@@ -677,8 +708,12 @@ func (w *appWindow) presentConnectProvider(kind model.ProviderKind, baseURL stri
 	if providerFetching {
 		return
 	}
+	connected := store.Credential(kind)
 	open := func(credential *model.SavedKey) {
-		s := &providerConnectSheet{kind: kind, onDone: onDone, baseURL: baseURL}
+		s := &providerConnectSheet{kind: kind, onDone: onDone, baseURL: baseURL, sync: connected == nil || !connected.Kept}
+		// A subscription that is signed in opens to change where it syncs, or to disconnect.
+		s.editing = !model.UsesAPIKey(kind) && connected != nil && connected.IsConnected
+		s.wasSync = s.sync
 		if credential != nil {
 			s.editing = credential.APIKey != nil
 			if credential.APIKey != nil {
@@ -691,8 +726,7 @@ func (w *appWindow) presentConnectProvider(kind model.ProviderKind, baseURL stri
 		}
 		w.present(s.view, func() { s.closed = true })
 	}
-	credential := store.Credential(kind)
-	if !model.UsesAPIKey(kind) || credential == nil || !credential.IsConnected {
+	if !model.UsesAPIKey(kind) || connected == nil || !connected.IsConnected {
 		open(nil)
 		return
 	}
@@ -713,6 +747,8 @@ type providerConnectSheet struct {
 	editing      bool
 	key, baseURL string
 	onDone       func()
+	// sync sends the credential to every Device; wasSync is what it was when the sheet opened.
+	sync, wasSync bool
 
 	busy, closed bool
 	// signingIn is a sign-in waiting on the browser, which a cancel stops.
@@ -761,12 +797,22 @@ func (s *providerConnectSheet) confirm() {
 	}
 	if model.UsesAPIKey(s.kind) {
 		s.begin(L("Checking the key with %@…", name))
-		store.ConnectAPIKey(s.kind, strings.TrimSpace(s.key), s.baseURL, connected)
+		store.ConnectAPIKey(s.kind, strings.TrimSpace(s.key), s.baseURL, s.sync, connected)
+		return
+	}
+	// A signed-in subscription saves where it syncs; there is nothing to sign in again.
+	if s.editing {
+		if s.sync == s.wasSync {
+			s.doneAt = time.Now()
+			return
+		}
+		s.begin(L("Saving…"))
+		store.SetProviderSync(s.kind, s.sync, connected)
 		return
 	}
 	s.begin(L("Waiting for the browser…"))
 	s.signingIn = true
-	store.ConnectSignIn(s.kind, func(err error) {
+	store.ConnectSignIn(s.kind, s.sync, func(err error) {
 		s.signingIn = false
 		connected(err)
 	})
@@ -810,15 +856,24 @@ func (s *providerConnectSheet) view(c *ui.Context, sh *sheet) {
 	name := model.ProviderName(kind, store.Providers)
 	usesKey := model.UsesAPIKey(kind)
 	title, subtitle, confirm := L("Connect %@", name), L("Encrypted and shared with your paired Devices."), L("Connect")
-	if s.editing {
-		title, confirm = name, L("Save")
+	if !s.sync {
+		subtitle = L("Kept on this Device.")
 	}
 	if !usesKey {
 		subtitle = L("Your browser opens a %@ sign-in. The tokens are shared with your paired Devices, encrypted with your account key; the relay cannot read them.", name)
+		if !s.sync {
+			subtitle = L("Your browser opens a %@ sign-in. The tokens are kept on this Device.", name)
+		}
 		confirm = L("Sign in with %@…", name)
 	}
+	if s.editing {
+		title, confirm = name, L("Save")
+		if !usesKey {
+			subtitle = ""
+		}
+	}
 	var leading func()
-	if s.editing && usesKey {
+	if s.editing {
 		leading = func() {
 			if pushButton(c, L("Disconnect"), pushOptions{Kind: buttonDestructive, Disabled: s.busy}).Clicked() {
 				s.disconnect(sh)
@@ -845,6 +900,7 @@ func (s *providerConnectSheet) view(c *ui.Context, sh *sheet) {
 				providerNote(c, L("Leave empty to use %@’s API.", name), nil)
 			})
 		}
+		providerSyncRow(c, &s.sync, s.busy)
 		providerStatusLine(c, s.status)
 	})
 	if result.Confirmed {

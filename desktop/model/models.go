@@ -275,6 +275,19 @@ type ProviderCredential struct {
 	// ReviewModel is the model Auto-review runs on it unless the user picks another: the
 	// catalog's small one for a built-in provider, a custom provider's first. Empty for none.
 	ReviewModel string
+	// Kept is a provider this Device keeps to itself: its credential never reaches the others.
+	Kept bool
+	// Runners are the Runners that keep it to themselves, by Device id, this one included.
+	Runners []string
+}
+
+// Syncs is whether the credential goes to every Device: it is connected and not kept here.
+func (p ProviderCredential) Syncs() bool { return p.IsConnected && !p.Kept }
+
+// RunsOn is whether a bot on the Runner can use it: connected on the account and shared, or kept
+// on that Runner.
+func (p ProviderCredential) RunsOn(runnerID string) bool {
+	return p.Syncs() || slices.Contains(p.Runners, runnerID)
 }
 
 // Decides is a custom provider of decision models, which Auto-review can run and no bot can.

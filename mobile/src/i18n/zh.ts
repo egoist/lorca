@@ -1091,4 +1091,5 @@ export const zh: Record<string, string> = {
   "Checking with {name}…": "找 {name} 商量一下…",
   "Checking with another bot…": "找别的智能体商量一下…",
   "Waiting on results…": "坐等结果…",
+  "Kept on a Runner": "保留在一台 Runner 上",
 };

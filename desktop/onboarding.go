@@ -310,11 +310,11 @@ func (o *onboardingWindow) connectProvider() {
 	}
 	if model.UsesAPIKey(kind) {
 		o.status = &onboardingStatus{text: L("Checking the key with %@…", name)}
-		store.ConnectAPIKey(kind, key, "", done)
+		store.ConnectAPIKey(kind, key, "", true, done)
 	} else {
 		o.status = &onboardingStatus{text: L("Waiting for the browser…")}
 		o.signingIn = true
-		store.ConnectSignIn(kind, done)
+		store.ConnectSignIn(kind, true, done)
 	}
 }
 

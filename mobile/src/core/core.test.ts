@@ -281,6 +281,17 @@ describe("custom providers", () => {
     expect(connectedProviders(statuses)).toEqual(["deepseek", "custom:openrouter", "custom:lab"]);
   });
 
+  test("a provider a Runner keeps is offered for that Runner's bots alone", () => {
+    const kept: ProviderStatus[] = [
+      { kind: "deepseek", is_connected: true, detail: "sk-…", kept: true, runners: ["mac"] },
+      { kind: "anthropic", is_connected: false, detail: "Kept on Studio", runners: ["studio"] },
+      { kind: "grok", is_connected: true, detail: "me@example.com" },
+    ];
+    expect(connectedProviders(kept)).toEqual(["grok"]);
+    expect(connectedProviders(kept, "mac")).toEqual(["deepseek", "grok"]);
+    expect(connectedProviders(kept, "studio")).toEqual(["anthropic", "grok"]);
+  });
+
   test("the base URL becomes the URL the core calls", () => {
     expect(customRequestURL("messages", "https://api.anthropic.com/v1")).toBe("https://api.anthropic.com/v1/messages");
     expect(customRequestURL("messages", "https://api.anthropic.com/v1/messages")).toBe("https://api.anthropic.com/v1/messages");
