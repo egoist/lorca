@@ -369,13 +369,13 @@ fn normalize_tool_call_id(id: &str) -> String {
 }
 
 /// For a model that binds each thinking block to the conversation that produced it (Opus 5.5,
-/// Fable 5.1, Sonnet 5.5), drops the thinking from every assistant message in `messages`.
+/// Fable 5.1 and 5.2, Sonnet 5.5), drops the thinking from every assistant message in `messages`.
 /// Anthropic refuses a block replayed after the system prompt, the tools, or an earlier message
 /// changed, and always takes a history without thinking. Other models keep theirs. Whether any
 /// thinking was dropped.
 pub fn drop_bound_thinking(model: &str, messages: &mut [AgentMessage]) -> bool {
     let model = model.to_ascii_lowercase();
-    if !["claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5-5"].iter().any(|id| model.starts_with(id)) {
+    if !["claude-opus-5-5", "claude-fable-5-1", "claude-fable-5-2", "claude-sonnet-5-5"].iter().any(|id| model.starts_with(id)) {
         return false;
     }
     let mut dropped = false;
@@ -801,7 +801,7 @@ mod tests {
         );
         assert!(provider.supports_images(), "the catalog says Flash takes images");
         assert!(!AnthropicProvider::deepseek("k", Some("deepseek-v4-pro")).supports_images());
-        assert_eq!(provider.model_info().map(|i| i.context_window), Some(1_000_000));
+        assert_eq!(provider.model_info().map(|i| i.context_window), Some(1_048_576));
     }
 
     #[test]

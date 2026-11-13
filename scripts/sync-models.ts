@@ -119,7 +119,7 @@ async function opencodeWires(url: string): Promise<Map<string, string>> {
     .map((cell) => cell.trim())
     .filter(Boolean)
   cells.forEach((cell, i) => {
-    const endpoint = cell.match(/^https:\/\/opencode\.ai\/inference\/(?:go\/)?v1\/(.+)$/)
+    const endpoint = cell.match(/^https:\/\/opencode\.ai\/inference\/(?:go\/)?(?:(?:openai|anthropic|systemone)\/)?v1\/(.+)$/)
     const wire = endpoint && WIRES[endpoint[1]]
     if (wire && /^[\w.-]+$/.test(cells[i - 1])) wires.set(cells[i - 1], wire)
   })

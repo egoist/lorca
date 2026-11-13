@@ -585,7 +585,8 @@ mod tests {
         let go = body("opencode-go", "deepseek-v4-pro", ThinkingLevel::Off);
         assert_eq!(go["reasoning_effort"], "high");
         assert!(go.get("thinking").is_none());
-        assert_eq!(body("opencode", "kimi-k3", ThinkingLevel::Low)["reasoning_effort"], "max");
+        assert_eq!(body("opencode", "kimi-k3", ThinkingLevel::Medium)["reasoning_effort"], "high");
+        assert_eq!(body("opencode-go", "kimi-k3", ThinkingLevel::Low)["reasoning_effort"], "max");
         // A model the catalog does not know gets at most `high`, and nothing for Off.
         assert_eq!(body("openai", "some-model", ThinkingLevel::Max)["reasoning_effort"], "high");
         let unknown_off = body("openai", "some-model", ThinkingLevel::Off);

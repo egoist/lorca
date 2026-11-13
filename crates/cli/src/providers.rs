@@ -349,17 +349,17 @@ fn opencode_wire(kind: &str, model: &str) -> OpenCodeWire {
         None => {}
     }
     let model = model.to_ascii_lowercase();
-    if model.starts_with("jev-") {
+    if model.starts_with("jev-") || model.ends_with("-decision") || model.contains("-decision-") {
         return OpenCodeWire::Decides;
     }
-    if kind == "opencode" && model.starts_with("gemini-") {
+    if model.starts_with("gemini-") {
         return OpenCodeWire::Unsupported;
     }
-    if model.starts_with("gpt-") || model.starts_with("grok-") || model.starts_with("muse-spark-") {
+    if model.starts_with("gpt-") || model.starts_with("grok-") || model.starts_with("muse-") {
         return OpenCodeWire::Responses;
     }
     let qwen = model.starts_with("qwen") && !(kind == "opencode" && model == "qwen3.8-max");
-    if qwen || (kind == "opencode-go" && model.starts_with("minimax-")) || model.starts_with("claude-") {
+    if qwen || (kind == "opencode-go" && model == "minimax-m3") || model.starts_with("claude-") {
         return OpenCodeWire::Messages;
     }
     OpenCodeWire::ChatCompletions
