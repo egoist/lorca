@@ -79,13 +79,15 @@ pub enum Wire {
     Messages,
     /// `/v1/responses`
     Responses,
+    /// Google's `models/{model}:streamGenerateContent`: Gemini on OpenCode.
+    Gemini,
     /// `/v1/systemone`: a decision model, which answers typed questions with probabilities and
     /// writes no text, so Auto-review can run it and bots cannot.
     SystemOne,
 }
 
 impl Wire {
-    const ALL: [Wire; 4] = [Wire::ChatCompletions, Wire::Messages, Wire::Responses, Wire::SystemOne];
+    const ALL: [Wire; 5] = [Wire::ChatCompletions, Wire::Messages, Wire::Responses, Wire::Gemini, Wire::SystemOne];
 
     /// Its name in the catalog, the one custom providers use for their protocol.
     pub fn as_str(&self) -> &'static str {
@@ -93,6 +95,7 @@ impl Wire {
             Wire::ChatCompletions => "chat-completions",
             Wire::Messages => "messages",
             Wire::Responses => "responses",
+            Wire::Gemini => "gemini",
             Wire::SystemOne => "system-one",
         }
     }

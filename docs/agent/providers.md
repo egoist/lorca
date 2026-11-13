@@ -165,6 +165,9 @@ use agent::providers::gemini::GEMINI_BASE_URL;
 
 // gemini-4-hydrogen by default
 let provider = GeminiProvider::new(GEMINI_BASE_URL, &api_key, Some("gemini-3.8-flash"));
+
+// Another provider serving the same wire: its id (for the catalog entry) and where `models/` hangs
+let provider = GeminiProvider::at("opencode", "https://opencode.ai/zen/v1", &api_key, "gemini-4-hydrogen");
 ```
 
 | Transcript | Request |

@@ -121,7 +121,9 @@ async function opencodeWires(url: string): Promise<Map<string, string>> {
     .filter(Boolean)
   cells.forEach((cell, i) => {
     const endpoint = cell.match(/^https:\/\/opencode\.ai\/inference\/(?:go\/)?(?:(?:openai|anthropic|systemone)\/)?v1\/(.+)$/)
-    const wire = endpoint && WIRES[endpoint[1]]
+    // Gemini's own wire names the model in its path: …/google/v1beta/models/<id>.
+    const google = /^https:\/\/opencode\.ai\/inference\/(?:go\/)?google\/v1beta\/models\/[\w.-]+$/.test(cell)
+    const wire = google ? "gemini" : endpoint && WIRES[endpoint[1]]
     if (wire && /^[\w.-]+$/.test(cells[i - 1])) wires.set(cells[i - 1], wire)
   })
   return wires

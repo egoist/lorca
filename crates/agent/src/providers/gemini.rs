@@ -1,4 +1,5 @@
-//! Google's Gemini API, `streamGenerateContent` over SSE with an API key (`x-goog-api-key`).
+//! Google's Gemini API, `streamGenerateContent` over SSE with an API key (`x-goog-api-key`):
+//! Google's own, and OpenCode's, which serves Gemini on the same wire.
 //!
 //! Gemini seals its reasoning in `thoughtSignature`s on the parts it returns, and Gemini 3 and
 //! later refuse a turn whose function calls come back without theirs. A signature travels in the
@@ -37,8 +38,9 @@ const USER_AGENT: &str = concat!("lorca-agent/", env!("CARGO_PKG_VERSION"));
 
 pub struct GeminiProvider {
     pub provider_id: String,
-    /// The API root, without a version: `https://generativelanguage.googleapis.com`.
-    pub base_url: String,
+    /// Where `models/` hangs, its API version included:
+    /// `https://generativelanguage.googleapis.com/v1beta`.
+    pub api_url: String,
     pub api_key: String,
     pub model: String,
     pub supports_images: bool,
@@ -63,19 +65,27 @@ fn is_gemini_3_or_later(model: &str) -> bool {
 }
 
 impl GeminiProvider {
+    /// Google's own API under `base_url`, the root without a version.
     pub fn new(base_url: &str, api_key: &str, model: Option<&str>) -> Self {
-        let model = model.unwrap_or(GEMINI_DEFAULT_MODEL).to_string();
+        let api_url = format!("{}/v1beta", base_url.trim_end_matches('/'));
+        Self::at("gemini", &api_url, api_key, model.unwrap_or(GEMINI_DEFAULT_MODEL))
+    }
+
+    /// Another provider that serves Gemini's wire (OpenCode), with `models/` under `api_url`; the
+    /// catalog entry is that provider's.
+    pub fn at(provider_id: &str, api_url: &str, api_key: &str, model: &str) -> Self {
+        let info = models::find(provider_id, model);
         GeminiProvider {
-            provider_id: "gemini".into(),
-            base_url: base_url.trim_end_matches('/').to_string(),
+            provider_id: provider_id.to_string(),
+            api_url: api_url.trim_end_matches('/').to_string(),
             api_key: api_key.to_string(),
-            supports_images: models::find("gemini", &model).map(|info| info.images).unwrap_or(true),
+            supports_images: info.map(|info| info.images).unwrap_or(true),
             max_retries: 2,
             max_retry_delay_ms: DEFAULT_MAX_RETRY_DELAY_MS,
             thinking_level: None,
-            info: models::find("gemini", &model),
-            server_tools: is_gemini_3_or_later(&model),
-            model,
+            info,
+            server_tools: is_gemini_3_or_later(model),
+            model: model.to_string(),
             client: lorca_tls::client(),
         }
     }
@@ -91,7 +101,7 @@ impl GeminiProvider {
     }
 
     fn url(&self) -> String {
-        format!("{}/v1beta/models/{}:streamGenerateContent?alt=sse", self.base_url, self.model.strip_prefix("models/").unwrap_or(&self.model))
+        format!("{}/models/{}:streamGenerateContent?alt=sse", self.api_url, self.model.strip_prefix("models/").unwrap_or(&self.model))
     }
 
     fn body(&self, request: &ModelRequest) -> Value {
@@ -565,6 +575,12 @@ mod tests {
         assert!(body.get("toolConfig").is_none());
         assert_eq!(body["generationConfig"]["thinkingConfig"], json!({ "includeThoughts": true }));
         assert_eq!(old.url(), "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:streamGenerateContent?alt=sse");
+
+        // OpenCode serves the same wire under its own route, with its own catalog entry.
+        let zen = GeminiProvider::at("opencode", "https://opencode.ai/zen/v1/", "k", "gemini-4-hydrogen");
+        assert_eq!(zen.url(), "https://opencode.ai/zen/v1/models/gemini-4-hydrogen:streamGenerateContent?alt=sse");
+        assert_eq!((zen.provider_id(), zen.info.map(|info| info.provider)), ("opencode", Some("opencode")));
+        assert!(zen.server_tools);
     }
 
     #[tokio::test]

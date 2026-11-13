@@ -22,6 +22,7 @@ use crate::decisions::{Decider, Shape};
 
 pub const OPENCODE_BASE_URL: &str = "https://opencode.ai/zen";
 pub const OPENCODE_GO_BASE_URL: &str = "https://opencode.ai/zen/go";
+const OPENCODE_GO_GEMINI_URL: &str = "https://opencode.ai/inference/go/google/v1beta";
 
 const USER_AGENT: &str = concat!("lorca/", env!("CARGO_PKG_VERSION"));
 
@@ -346,9 +347,10 @@ enum OpenCodeWire {
     ChatCompletions,
     Messages,
     Responses,
+    /// Google's `generateContent`, which OpenCode serves Gemini on.
+    Gemini,
     /// A decision model, which Auto-review asks and no bot runs.
     Decides,
-    Unsupported,
 }
 
 /// OpenCode publishes the wire protocol beside every model, and the catalog carries it. A model
@@ -360,6 +362,7 @@ fn opencode_wire(kind: &str, model: &str) -> OpenCodeWire {
         Some(Wire::ChatCompletions) => return OpenCodeWire::ChatCompletions,
         Some(Wire::Messages) => return OpenCodeWire::Messages,
         Some(Wire::Responses) => return OpenCodeWire::Responses,
+        Some(Wire::Gemini) => return OpenCodeWire::Gemini,
         Some(Wire::SystemOne) => return OpenCodeWire::Decides,
         None => {}
     }
@@ -368,7 +371,7 @@ fn opencode_wire(kind: &str, model: &str) -> OpenCodeWire {
         return OpenCodeWire::Decides;
     }
     if model.starts_with("gemini-") {
-        return OpenCodeWire::Unsupported;
+        return OpenCodeWire::Gemini;
     }
     if model.starts_with("gpt-") || model.starts_with("grok-") || model.starts_with("muse-") {
         return OpenCodeWire::Responses;
@@ -384,6 +387,16 @@ fn opencode_wire(kind: &str, model: &str) -> OpenCodeWire {
 /// protocol needs.
 fn opencode_root(root: &str) -> &str {
     root.trim_end_matches('/').strip_suffix("/v1").unwrap_or_else(|| root.trim_end_matches('/'))
+}
+
+/// Where OpenCode serves Gemini's `models/`: Zen under its `/v1`; Go only at the inference
+/// route it publishes, not under `/zen/go`. A root of the user's own mirrors Zen's.
+fn opencode_gemini_url(root: &str) -> String {
+    if root == OPENCODE_GO_BASE_URL {
+        OPENCODE_GO_GEMINI_URL.to_string()
+    } else {
+        format!("{root}/v1")
+    }
 }
 
 fn opencode_provider(
@@ -412,11 +425,13 @@ fn opencode_provider(
             provider.supports_images = built_in_vision(kind, Some(model));
             Arc::new(provider)
         }
+        OpenCodeWire::Gemini => {
+            let mut provider = GeminiProvider::at(kind, &opencode_gemini_url(root), api_key, model).with_thinking(thinking);
+            provider.supports_images = built_in_vision(kind, Some(model));
+            Arc::new(provider)
+        }
         OpenCodeWire::Decides => {
             return Err(format!("{model} is a decision model: it can review actions, not chat"));
-        }
-        OpenCodeWire::Unsupported => {
-            return Err(format!("{model} uses an OpenCode endpoint Lorca does not support"));
         }
     };
     Ok(opencode_headers(provider))
@@ -573,21 +588,25 @@ mod tests {
         assert_eq!(opencode_wire("opencode", "deepseek-v4.1-flash"), OpenCodeWire::ChatCompletions);
         assert_eq!(opencode_wire("opencode", "minimax-m3"), OpenCodeWire::ChatCompletions);
         assert_eq!(opencode_wire("opencode", "qwen3.8-max"), OpenCodeWire::ChatCompletions);
-        assert_eq!(opencode_wire("opencode", "gemini-3.8-flash"), OpenCodeWire::Unsupported);
+        assert_eq!(opencode_wire("opencode", "gemini-3.8-flash"), OpenCodeWire::Gemini);
+        assert_eq!(opencode_wire("opencode-go", "gemini-4-argon"), OpenCodeWire::Gemini);
+        assert_eq!(opencode_wire("opencode", "gemini-9-unlisted"), OpenCodeWire::Gemini);
+        assert_eq!(opencode_gemini_url(OPENCODE_BASE_URL), "https://opencode.ai/zen/v1");
+        assert_eq!(opencode_gemini_url(OPENCODE_GO_BASE_URL), "https://opencode.ai/inference/go/google/v1beta");
         assert_eq!(opencode_wire("opencode-go", "minimax-m3"), OpenCodeWire::Messages);
         assert_eq!(opencode_wire("opencode-go", "qwen3.8-max"), OpenCodeWire::Messages);
         assert_eq!(opencode_wire("opencode-go", "grok-4.7"), OpenCodeWire::Responses);
-        // Every model the catalog offers on OpenCode has a wire Lorca speaks.
+        // Every Gemini model the catalog offers on OpenCode goes on Gemini's own wire.
         for kind in ["opencode", "opencode-go"] {
-            for model in models::for_provider(kind) {
-                assert_ne!(opencode_wire(kind, model.id), OpenCodeWire::Unsupported, "{kind}/{}", model.id);
+            for model in models::for_provider(kind).into_iter().filter(|m| m.id.starts_with("gemini-") && !m.decides()) {
+                assert_eq!(opencode_wire(kind, model.id), OpenCodeWire::Gemini, "{kind}/{}", model.id);
             }
         }
     }
 
     #[test]
     fn every_opencode_route_takes_images_when_the_runner_sends_pixels() {
-        for model in ["gpt-6.1-sol", "grok-4.7", "muse-spark-1.3", "claude-sonnet-5-5", "kimi-k3"] {
+        for model in ["gpt-6.1-sol", "grok-4.7", "muse-spark-1.3", "claude-sonnet-5-5", "kimi-k3", "gemini-4-hydrogen"] {
             assert!(opencode_provider("opencode", OPENCODE_BASE_URL, "k", model, None).unwrap().supports_images(), "{model}");
         }
         // A Responses model the catalog lacks, which the Runner sends no pixels, gets notes for
