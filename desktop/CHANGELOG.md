@@ -6,6 +6,14 @@ and the update window shows it.
 
 ## [Unreleased]
 
+## [0.1.22]
+
+- Gemini is a built-in provider: connect it in Settings › Providers with an API key from
+  aistudio.google.com. Bots can run Gemini 4 Hydrogen, Carbon, and Argon, Gemini 3.8 Flash, and
+  Gemini 3.5 Flash-Lite, which search the web and read pages on Google's side. Add Provider… no
+  longer offers a Gemini preset; a Gemini you added that way keeps working.
+- OpenCode Zen offers Gemini 4 Hydrogen, Carbon, and Argon, Gemini 3.8 Flash, and Gemini 3.5
+  Flash-Lite, and OpenCode Go offers Gemini 4 Argon.
 - A Device's pane in Settings has that Device look for a newer app and CLI as it opens, so it shows
   what is out. Before, it could say Up to date for up to a day after a release.
 
