@@ -117,7 +117,7 @@ func TestAddProviderMenu(t *testing.T) {
 		t.Fatal(err)
 	}
 	items := tt.Menu()
-	want := []string{"OpenAI", "OpenRouter", "Gemini", "Groq", "Together AI", "", "Ollama", "LM Studio", "", "OpenRouter Decisions", "OpenAI Decisions", "TypeSafe", "", "Other Server…"}
+	want := []string{"OpenAI", "OpenRouter", "Groq", "Together AI", "", "Ollama", "LM Studio", "", "OpenRouter Decisions", "OpenAI Decisions", "TypeSafe", "", "Other Server…"}
 	if len(items) != len(want) {
 		t.Fatalf("menu %q", items)
 	}

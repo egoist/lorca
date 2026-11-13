@@ -39,7 +39,7 @@ On Windows, bots run their commands in Git for Windows' bash, not WSL's, so inst
 | `lorca identity show` | Shows this device's identity. |
 | `lorca pair` | Shows a pairing string and waits for the other device. |
 | `lorca pair <string>` | Joins an account with a pairing string. |
-| `lorca provider set <kind> [api-key]` | Connects `deepseek`, `anthropic`, `opencode`, `opencode-go`, `chatgpt`, or `grok`. The key is read from stdin when omitted; `--base-url` sets a custom endpoint. |
+| `lorca provider set <kind> [api-key]` | Connects `deepseek`, `anthropic`, `gemini`, `opencode`, `opencode-go`, `chatgpt`, or `grok`. The key is read from stdin when omitted; `--base-url` sets a custom endpoint. |
 | `lorca provider add <name> <base-url>` | Adds a custom provider: any server that speaks OpenAI's or Anthropic's API, or a decision API for Auto-review. `--api` picks `chat-completions` (the default), `responses`, `messages`, `system-one`, or `decisions`; `--model` names a model, once per model; `--api-key-stdin` reads a key. |
 | `lorca provider remove <kind>` | Disconnects a provider on every device, or deletes a custom one (`custom:openrouter`, as `provider list` shows it). |
 | `lorca provider list` | Lists the connected providers. |
@@ -109,7 +109,7 @@ Restarting into a new release on Windows takes `lorca service`; without it, `lor
 | `LORCA_PORT` | The local port the app connects to. Default `4862`. |
 | `LORCA_RELAY_URL` | The relay. A computer that pairs learns it from the pairing code; set it to restore without the desktop app (`https://relay.lorca.app`), or to use [your own relay](/docs/relay#run-your-own-relay). |
 | `LORCA_SHELL` | The shell bots run commands in. Default `/bin/bash`; on Windows, Git for Windows' bash. On macOS and Linux, commands get your login shell's `PATH` and variables either way. |
-| `LORCA_DEEPSEEK_MODEL`, `LORCA_ANTHROPIC_MODEL`, `LORCA_CHATGPT_MODEL`, `LORCA_GROK_MODEL` | The default model for bots that do not pick one. |
+| `LORCA_DEEPSEEK_MODEL`, `LORCA_ANTHROPIC_MODEL`, `LORCA_GEMINI_MODEL`, `LORCA_CHATGPT_MODEL`, `LORCA_GROK_MODEL` | The default model for bots that do not pick one. |
 | `LORCA_MODELS_FETCH=0`, `LORCA_MARKETPLACE_FETCH=0` | Turn off the checks for a newer model catalog or marketplace on lorca.app. To serve your own, see [Relay](/docs/relay#the-model-catalog-and-the-marketplace). |
 
 ## Files

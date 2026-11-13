@@ -172,10 +172,10 @@ enum EventsCommand {
 
 #[derive(Subcommands, Debug)]
 enum ProviderCommand {
-    /// Connect a provider: an API key for deepseek, anthropic, opencode, and opencode-go;
+    /// Connect a provider: an API key for deepseek, anthropic, gemini, opencode, and opencode-go;
     /// a browser sign-in for chatgpt and grok.
     Set {
-        /// deepseek, anthropic, opencode, opencode-go, chatgpt, or grok.
+        /// deepseek, anthropic, gemini, opencode, opencode-go, chatgpt, or grok.
         kind: String,
         /// The API key. Omit to read it from stdin, which keeps it out of the shell history.
         api_key: Option<String>,

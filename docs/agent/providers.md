@@ -89,6 +89,7 @@ An `error` event and HTTP errors become an error message with the server's `erro
 | API-key Responses | `reasoning: { effort }`; `Off` is the effort `none` on a model the catalog says can stop thinking (GPT-6 Luna), and sends nothing on any other. |
 | ChatGPT | `reasoning: { effort, summary: "auto" }` with `low`, `medium`, `high`, `xhigh`, or `max`; `Off` sends nothing. |
 | Grok | `reasoning: { effort }` with `low`, `medium`, `high`, or `xhigh`; `Off` sends nothing. |
+| Gemini | `thinkingConfig: { thinkingLevel, includeThoughts: true }` with the catalog's words (`minimal` on Flash-Lite, `xhigh` on Gemini 4 Hydrogen). Gemini 3 and later cannot stop thinking, so `Off` runs at the lowest level; a model the catalog lacks gets no level. |
 
 A level the model does not have becomes the nearest higher one it has. With no level set, the Anthropic adapter sends its `thinking` field as before and the others send nothing.
 
@@ -153,6 +154,32 @@ It posts the shared Responses input and function-tool shapes to `{base_url}/resp
 The transcript goes through the [shared transform](#before-conversion) first. `supports_images` (the catalog's, or true for a model it does not list), `tool_images` (`UserMessage`, since a gateway may take only a string `output`; OpenAI's own API takes `InOutput`), `max_retries` (2), and `max_retry_delay_ms` are public fields.
 
 `LORCA_CREDENTIALS=~/.lorca/credentials.json cargo test -p lorca-agent reads_a_tool_screenshot -- --ignored --nocapture` has each Responses adapter connected in that data directory read a random code off a tool's screenshot, and reports whether Grok and OpenCode's Responses routes read it inside the output too. It uses the access tokens as they are and never refreshes them, which would spend the refresh token the account holds.
+
+### Gemini
+
+`GeminiProvider` speaks Google's own API, `POST {base_url}/v1beta/models/{model}:streamGenerateContent?alt=sse` with the key in `x-goog-api-key`. The base URL is the API root without a version (`https://generativelanguage.googleapis.com`, `GEMINI_BASE_URL`).
+
+```rust
+use agent::providers::GeminiProvider;
+use agent::providers::gemini::GEMINI_BASE_URL;
+
+// gemini-4-hydrogen by default
+let provider = GeminiProvider::new(GEMINI_BASE_URL, &api_key, Some("gemini-3.8-flash"));
+```
+
+| Transcript | Request |
+| --- | --- |
+| System prompt | `systemInstruction`, when not blank. |
+| User text and images | A `user` content of `text` and `inlineData` parts. |
+| Assistant | A `model` content: text, own thinking as `thought: true` text, `functionCall` parts with their `id`, and the server's own parts (`toolCall`, `toolResponse`) as they came. Each `thoughtSignature` goes back on the part it came on. |
+| Tool result | A `functionResponse` with the call's `id` and name and `{ "output": text }` (`{ "error": text }` for a failed one), the result's images inside it as `parts`. The answers to one step's calls share one `user` content, and a user message right after them joins it. |
+| Tools | `functionDeclarations` with each tool's JSON Schema as `parametersJsonSchema`. |
+
+Gemini 3 and later refuse a step whose first function call comes back without its `thoughtSignature`. The adapter records each signature as a server block `{ "gemini_signature": … }` right after the part it arrived on (a function call, or the text a closing empty part seals), and puts it back on that part; the first call of a step with no signature of its own (a call another model made, or one from before a compaction) gets Gemini's stand-in, `skip_thought_signature_validator`. On Gemini 3 and later (`server_tools`, set from the model id) every request also declares `googleSearch` and `urlContext` with `toolConfig.includeServerSideToolInvocations`, which lets them run beside function calls: a `toolCall` streams out as `ServerToolStart` (`web_search` with the queries, `web_fetch` with the URLs), its `toolResponse` as `ServerToolEnd`, and both stay in the message as server blocks for the rest of the turn.
+
+`generationConfig.maxOutputTokens` is the request's cap, else the model's, never above 65,536, what one streaming request returns before Gemini 4 asks for a continuation. From the stream it reads `text` parts as text or, with `thought: true`, thinking; a `functionCall` as a whole tool call; `finishReason` as the stop reason (`STOP` with a call made is tool use, `MAX_TOKENS` a length stop, `SAFETY`, `RECITATION`, `MALFORMED_FUNCTION_CALL`, and the rest an error naming the reason, as is a `promptFeedback.blockReason`); and `usageMetadata`: `cachedContentTokenCount` as `cache_read`, the rest of `promptTokenCount` and `toolUsePromptTokenCount` as `input`, `candidatesTokenCount` and `thoughtsTokenCount` as `output`, the thoughts as `reasoning`.
+
+`GEMINI_API_KEY=… cargo test -p lorca-agent live_gemini -- --ignored --nocapture` runs a search and a function call and continues the turn with the signatures sent back.
 
 ### ChatGPT subscription
 

@@ -1034,7 +1034,7 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                 let provider = credentials.custom.get(&kind).ok_or("Unknown provider")?;
                 return Ok(json!({ "api_key": provider.api_key, "base_url": provider.base_url }));
             }
-            if !matches!(kind.as_str(), "deepseek" | "anthropic" | "opencode" | "opencode-go") {
+            if !matches!(kind.as_str(), "deepseek" | "anthropic" | "gemini" | "opencode" | "opencode-go") {
                 return Err("Not an API-key provider".into());
             }
             let credential = credentials.api_key(&kind);
@@ -1051,6 +1051,11 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
         #[cfg(feature = "provider-auth")]
         "providers.connect_anthropic" => {
             provider_auth::connect_anthropic(app, &string(&params, "api_key")?, opt_string(&params, "base_url").as_deref()).await?;
+            Ok(json!({ "providers": app.credentials.lock().unwrap().statuses() }))
+        }
+        #[cfg(feature = "provider-auth")]
+        "providers.connect_gemini" => {
+            provider_auth::connect_gemini(app, &string(&params, "api_key")?, opt_string(&params, "base_url").as_deref()).await?;
             Ok(json!({ "providers": app.credentials.lock().unwrap().statuses() }))
         }
         #[cfg(feature = "provider-auth")]

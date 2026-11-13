@@ -928,6 +928,7 @@ export interface Chat extends ChatMeta {
 export const PROVIDER_LABELS: Record<string, string> = {
   deepseek: "DeepSeek",
   anthropic: "Anthropic",
+  gemini: "Gemini",
   opencode: "OpenCode Zen",
   "opencode-go": "OpenCode Go",
   chatgpt: "ChatGPT",
@@ -935,7 +936,7 @@ export const PROVIDER_LABELS: Record<string, string> = {
 };
 
 /// The providers Lorca has built in, in the order the core lists them.
-export const PROVIDER_KINDS = ["deepseek", "anthropic", "opencode", "opencode-go", "chatgpt", "grok"] as const;
+export const PROVIDER_KINDS = ["deepseek", "anthropic", "gemini", "opencode", "opencode-go", "chatgpt", "grok"] as const;
 export type ProviderKind = (typeof PROVIDER_KINDS)[number];
 
 /// A built-in provider's kind. Custom providers' kinds start with `custom:`.
@@ -1019,7 +1020,6 @@ export interface CustomPreset {
 export const CUSTOM_PRESETS: readonly CustomPreset[] = [
   { name: "OpenAI", api: "responses", baseURL: "https://api.openai.com/v1", keyPlaceholder: () => t("sk-… from platform.openai.com") },
   { name: "OpenRouter", api: "chat-completions", baseURL: "https://openrouter.ai/api/v1", keyPlaceholder: () => t("sk-or-… from openrouter.ai/keys") },
-  { name: "Gemini", api: "chat-completions", baseURL: "https://generativelanguage.googleapis.com/v1beta/openai", keyPlaceholder: () => t("Key from aistudio.google.com") },
   { name: "Groq", api: "chat-completions", baseURL: "https://api.groq.com/openai/v1", keyPlaceholder: () => t("gsk_… from console.groq.com") },
   { name: "Together AI", api: "chat-completions", baseURL: "https://api.together.xyz/v1", keyPlaceholder: () => t("Key from api.together.ai") },
   { name: "Ollama", api: "chat-completions", baseURL: "http://localhost:11434/v1", keyPlaceholder: () => t("Optional for a server on your network"), local: true },
@@ -1183,6 +1183,8 @@ export function providerDefaultBaseURL(kind: ProviderKind): string {
       return "https://api.deepseek.com";
     case "anthropic":
       return "https://api.anthropic.com";
+    case "gemini":
+      return "https://generativelanguage.googleapis.com";
     case "opencode":
       return "https://opencode.ai/zen";
     case "opencode-go":
@@ -1198,6 +1200,8 @@ export function providerKeyPlaceholder(kind: ProviderKind): string {
       return t("sk-… from platform.deepseek.com");
     case "anthropic":
       return t("sk-ant-… from console.anthropic.com");
+    case "gemini":
+      return t("Key from aistudio.google.com");
     case "opencode":
     case "opencode-go":
       return t("API key from opencode.ai/auth");

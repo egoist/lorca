@@ -305,7 +305,6 @@ describe("custom providers", () => {
     expect(CUSTOM_PRESETS.map((preset) => [preset.name, preset.api, preset.baseURL])).toEqual([
       ["OpenAI", "responses", "https://api.openai.com/v1"],
       ["OpenRouter", "chat-completions", "https://openrouter.ai/api/v1"],
-      ["Gemini", "chat-completions", "https://generativelanguage.googleapis.com/v1beta/openai"],
       ["Groq", "chat-completions", "https://api.groq.com/openai/v1"],
       ["Together AI", "chat-completions", "https://api.together.xyz/v1"],
       ["Ollama", "chat-completions", "http://localhost:11434/v1"],
@@ -316,7 +315,7 @@ describe("custom providers", () => {
     ]);
     expect(CUSTOM_PRESETS.filter((preset) => preset.local).map((preset) => preset.name)).toEqual(["Ollama", "LM Studio"]);
     // Add Custom Provider's groups, in the menu's order.
-    expect(CUSTOM_PRESETS.map(presetGroup)).toEqual(["cloud", "cloud", "cloud", "cloud", "cloud", "local", "local", "decisions", "decisions", "decisions"]);
+    expect(CUSTOM_PRESETS.map(presetGroup)).toEqual(["cloud", "cloud", "cloud", "cloud", "local", "local", "decisions", "decisions", "decisions"]);
     expect(customPreset("TypeSafe")?.keyPlaceholder()).toBe("Key from typesafe.ai");
     expect(customPreset("OpenRouter Decisions")?.keyPlaceholder()).toBe("sk-or-… from openrouter.ai/keys");
     expect(customPreset("together ai")?.keyPlaceholder()).toBe("Key from api.together.ai");
@@ -350,7 +349,8 @@ describe("custom providers", () => {
     expect(presetForURL("http://localhost:8080/v1")).toBeUndefined();
     expect(defaultProviderName("http://localhost:11434/v1")).toBe("Ollama");
     expect(defaultProviderName("https://openrouter.ai/api/v1/chat/completions")).toBe("OpenRouter");
-    expect(defaultProviderName("https://generativelanguage.googleapis.com/v1beta/openai")).toBe("Gemini");
+    // Gemini is a built-in provider, so its OpenAI layer is no preset.
+    expect(defaultProviderName("https://generativelanguage.googleapis.com/v1beta/openai")).toBe("generativelanguage.googleapis.com");
     expect(defaultProviderName("http://192.168.1.20:11434/v1")).toBe("192.168.1.20:11434");
     expect(defaultProviderName("")).toBe("");
   });

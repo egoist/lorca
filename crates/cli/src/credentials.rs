@@ -19,7 +19,7 @@ pub type ChatGptTokens = serde_json::Value;
 pub type GrokTokens = serde_json::Value;
 
 /// The built-in providers. A custom provider's kind is `custom:` and a slug of its name.
-pub const PROVIDER_KINDS: [&str; 6] = ["deepseek", "anthropic", "opencode", "opencode-go", "chatgpt", "grok"];
+pub const PROVIDER_KINDS: [&str; 7] = ["deepseek", "anthropic", "gemini", "opencode", "opencode-go", "chatgpt", "grok"];
 
 pub const CUSTOM_PREFIX: &str = "custom:";
 
@@ -142,6 +142,8 @@ pub struct Credentials {
     #[serde(default)]
     pub anthropic: Option<ApiKeyCredential>,
     #[serde(default)]
+    pub gemini: Option<ApiKeyCredential>,
+    #[serde(default)]
     pub opencode: Option<ApiKeyCredential>,
     #[serde(default)]
     pub opencode_go: Option<ApiKeyCredential>,
@@ -206,6 +208,7 @@ impl Credentials {
                     match kind.as_str() {
                         "deepseek" => self.deepseek = other.deepseek.clone(),
                         "anthropic" => self.anthropic = other.anthropic.clone(),
+                        "gemini" => self.gemini = other.gemini.clone(),
                         "opencode" => self.opencode = other.opencode.clone(),
                         "opencode-go" => self.opencode_go = other.opencode_go.clone(),
                         "chatgpt" => self.chatgpt = other.chatgpt.clone(),
@@ -237,6 +240,7 @@ impl Credentials {
         match kind {
             "deepseek" => self.deepseek.as_ref(),
             "anthropic" => self.anthropic.as_ref(),
+            "gemini" => self.gemini.as_ref(),
             "opencode" => self.opencode.as_ref(),
             "opencode-go" => self.opencode_go.as_ref(),
             _ => None,
@@ -310,6 +314,7 @@ impl Credentials {
             None => match kind {
                 "deepseek" => "DeepSeek".into(),
                 "anthropic" => "Anthropic".into(),
+                "gemini" => "Gemini".into(),
                 "opencode" => "OpenCode Zen".into(),
                 "opencode-go" => "OpenCode Go".into(),
                 "chatgpt" => "ChatGPT".into(),

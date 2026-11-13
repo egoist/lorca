@@ -17,6 +17,7 @@ const CATALOG = join(ROOT, "crates/models/catalog.json")
 const MODELS_DEV: Record<string, string> = {
   deepseek: "deepseek",
   anthropic: "anthropic",
+  gemini: "google",
   chatgpt: "openai",
   grok: "xai",
   opencode: "opencode",

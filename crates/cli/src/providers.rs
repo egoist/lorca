@@ -8,8 +8,9 @@ use async_trait::async_trait;
 
 use lorca_agent::models::{ModelInfo, Rates, ThinkingMode, Wire};
 use lorca_agent::providers::anthropic::ANTHROPIC_BASE_URL;
+use lorca_agent::providers::gemini::GEMINI_BASE_URL;
 use lorca_agent::providers::{
-    AnthropicProvider, ChatGptProvider, ChatGptTokens, GrokProvider, GrokTokenSource, GrokTokens, OpenAiCompatProvider,
+    AnthropicProvider, ChatGptProvider, ChatGptTokens, GeminiProvider, GrokProvider, GrokTokenSource, GrokTokens, OpenAiCompatProvider,
     OpenAiResponsesProvider, TokenSource,
 };
 use lorca_agent::{models, AssistantEventStream, ModelRequest, Provider, ThinkingLevel};
@@ -113,7 +114,7 @@ fn built_in_vision(kind: &str, model: Option<&str>) -> bool {
     }
     let model = model.to_ascii_lowercase();
     match kind {
-        "chatgpt" | "anthropic" | "grok" => true,
+        "chatgpt" | "anthropic" | "gemini" | "grok" => true,
         "deepseek" => model.contains("vl") || model.contains("vision"),
         "opencode" | "opencode-go" => {
             model.contains("claude")
@@ -272,6 +273,20 @@ fn unmetered_provider_for(app: &Arc<App>, kind: &str, model: Option<&str>, think
             let model = model.or_else(|| std::env::var("LORCA_ANTHROPIC_MODEL").ok()).unwrap_or_else(|| default_model(kind).into());
             let base_url = key.base_url.clone().unwrap_or_else(anthropic_base_url);
             Ok(Arc::new(AnthropicProvider::anthropic(&key.api_key, Some(model.as_str())).with_base_url(&base_url).with_thinking(thinking)))
+        }
+        "gemini" => {
+            let key = app
+                .credentials
+                .lock()
+                .unwrap()
+                .gemini
+                .clone()
+                .ok_or_else(|| "Gemini is not connected".to_string())?;
+            let model = model.or_else(|| std::env::var("LORCA_GEMINI_MODEL").ok()).unwrap_or_else(|| default_model(kind).into());
+            let base_url = key.base_url.clone().unwrap_or_else(gemini_base_url);
+            let mut provider = GeminiProvider::new(&base_url, &key.api_key, Some(model.as_str())).with_thinking(thinking);
+            provider.supports_images = built_in_vision(kind, Some(model.as_str()));
+            Ok(Arc::new(provider))
         }
         "opencode" => {
             let key = app
@@ -517,6 +532,12 @@ fn anthropic_base_url() -> String {
     env_url("LORCA_ANTHROPIC_BASE_URL").unwrap_or_else(|| ANTHROPIC_BASE_URL.to_string())
 }
 
+/// Gemini's API root when the credential has none: `LORCA_GEMINI_BASE_URL` (a proxy or a test
+/// server) or Google's.
+fn gemini_base_url() -> String {
+    env_url("LORCA_GEMINI_BASE_URL").unwrap_or_else(|| GEMINI_BASE_URL.to_string())
+}
+
 fn env_url(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|s| !s.trim().is_empty()).map(|s| s.trim_end_matches('/').to_string())
 }
@@ -577,7 +598,7 @@ mod tests {
 
     #[test]
     fn every_provider_has_a_default_and_roots_accept_v1() {
-        for kind in ["deepseek", "anthropic", "chatgpt", "grok", "opencode", "opencode-go"] {
+        for kind in crate::credentials::PROVIDER_KINDS {
             assert!(models::find(kind, default_model(kind)).is_some(), "{kind}");
         }
         assert_eq!(default_model("custom:lab"), "");
@@ -613,11 +634,13 @@ mod tests {
     fn auto_review_runs_a_small_model_that_thinks_least() {
         let scratch = scratch_app();
         let app = &scratch.0;
-        for kind in ["deepseek", "anthropic", "chatgpt", "grok", "opencode", "opencode-go"] {
+        for kind in crate::credentials::PROVIDER_KINDS {
             assert!(models::find(kind, &small_model(app, kind).0).is_some(), "{kind}");
         }
         assert_eq!(small_model(app, "deepseek"), ("deepseek-flash".into(), Some(ThinkingLevel::Off)));
         assert_eq!(small_model(app, "anthropic"), ("claude-haiku-4-5".into(), Some(ThinkingLevel::Off)));
+        // Gemini cannot stop thinking: its review model runs at its lowest level.
+        assert_eq!(small_model(app, "gemini"), ("gemini-3.5-flash-lite".into(), Some(ThinkingLevel::Minimal)));
         assert_eq!(small_model(app, "chatgpt"), ("gpt-6-luna".into(), Some(ThinkingLevel::Low)));
         assert_eq!(small_model(app, "grok"), ("grok-4.7".into(), Some(ThinkingLevel::Low)));
         assert_eq!(small_model(app, "opencode-go"), ("deepseek-v4.1-flash".into(), Some(ThinkingLevel::Low)));

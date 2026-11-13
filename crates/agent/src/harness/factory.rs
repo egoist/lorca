@@ -7,7 +7,8 @@ use std::sync::Arc;
 
 use crate::providers::chatgpt::TokenSource;
 use crate::providers::grok::GrokTokenSource;
-use crate::providers::{AnthropicProvider, ChatGptProvider, GrokProvider, OpenAiCompatProvider};
+use crate::providers::gemini::GEMINI_BASE_URL;
+use crate::providers::{AnthropicProvider, ChatGptProvider, GeminiProvider, GrokProvider, OpenAiCompatProvider};
 use crate::types::ThinkingLevel;
 use crate::Provider;
 
@@ -51,6 +52,7 @@ type Builder = Arc<dyn Fn(&str, Option<ThinkingLevel>) -> Result<Arc<dyn Provide
 /// | --- | --- | --- |
 /// | `deepseek` | `DEEPSEEK_API_KEY` | `DEEPSEEK_BASE_URL` (the API root; its `/anthropic` is used) |
 /// | `anthropic` | `ANTHROPIC_API_KEY` | `ANTHROPIC_BASE_URL` |
+/// | `gemini` | `GEMINI_API_KEY` | `GEMINI_BASE_URL` (the API root, without `/v1beta`) |
 /// | `openai` | `OPENAI_API_KEY` | `OPENAI_BASE_URL` (default `https://api.openai.com/v1`) |
 /// | `chatgpt` | the [`TokenSource`] given to `with_chatgpt` | |
 /// | `grok` | the [`GrokTokenSource`] given to `with_grok` | `GROK_BASE_URL` |
@@ -111,6 +113,11 @@ impl ProviderFactory for EnvProviderFactory {
                     provider = provider.with_base_url(&base);
                 }
                 Ok(Arc::new(provider.with_thinking(thinking)))
+            }
+            "gemini" => {
+                let key = Self::env("GEMINI_API_KEY").ok_or("GEMINI_API_KEY is not set")?;
+                let base = Self::env("GEMINI_BASE_URL").unwrap_or_else(|| GEMINI_BASE_URL.into());
+                Ok(Arc::new(GeminiProvider::new(&base, &key, model_id).with_thinking(thinking)))
             }
             "openai" => {
                 let key = Self::env("OPENAI_API_KEY").ok_or("OPENAI_API_KEY is not set")?;

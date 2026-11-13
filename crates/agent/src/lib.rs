@@ -7,7 +7,7 @@
 //! - [`Tool`]: something the model can call.
 //! - `codemode`: a tool that runs model-written JavaScript calling other tools, so their results
 //!   stay out of the model's context.
-//! - `providers`: Anthropic Messages (Anthropic and DeepSeek, with server-side web search),
+//! - `providers`: Anthropic Messages (Anthropic and DeepSeek, with server-side web search), Gemini,
 //!   OpenAI-compatible Chat Completions and Responses, and ChatGPT and Grok (subscription OAuth).
 
 pub mod agent;

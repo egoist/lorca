@@ -109,6 +109,7 @@ func mockProviders() []ProviderCredential {
 	return []ProviderCredential{
 		{Kind: "deepseek", IsConnected: true, Detail: "sk-live…4f2c", ReviewModel: "deepseek-flash"},
 		{Kind: "anthropic", IsConnected: true, Detail: "sk-ant…8d1a", ReviewModel: "claude-haiku-4-5"},
+		{Kind: "gemini", Detail: "Not connected", ReviewModel: "gemini-3.5-flash-lite"},
 		{Kind: "opencode", Detail: "Not connected", ReviewModel: "deepseek-v4.1-flash"},
 		{Kind: "opencode-go", Detail: "Not connected", ReviewModel: "glm-5.3-flash"},
 		{Kind: "chatgpt", IsConnected: true, Detail: "you@lorca.app", ReviewModel: "gpt-6-luna"},
@@ -173,6 +174,8 @@ func mockModels() []ProviderModel {
 		{"anthropic", "claude-opus-5", "Claude Opus 5", all, false},
 		{"anthropic", "claude-fable-5-1", "Claude Fable 5.1", on, false},
 		{"anthropic", "claude-haiku-4-5", "Claude Haiku 4.5", []string{"off", "minimal", "low", "medium", "high"}, false},
+		{"gemini", "gemini-4-hydrogen", "Gemini 4 Hydrogen", []string{"low", "medium", "high", "xhigh"}, false},
+		{"gemini", "gemini-3.5-flash-lite", "Gemini 3.5 Flash-Lite", []string{"minimal", "low", "medium", "high"}, false},
 		{"opencode", "deepseek-v4.1-flash", "DeepSeek V4.1 Flash", []string{"low", "high", "max"}, false},
 		{"opencode", "kimi-k3", "Kimi K3", []string{"max"}, false},
 		{"opencode", "big-pickle", "Big Pickle", nil, false},

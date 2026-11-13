@@ -10,12 +10,13 @@ Bots think with your own AI accounts. Connect a provider once, on any paired dev
 | --- | --- | --- |
 | **DeepSeek** | API key | `deepseek-flash` |
 | **Anthropic** | API key | `claude-opus-5` |
+| **Gemini** | API key from Google AI Studio | `gemini-4-hydrogen` |
 | **OpenCode Zen** | API key, pay as you go | `deepseek-v4.1-flash` |
 | **OpenCode Go** | API key and Go subscription | `glm-5.3-flash` |
 | **ChatGPT** | Sign in with your ChatGPT subscription | `gpt-6.1-sol` |
 | **Grok** | Sign in with SuperGrok or X Premium+ | `grok-4.7` |
 
-DeepSeek, Anthropic, ChatGPT, and Grok search the web on the provider's side. Grok also searches X.
+DeepSeek, Anthropic, Gemini, ChatGPT, and Grok search the web on the provider's side. Grok also searches X, and Gemini reads the pages a message links to.
 
 ## Connect
 
@@ -29,6 +30,7 @@ From a terminal:
 ```bash
 lorca provider set deepseek
 lorca provider set anthropic
+lorca provider set gemini
 lorca provider set opencode
 lorca provider set opencode-go
 lorca provider set chatgpt
@@ -41,7 +43,7 @@ For a proxy or a compatible server, fill in **Base URL** when you connect any AP
 
 ## Custom providers
 
-Any server that speaks OpenAI's Chat Completions or Responses API, or Anthropic's Messages API, can be a provider: a gateway such as OpenRouter, another vendor's API, or a model server on your own network such as Ollama, LM Studio, or vLLM. Open **Settings › Providers**, choose **Add Provider…**, and pick the service: OpenAI, OpenRouter, Gemini, Groq, Together AI, Ollama, or LM Studio fill in the API and base URL for you, and **Other Server…** starts empty.
+Any server that speaks OpenAI's Chat Completions or Responses API, or Anthropic's Messages API, can be a provider: a gateway such as OpenRouter, another vendor's API, or a model server on your own network such as Ollama, LM Studio, or vLLM. Open **Settings › Providers**, choose **Add Provider…**, and pick the service: OpenAI, OpenRouter, Groq, Together AI, Ollama, or LM Studio fill in the API and base URL for you, and **Other Server…** starts empty.
 
 - **Name:** what the apps call it.
 - **API:** OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages.
@@ -88,4 +90,4 @@ If a bot's provider is not connected, its turn ends with a note that says to con
 
 ## Cost
 
-DeepSeek, Anthropic, and OpenCode Zen bill by usage; OpenCode Go applies usage to its subscription limits. The inspector shows what each chat has spent. ChatGPT and Grok sign-ins use your subscription, and the figure shown is what the work would cost at API rates.
+DeepSeek, Anthropic, Gemini, and OpenCode Zen bill by usage; OpenCode Go applies usage to its subscription limits. The inspector shows what each chat has spent. ChatGPT and Grok sign-ins use your subscription, and the figure shown is what the work would cost at API rates.

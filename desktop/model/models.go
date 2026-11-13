@@ -24,7 +24,7 @@ type ProviderKind = string
 
 // ProviderKinds are the built-in kinds, in the order Settings lists them. The account's custom
 // providers follow them, in the order they were added (`Store.ProviderKinds`).
-var ProviderKinds = []ProviderKind{"deepseek", "anthropic", "opencode", "opencode-go", "chatgpt", "grok"}
+var ProviderKinds = []ProviderKind{"deepseek", "anthropic", "gemini", "opencode", "opencode-go", "chatgpt", "grok"}
 
 const customPrefix = "custom:"
 
@@ -53,6 +53,8 @@ func ProviderName(kind ProviderKind, providers []ProviderCredential) string {
 		return "DeepSeek"
 	case "anthropic":
 		return "Anthropic"
+	case "gemini":
+		return "Gemini"
 	case "opencode":
 		return "OpenCode Zen"
 	case "opencode-go":
@@ -69,7 +71,7 @@ func ProviderName(kind ProviderKind, providers []ProviderCredential) string {
 // through the browser instead, and a custom provider is set up in its own sheet.
 func UsesAPIKey(kind ProviderKind) bool {
 	switch kind {
-	case "deepseek", "anthropic", "opencode", "opencode-go":
+	case "deepseek", "anthropic", "gemini", "opencode", "opencode-go":
 		return true
 	}
 	return false
@@ -113,6 +115,8 @@ func DefaultBaseURL(kind ProviderKind) string {
 		return "https://api.deepseek.com"
 	case "anthropic":
 		return "https://api.anthropic.com"
+	case "gemini":
+		return "https://generativelanguage.googleapis.com"
 	case "opencode":
 		return "https://opencode.ai/zen"
 	case "opencode-go":
@@ -128,6 +132,8 @@ func KeyPlaceholder(kind ProviderKind) string {
 		return L("sk-… from platform.deepseek.com")
 	case "anthropic":
 		return L("sk-ant-… from console.anthropic.com")
+	case "gemini":
+		return L("Key from aistudio.google.com")
 	case "opencode", "opencode-go":
 		return L("API key from opencode.ai/auth")
 	}
@@ -398,7 +404,6 @@ type CustomPreset struct {
 var CustomPresets = []CustomPreset{
 	{"OpenAI", APIResponses, "https://api.openai.com/v1", false, func() string { return L("sk-… from platform.openai.com") }},
 	{"OpenRouter", APIChatCompletions, "https://openrouter.ai/api/v1", false, func() string { return L("sk-or-… from openrouter.ai/keys") }},
-	{"Gemini", APIChatCompletions, "https://generativelanguage.googleapis.com/v1beta/openai", false, func() string { return L("Key from aistudio.google.com") }},
 	{"Groq", APIChatCompletions, "https://api.groq.com/openai/v1", false, func() string { return L("gsk_… from console.groq.com") }},
 	{"Together AI", APIChatCompletions, "https://api.together.xyz/v1", false, func() string { return L("Key from api.together.ai") }},
 	{"Ollama", APIChatCompletions, "http://localhost:11434/v1", true, func() string { return L("Optional for a server on your network") }},

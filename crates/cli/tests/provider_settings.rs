@@ -13,7 +13,7 @@ impl Drop for Home {
 async fn provider_settings_reads_only_the_requested_api_key() {
     let home = Home(std::env::temp_dir().join(format!("lorca-provider-settings-{}", uuid::Uuid::new_v4())));
     let app = App::load(Config { home: home.0.clone(), port: 0 }).unwrap();
-    let kinds = ["deepseek", "anthropic", "opencode", "opencode-go"];
+    let kinds = ["deepseek", "anthropic", "gemini", "opencode", "opencode-go"];
 
     for kind in kinds {
         let result = api::dispatch(&app, "providers.api_key", json!({ "kind": kind })).await.unwrap();
@@ -28,6 +28,7 @@ async fn provider_settings_reads_only_the_requested_api_key() {
             connected_at: 1,
         });
         credentials.anthropic = Some(ApiKeyCredential { api_key: "sk-test-anthropic-secret".into(), base_url: None, connected_at: 1 });
+        credentials.gemini = Some(ApiKeyCredential { api_key: "sk-test-gemini-secret".into(), base_url: None, connected_at: 1 });
         credentials.opencode = Some(ApiKeyCredential { api_key: "sk-test-opencode-secret".into(), base_url: None, connected_at: 1 });
         credentials.opencode_go = Some(ApiKeyCredential { api_key: "sk-test-opencode-go-secret".into(), base_url: None, connected_at: 1 });
     }

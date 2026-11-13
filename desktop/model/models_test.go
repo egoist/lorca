@@ -139,14 +139,13 @@ func TestPresets(t *testing.T) {
 	expect(t, got, [][]any{
 		{"OpenAI", APIResponses, "https://api.openai.com/v1", false},
 		{"OpenRouter", APIChatCompletions, "https://openrouter.ai/api/v1", false},
-		{"Gemini", APIChatCompletions, "https://generativelanguage.googleapis.com/v1beta/openai", false},
 		{"Groq", APIChatCompletions, "https://api.groq.com/openai/v1", false},
 		{"Together AI", APIChatCompletions, "https://api.together.xyz/v1", false},
 		{"Ollama", APIChatCompletions, "http://localhost:11434/v1", true},
 		{"LM Studio", APIChatCompletions, "http://localhost:1234/v1", true},
 	})
 	expect(t, placeholders, []string{
-		"sk-… from platform.openai.com", "sk-or-… from openrouter.ai/keys", "Key from aistudio.google.com", "gsk_… from console.groq.com",
+		"sk-… from platform.openai.com", "sk-or-… from openrouter.ai/keys", "gsk_… from console.groq.com",
 		"Key from api.together.ai", "Optional for a server on your network", "Optional for a server on your network",
 	})
 	got, placeholders = nil, nil

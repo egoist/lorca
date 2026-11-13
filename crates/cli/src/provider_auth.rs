@@ -18,6 +18,7 @@ use crate::credentials::{is_custom, ApiKeyCredential, Credentials, CustomApi, Cu
 
 const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
+const GEMINI_BASE_URL: &str = "https://generativelanguage.googleapis.com";
 const OPENCODE_BASE_URL: &str = "https://opencode.ai/zen";
 const OPENCODE_GO_BASE_URL: &str = "https://opencode.ai/zen/go";
 
@@ -31,6 +32,20 @@ fn deepseek_base_url() -> String {
 
 fn anthropic_base_url() -> String {
     env_url("LORCA_ANTHROPIC_BASE_URL").unwrap_or_else(|| ANTHROPIC_BASE_URL.to_string())
+}
+
+fn gemini_base_url() -> String {
+    env_url("LORCA_GEMINI_BASE_URL").unwrap_or_else(|| GEMINI_BASE_URL.to_string())
+}
+
+/// A Gemini API root without the API version or OpenAI layer a pasted URL may end with
+/// (`…/v1beta`, `…/v1beta/openai`, `…/v1`); the adapter adds the version it calls.
+pub fn gemini_root(url: &str) -> &str {
+    let mut root = url.trim_end_matches('/');
+    for suffix in ["/openai", "/v1beta", "/v1alpha", "/v1"] {
+        root = root.strip_suffix(suffix).unwrap_or(root).trim_end_matches('/');
+    }
+    root
 }
 
 /// Removes an optional `/v1` from a custom OpenCode root; the credential check adds the
@@ -73,6 +88,30 @@ pub async fn connect_anthropic(app: &Arc<App>, api_key: &str, base_url: Option<&
     let request = app.http.get(format!("{root}/v1/models")).header("x-api-key", key).header("anthropic-version", ANTHROPIC_VERSION);
     check_key("Anthropic", request).await?;
     save_api_key(app, "anthropic", key, base_url)
+}
+
+/// Checks a Gemini API key against the API (the given root, or Google's) before saving both. A
+/// pasted root keeps no API version (`…/v1beta`, `…/v1beta/openai`); the adapter adds its own.
+pub async fn connect_gemini(app: &Arc<App>, api_key: &str, base_url: Option<&str>) -> Result<(), String> {
+    let key = api_key.trim();
+    if key.is_empty() {
+        return Err("Paste a Gemini API key".into());
+    }
+    let base_url = custom_base_url(base_url)?.map(|url| gemini_root(&url).to_string());
+    let root = base_url.clone().unwrap_or_else(gemini_base_url);
+    let request = app.http.get(format!("{root}/v1beta/models?pageSize=1")).header("x-goog-api-key", key);
+    let response = request.send().await.map_err(|e| format!("Gemini unreachable: {}", lorca_tls::describe(&e)))?;
+    match response.status() {
+        // Google answers a key it does not know with 400 `API_KEY_INVALID`.
+        reqwest::StatusCode::BAD_REQUEST | reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => {
+            let body: Value = response.json().await.unwrap_or_default();
+            let reason = body["error"]["message"].as_str().filter(|m| !m.is_empty()).map(|m| format!(": {m}")).unwrap_or_default();
+            return Err(format!("Gemini rejected that key{reason}"));
+        }
+        status if status.is_success() => {}
+        status => return Err(format!("Gemini answered {status}")),
+    }
+    save_api_key(app, "gemini", key, base_url)
 }
 
 /// Checks an OpenCode Zen key. The model catalog is public, so the account check uses Go's
@@ -140,6 +179,7 @@ fn save_api_key(app: &Arc<App>, kind: &str, key: &str, base_url: Option<String>)
     let update = |credentials: &mut Credentials| match kind {
         "deepseek" => credentials.deepseek = credential,
         "anthropic" => credentials.anthropic = credential,
+        "gemini" => credentials.gemini = credential,
         "opencode" => credentials.opencode = credential,
         "opencode-go" => credentials.opencode_go = credential,
         _ => unreachable!(),
@@ -188,7 +228,10 @@ pub async fn connect_custom(app: &Arc<App>, input: CustomInput) -> Result<String
     }
     {
         let credentials = app.credentials.lock().unwrap();
-        let taken = PROVIDER_KINDS
+        // A provider saved again under the name it has keeps it, even one a built-in provider
+        // added since took (a custom "Gemini" from before Gemini was built in).
+        let kept = input.kind.as_ref().and_then(|kind| credentials.custom.get(kind)).is_some_and(|provider| provider.name.eq_ignore_ascii_case(&name));
+        let taken = !kept && PROVIDER_KINDS
             .iter()
             .map(|kind| kind.to_string())
             .chain(credentials.custom_kinds())
@@ -462,6 +505,7 @@ pub fn disconnect(app: &Arc<App>, kind: &str) -> Result<(), String> {
     app.update_credentials(kind, |credentials| match kind {
         "deepseek" => credentials.deepseek = None,
         "anthropic" => credentials.anthropic = None,
+        "gemini" => credentials.gemini = None,
         "opencode" => credentials.opencode = None,
         "opencode-go" => credentials.opencode_go = None,
         "chatgpt" => credentials.chatgpt = None,
@@ -506,6 +550,9 @@ mod tests {
         assert_eq!(root(CustomApi::Messages, "https://api.moonshot.ai/anthropic"), "https://api.moonshot.ai/anthropic");
         // Messages paths add the `/v1` a root without one lacks.
         assert_eq!(messages_root("https://api.anthropic.com/v1"), "https://api.anthropic.com");
+        assert_eq!(gemini_root("https://generativelanguage.googleapis.com/v1beta/openai/"), "https://generativelanguage.googleapis.com");
+        assert_eq!(gemini_root("https://proxy.example/gemini/v1beta"), "https://proxy.example/gemini");
+        assert_eq!(gemini_root("https://proxy.example/gemini"), "https://proxy.example/gemini");
         assert_eq!(messages_root("https://api.moonshot.ai/anthropic"), "https://api.moonshot.ai/anthropic");
         assert_eq!(custom_root(CustomApi::Messages, " ").unwrap_err(), "Enter the server's base URL");
     }
@@ -695,6 +742,35 @@ mod tests {
         server.join().unwrap();
         let saved = app.credentials.lock().unwrap().custom[&kind].clone();
         assert_eq!((saved.name.as_str(), saved.created_at, saved.models.len()), ("Claude", provider.created_at, 1));
+    }
+
+    #[tokio::test]
+    async fn a_gemini_key_is_checked_at_the_root_without_its_version() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        let invalid = json!({ "error": { "code": 400, "message": "API key not valid. Please pass a valid API key.", "status": "INVALID_ARGUMENT" } });
+        let (root, server) = serve(vec![("400 Bad Request", invalid.to_string()), ("200 OK", json!({ "models": [] }).to_string())]);
+        let pasted = format!("{root}/v1beta/openai/");
+        assert_eq!(connect_gemini(app, "bad", Some(&pasted)).await.unwrap_err(), "Gemini rejected that key: API key not valid. Please pass a valid API key.");
+        assert!(app.credentials.lock().unwrap().gemini.is_none());
+        connect_gemini(app, " AIza-good ", Some(&pasted)).await.unwrap();
+        let requests = server.join().unwrap();
+        assert!(requests[1].starts_with("GET /v1beta/models?pageSize=1 "), "{}", requests[1]);
+        assert!(requests[1].contains("x-goog-api-key: AIza-good"), "{}", requests[1]);
+        let credential = app.credentials.lock().unwrap().gemini.clone().unwrap();
+        assert_eq!((credential.api_key.as_str(), credential.base_url), ("AIza-good", Some(root)));
+        assert_eq!(connect_gemini(app, " ", None).await.unwrap_err(), "Paste a Gemini API key");
+
+        // A custom "Gemini" from before Gemini was built in keeps its name when saved again, and
+        // no new provider takes it.
+        let (root, server) = serve(vec![("404 Not Found", "{}".into())]);
+        let old = CustomProvider { name: "Gemini".into(), api: CustomApi::ChatCompletions, base_url: root.clone(), api_key: String::new(), models: Vec::new(), created_at: 1 };
+        app.credentials.lock().unwrap().custom.insert("custom:gemini".into(), old);
+        assert_eq!(connect_custom(app, input("gemini", "chat-completions", &root, &["m"])).await.unwrap_err(), "A provider named gemini exists already");
+        let mut edited = input("Gemini", "chat-completions", &root, &["gemini-3.8-flash"]);
+        edited.kind = Some("custom:gemini".into());
+        assert_eq!(connect_custom(app, edited).await.unwrap(), "custom:gemini");
+        server.join().unwrap();
     }
 
     #[tokio::test]

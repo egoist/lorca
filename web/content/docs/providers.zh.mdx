@@ -10,12 +10,13 @@ icon: Sparkles
 | --- | --- | --- |
 | **DeepSeek** | API 密钥 | `deepseek-flash` |
 | **Anthropic** | API 密钥 | `claude-opus-5` |
+| **Gemini** | 来自 Google AI Studio 的 API 密钥 | `gemini-4-hydrogen` |
 | **OpenCode Zen** | API 密钥，按量付费 | `deepseek-v4.1-flash` |
 | **OpenCode Go** | API 密钥和 Go 订阅 | `glm-5.3-flash` |
 | **ChatGPT** | 用你的 ChatGPT 订阅登录 | `gpt-6.1-sol` |
 | **Grok** | 用 SuperGrok 或 X Premium+ 登录 | `grok-4.7` |
 
-DeepSeek、Anthropic、ChatGPT 和 Grok 会在服务商一侧搜索网络。Grok 还能搜索 X。
+DeepSeek、Anthropic、Gemini、ChatGPT 和 Grok 会在服务商一侧搜索网络。Grok 还能搜索 X，Gemini 还会读取消息里链接的网页。
 
 ## 接入
 
@@ -29,6 +30,7 @@ DeepSeek、Anthropic、ChatGPT 和 Grok 会在服务商一侧搜索网络。Grok
 ```bash
 lorca provider set deepseek
 lorca provider set anthropic
+lorca provider set gemini
 lorca provider set opencode
 lorca provider set opencode-go
 lorca provider set chatgpt
@@ -41,7 +43,7 @@ lorca provider list
 
 ## 自定义服务商
 
-任何兼容 OpenAI Chat Completions 或 Responses API，或 Anthropic Messages API 的服务器都可以作为服务商：OpenRouter 这样的网关、其他厂商的 API，或者你网络中的模型服务器，例如 Ollama、LM Studio 或 vLLM。打开 **设置 › 服务商**，选择 **添加服务商…**，再选择服务：OpenAI、OpenRouter、Gemini、Groq、Together AI、Ollama 和 LM Studio 会替你填好 API 和基础 URL，**其他服务器…** 则从空白开始。
+任何兼容 OpenAI Chat Completions 或 Responses API，或 Anthropic Messages API 的服务器都可以作为服务商：OpenRouter 这样的网关、其他厂商的 API，或者你网络中的模型服务器，例如 Ollama、LM Studio 或 vLLM。打开 **设置 › 服务商**，选择 **添加服务商…**，再选择服务：OpenAI、OpenRouter、Groq、Together AI、Ollama 和 LM Studio 会替你填好 API 和基础 URL，**其他服务器…** 则从空白开始。
 
 - **名称：**应用里显示的名字。
 - **API：**OpenAI Chat Completions、OpenAI Responses 或 Anthropic Messages。
@@ -88,4 +90,4 @@ lorca provider add "TypeSafe" https://api.typesafe.ai/v1/systemone --api system-
 
 ## 花费
 
-DeepSeek、Anthropic 和 OpenCode Zen 按用量计费；OpenCode Go 的用量计入订阅限额。检查器会显示每个聊天花了多少。ChatGPT 和 Grok 登录用的是你的订阅，显示的数字是按 API 价格折算的花费。
+DeepSeek、Anthropic、Gemini 和 OpenCode Zen 按用量计费；OpenCode Go 的用量计入订阅限额。检查器会显示每个聊天花了多少。ChatGPT 和 Grok 登录用的是你的订阅，显示的数字是按 API 价格折算的花费。
