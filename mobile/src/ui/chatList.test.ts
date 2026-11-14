@@ -24,6 +24,19 @@ describe("chat list", () => {
     expect(groupOf(chats[0], sections)).toBeNull();
   });
 
+  test("a Task's work chat is in no group, Hidden included, though it is hidden", () => {
+    const channel = { channel_id: "c", service: "telegram", account_id: "a", chat_id: "-1" };
+    const work = chat("work", { is_hidden: true, channel: { ...channel, task_id: "task-1" } });
+    const conversation = chat("conversation", { channel });
+    const hidden = chat("gone", { is_hidden: true });
+    expect(names(chatListRows([work, conversation], [], true, false))).toEqual(["conversation"]);
+    expect(names(chatListRows([work, conversation, hidden], [], true, false))).toEqual(["conversation", "[hidden]", "gone"]);
+    expect(names(chatListRows([chat("filed", { section_id: "s", is_pinned: false, channel: { ...channel, task_id: "t" } })], [{ id: "s", name: "Work" }], false, false))).toEqual(["[section:s]"]);
+    expect(groupOf(work, [])).toBeNull();
+    expect(groupOf(conversation, [])).toBeNull();
+    expect(groupOf(hidden, [])).toEqual({ kind: "hidden" });
+  });
+
   test("a mute until a time runs out on its own, and section names are one short line", () => {
     const now = 1_000_000;
     expect(isMuted(chat("a", { mute: { until: now / 1000 + 1 } }), now)).toBe(true);

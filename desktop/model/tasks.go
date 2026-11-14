@@ -30,6 +30,10 @@ type DurableTask struct {
 	ActiveRun          *TaskRun       `json:"active_run"`
 	CreatedAt          float64        `json:"created_at"`
 	UpdatedAt          float64        `json:"updated_at"`
+	// Mandate is why a channel's intake took the work on; the Runner sets it once.
+	Mandate *TaskMandate `json:"mandate,omitempty"`
+	// Follows are the conversations whose messages reach the task.
+	Follows []string `json:"follows,omitempty"`
 }
 
 type TaskState string
@@ -103,6 +107,31 @@ func (state TaskState) order() int {
 // CancelledByUser is why a task the user cancelled in the app stopped, for its bot to read. The
 // app shows the state alone for it.
 const CancelledByUser = "Cancelled by the user."
+
+// NothingToDoReason is why a task ended when its run answered that nothing needed doing, which a
+// later message can pick up again. It isn't a cancellation, and the app doesn't call it one.
+const NothingToDoReason = "Nothing to do for this request."
+
+// NothingToDo is a task that ended quietly because its run found nothing to do.
+func (task DurableTask) NothingToDo() bool {
+	return task.State == TaskCancelled && task.ReasonText() == NothingToDoReason
+}
+
+// StateTitle is where the task stands, in the app's words.
+func (task DurableTask) StateTitle() string {
+	if task.NothingToDo() {
+		return L("Nothing to do")
+	}
+	return task.State.Title()
+}
+
+// StateSymbol is the SF Symbol name for where the task stands.
+func (task DurableTask) StateSymbol() string {
+	if task.NothingToDo() {
+		return "minus.circle"
+	}
+	return task.State.Symbol()
+}
 
 // CanStart is whether a run can start: queued or blocked, and not running.
 func (task DurableTask) CanStart() bool {

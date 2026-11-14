@@ -250,3 +250,57 @@ func TestNewTaskCreatesItForTheChatAndShowsIt(t *testing.T) {
 		t.Fatalf("created: %+v", task)
 	}
 }
+
+func TestTaskSheetShowsItsMandate(t *testing.T) {
+	m := demoWindow(t)
+	for _, task := range launchTasks() {
+		store.AcceptDurableTask(task)
+	}
+	task := taskFixture("task-m", model.TaskQueued, "bot-patch", "Fix the export crash", 95)
+	task.Mandate = &model.TaskMandate{ChannelName: "Community feedback", Sender: "Maya", Strength: "explicit", Scope: "Fix the CSV export crash in acme/app"}
+	store.AcceptDurableTask(task)
+	m.open("chat-relay")
+	m.presentDurableTask("chat-relay", store.DurableTask("task-m"))
+	tt := ui.NewTester(m.frame(m.view), 1180, 900)
+	settleTransitions(tt)
+	for _, text := range []string{L("From"), "Maya · Community feedback", L("Why"), L("Asked directly"), L("Work"), "Fix the CSV export crash in acme/app", L("Start")} {
+		if !tt.HasText(text) {
+			t.Errorf("no %q in %q", text, tt.Texts())
+		}
+	}
+	renderBoth(t, tt, "task-sheet-mandate")
+	closeSheets(m)
+
+	// Its rules say why when nobody asked; a task without a mandate has none of it.
+	inferred := taskFixture("task-n", model.TaskQueued, "bot-patch", "File the report", 94)
+	inferred.Mandate = &model.TaskMandate{ChannelName: "Community feedback", Sender: "Ben", Strength: "inferred", Rules: []model.IntakeRule{{ID: "a", Name: "Bug reports"}, {ID: "b", Name: "Crashes"}}}
+	store.AcceptDurableTask(inferred)
+	m.presentDurableTask("chat-relay", store.DurableTask("task-n"))
+	settleTransitions(tt)
+	if _, scoped := tt.Find(L("Work")); !tt.HasText("Bug reports, Crashes") || scoped {
+		t.Errorf("texts %q", tt.Texts())
+	}
+	closeSheets(m)
+	m.presentDurableTask("chat-relay", store.DurableTask("task-1"))
+	settleTransitions(tt)
+	if tt.HasText(L("Why")) {
+		t.Error("a task without a mandate says why")
+	}
+}
+
+func TestTaskWithNothingToDoIsNoCancellation(t *testing.T) {
+	m, _, tt := taskSheetTester(t, "task-1")
+	closeSheets(m)
+	task := taskFixture("task-m", model.TaskCancelled, "bot-patch", "Look at the report", 95)
+	reason := model.NothingToDoReason
+	task.Reason = &reason
+	store.AcceptDurableTask(task)
+	m.presentDurableTask("chat-relay", store.DurableTask("task-m"))
+	settleTransitions(tt)
+	if !tt.HasText(L("Nothing to do")) || tt.HasText(L("Cancelled")) || tt.HasText(reason) {
+		t.Errorf("texts %q", tt.Texts())
+	}
+	if !tt.HasText(L("Reopen")) {
+		t.Errorf("no Reopen: %q", tt.Texts())
+	}
+}

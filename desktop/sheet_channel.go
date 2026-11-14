@@ -9,9 +9,9 @@ import (
 
 // One channel's details: whether it listens, and what holds it when a message's turn didn't finish
 // or the account can't be read; where it listens and what it takes; the chats asking to be allowed;
-// the task the bot does with each message; and its conversations, each a click away. The bot sets a
-// channel up and changes it when asked in chat; here the user pauses it, allows or ignores a chat,
-// settles a held message, or removes it.
+// the task the bot does with each message; its Intake (sheet_intake.go); and its conversations,
+// each a click away. The bot sets a channel up and changes it when asked in chat; here the user
+// pauses it, allows or ignores a chat, settles a held message, sets what it takes on, or removes it.
 
 // presentChannel is a channel's details; openChat opens one of its conversations.
 func (w *appWindow) presentChannel(channelID string, bot *model.Bot, openChat func(chatID string)) {
@@ -22,10 +22,11 @@ func (w *appWindow) presentChannel(channelID string, bot *model.Bot, openChat fu
 	if channel := store.Channel(channelID); channel != nil {
 		title = channel.Name
 	}
-	w.present(func(c *ui.Context, s *sheet) { w.channelView(c, s, title, channelID, bot, openChat) }, nil)
+	st := &channelSheet{w: w, channelID: channelID}
+	w.present(func(c *ui.Context, s *sheet) { w.channelView(c, s, st, title, channelID, bot, openChat) }, func() { st.closed = true })
 }
 
-func (w *appWindow) channelView(c *ui.Context, s *sheet, title, channelID string, bot *model.Bot, openChat func(chatID string)) {
+func (w *appWindow) channelView(c *ui.Context, s *sheet, st *channelSheet, title, channelID string, bot *model.Bot, openChat func(chatID string)) {
 	p := colors(c)
 	channel := store.Channel(channelID)
 	// The sheet closes when the channel is gone.
@@ -130,6 +131,7 @@ func (w *appWindow) channelView(c *ui.Context, s *sheet, title, channelID string
 				ui.Text(c, channel.Task).FontSize(12).LineHeight(1.4).Selectable()
 			}))
 		})
+		st.intakeSections(c, s, channel, openChat)
 		kept := store.Conversations(channel.ID)
 		if len(kept) > 6 {
 			kept = kept[:6]

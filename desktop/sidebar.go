@@ -75,14 +75,17 @@ func (r sidebarRow) key() any {
 // sidebarRows are what the chats sidebar lists: the pinned chats; each section with its chats, then
 // the chats in no section under Chats; and the hidden chats under Hidden. Without sections the
 // chats are one list with no header, and without hidden chats there is no Hidden. A folded group
-// lists its header alone. `chats` are in the store's order.
+// lists its header alone, and a Task's work chat is in none of them. `chats` are in the store's
+// order.
 func sidebarRows(chats []*model.Chat, sections []*model.Section, showsHidden, collapsesOthers bool) []sidebarRow {
 	var rows []sidebarRow
 	var listed, hidden []*model.Chat
 	for _, chat := range chats {
-		if chat.IsHidden {
+		switch {
+		case chat.IsWorkChat():
+		case chat.IsHidden:
 			hidden = append(hidden, chat)
-		} else {
+		default:
 			listed = append(listed, chat)
 		}
 	}
@@ -134,6 +137,8 @@ func sidebarRows(chats []*model.Chat, sections []*model.Section, showsHidden, co
 // groupOf is the group a chat is listed under, when the sidebar has groups for it.
 func groupOf(chat *model.Chat) (sidebarGroup, bool) {
 	switch {
+	case chat.IsWorkChat():
+		return sidebarGroup{}, false
 	case chat.IsHidden:
 		return sidebarGroup{kind: groupHidden}, true
 	case len(store.Sections) == 0 || chat.IsPinned:

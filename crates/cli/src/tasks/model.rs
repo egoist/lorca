@@ -26,6 +26,14 @@ pub struct Task {
     pub history: Vec<TaskChange>,
     pub created_at: f64,
     pub updated_at: f64,
+    /// Why the work may be done, for a Task a channel's intake accepted. The host sets it once:
+    /// no edit reaches it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mandate: Option<crate::intake::Mandate>,
+    /// The channel conversations whose messages reach this Task, which intake extends when a
+    /// message elsewhere points at it. A message there lends it no authority.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub follows: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

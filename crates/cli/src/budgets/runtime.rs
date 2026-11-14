@@ -68,7 +68,8 @@ pub fn for_job(app: &Arc<App>, job: &Job) -> Result<BudgetContext, String> {
         }
         prune(ledger, &live);
         let routine_key = job.routine_id.as_ref().map(|id| key("routine", id));
-        let task_key = job.task_id.as_ref().map(|id| key("task", id));
+        // A wake-up in a Task's work chat is that Task's work too.
+        let task_key = job.task_id.clone().or_else(|| crate::intake::mandated_task(app, job).map(|task| task.id)).map(|id| key("task", &id));
         let keys: Vec<String> = [Some(job_key), task_key, routine_key].into_iter().flatten().filter(|k| ledger.records.contains_key(k)).collect();
         check_scopes(ledger, &keys)?;
         Ok(keys)

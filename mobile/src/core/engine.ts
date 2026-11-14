@@ -10,7 +10,7 @@ import { t } from "../i18n";
 import { exactAnswer, ExactNumber, ExactObject, stringifyExact } from "./exactJson";
 import { reviewEditParams } from "./reviewEdit";
 import { hostFacts } from "./host";
-import { orderProjectEntries, providerConnectMethod, sectionName, withReviewModel, sameDraft, type Section, type PlaybookContent, type PlaybookRecord, type PlaybookScope, type ProjectContext, type ProjectEntry, type ProjectKind, type ProjectSource, type Attachment, type AgentRun, type AgentTranscript, type AutoReview, type Bot, type CodingAgent, type BrowserProfile, type BudgetLimits, type BudgetState, type CallLimits, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type CustomAPI, type CustomModel, type DurableTask, type Message, type MessageDraft, type ReviewItem, type PluginDetail, type PluginStatus, type ProviderKind, type ProviderStatus, type SavedSecret, routinesAwaitingSetup } from "./model";
+import { orderProjectEntries, providerConnectMethod, sectionName, withReviewModel, sameDraft, type Section, type PlaybookContent, type PlaybookRecord, type PlaybookScope, type ProjectContext, type ProjectEntry, type ProjectKind, type ProjectSource, type Attachment, type AgentRun, type AgentTranscript, type AutoReview, type Bot, type CodingAgent, type BrowserProfile, type BudgetLimits, type BudgetState, type CallLimits, type Chat, type ChatMeta, type ChatSearchResults, type ChatUsage, type ChannelIntake, type CustomAPI, type CustomModel, type DurableTask, type IntakeDecision, type Message, type MessageDraft, type ReviewItem, type PluginDetail, type PluginStatus, type ProviderKind, type ProviderStatus, type SavedSecret, routinesAwaitingSetup } from "./model";
 import { coreHome, loadPrefs, pathOf, wipePrefs } from "./prefs";
 import type { SharedLink, TemplateContents, TemplateImportPreview, TemplateSelection } from "./templates";
 import { clearPushes, installPushHandlers, registerForPushes } from "./push";
@@ -60,6 +60,8 @@ type Snapshot = Parameters<typeof replaceSnapshot>[0];
 
 class Engine {
   private started = false;
+  /// Writes of a channel's intake so far: an answer only counts for the latest.
+  private intakeWrites = 0;
   private fetchingFiles = new Set<string>();
   private loadingOlder = new Set<string>();
   /// The sign-in page up in the in-app browser: whose it is (a plugin sign-in's id, or
@@ -1143,6 +1145,32 @@ class Engine {
       requests: c.requests?.filter((r) => r.id !== chatId),
       chats: c.chats?.some((chat) => chat.id === chatId) ? c.chats : [...(c.chats ?? []), { id: chatId }],
     }));
+  }
+
+  /// Replaces a channel's whole intake on its Runner, or turns it off with `null`. The change shows
+  /// at once and goes back when refused, rejecting with the Runner's words. The answer carries the
+  /// intake as the Runner keeps it, with the ids it gave new rules; only the latest write's counts.
+  async setChannelIntake(id: string, intake: ChannelIntake | null) {
+    const found = channelById(id);
+    if (!found) return;
+    const write = ++this.intakeWrites;
+    patchChannel(id, (c) => ({ ...c, intake }));
+    try {
+      const answer = await core.request<{ config?: { channel?: { intake?: ChannelIntake | null } } }>("events.set_intake", { runner_id: found.runnerId, id, intake });
+      const kept = answer?.config?.channel;
+      if (kept && write === this.intakeWrites) patchChannel(id, (c) => ({ ...c, intake: kept.intake ?? null }));
+    } catch (error) {
+      if (write === this.intakeWrites) patchChannel(id, (c) => ({ ...c, intake: found.channel.intake }));
+      throw error;
+    }
+  }
+
+  /// What a channel's intake decided lately, newest first, from its Runner, which may be offline.
+  async channelDecisions(id: string, limit: number): Promise<IntakeDecision[]> {
+    const found = channelById(id);
+    if (!found) return [];
+    const { decisions } = await core.request<{ decisions: IntakeDecision[] }>("events.decisions", { runner_id: found.runnerId, id, limit });
+    return decisions;
   }
 
   /// Removes a channel from its Runner; its conversations stay.

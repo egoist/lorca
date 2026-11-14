@@ -928,6 +928,10 @@ pub struct ChatChannel {
     /// A Telegram forum topic or a Slack thread's `ts`, when the conversation is one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread_id: Option<String>,
+    /// The chat is a mandated Task's own, apart from the conversation people see: its runs happen
+    /// here, and no list shows it ([`crate::intake`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
 }
 
 /// A chat's notifications are off until `until` (unix seconds), or until unmuted without one.

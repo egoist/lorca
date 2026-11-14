@@ -1900,9 +1900,16 @@ impl App {
     /// response, or pending confirmation counts as unread once, locally or from the relay.
     /// One that finishes while the user looks at its chat is read here, and so everywhere.
     /// A message the user sends, from any Device, says they have read what came before it.
-    pub fn upsert_message(&self, message: Message, upload: bool) {
-        if !self.state.lock().unwrap().chats.iter().any(|chat| chat.meta.id == message.chat_id) {
-            return;
+    pub fn upsert_message(&self, mut message: Message, upload: bool) {
+        let work_chat = {
+            let state = self.state.lock().unwrap();
+            let Some(chat) = state.chats.iter().find(|chat| chat.meta.id == message.chat_id) else { return };
+            chat.meta.channel.as_ref().is_some_and(|channel| channel.task_id.is_some())
+        };
+        // No list shows a Task's work chat, so nothing there marks anything unread or alerts:
+        // a result reaches people in their thread, and a blocker reaches the owner in Attention.
+        if work_chat && message.notification != Some(crate::attention::Notification::Urgent) {
+            message.notification = Some(crate::attention::Notification::Quiet);
         }
         let _order = self.message_order.lock().unwrap();
         // A phone never runs a bot and never rebuilds model context. Keeping only the app view

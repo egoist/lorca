@@ -11,8 +11,8 @@ import (
 )
 
 // taskSheet is one durable task. A card on top says where it stands, why when it is blocked or
-// cancelled, its result and what supports it, and offers the one step that fits: Start, Resume,
-// Mark Complete, or Reopen. Below it the goal, owner, next step, and what done looks like are a
+// cancelled, where a channel's task came from and why it took it on, its result and what supports
+// it, and offers the one step that fits: Start, Resume, Mark Complete, or Reopen. Below it the goal, owner, next step, and what done looks like are a
 // form that Save writes back, then the tasks it waits for and its links, when it has them.
 //
 // Edits start from the version the sheet showed. A change from elsewhere replaces the form while
@@ -204,7 +204,7 @@ func (st *taskSheet) view(c *ui.Context, s *sheet) {
 					o := statusRowOptions{Symbol: "circle", Title: L("A task on another Device")}
 					tint := p.Label3
 					if dependency := store.DurableTask(id); dependency != nil {
-						o.Symbol, o.Title, o.Subtitle = dependency.State.Symbol(), dependency.Goal, dependency.State.Title()
+						o.Symbol, o.Title, o.Subtitle = dependency.StateSymbol(), dependency.Goal, dependency.StateTitle()
 						tint = taskTint(p, dependency.State)
 					}
 					o.SymbolColor = &tint
@@ -264,7 +264,7 @@ func (st *taskSheet) statusCard(c *ui.Context, s *sheet, task *model.DurableTask
 	case model.TaskCompleted:
 		action = L("Reopen")
 	case model.TaskCancelled:
-		if task.ReasonText() != model.CancelledByUser {
+		if task.ReasonText() != model.CancelledByUser && !task.NothingToDo() {
 			detail = task.ReasonText()
 		}
 		action = L("Reopen")
@@ -280,8 +280,11 @@ func (st *taskSheet) statusCard(c *ui.Context, s *sheet, task *model.DurableTask
 	}
 	tint := taskTint(p, task.State)
 	return section(c, "", sectionCaption, nil, func(k *card) {
-		if _, row := statusRow(c.Key("state"), k, statusRowOptions{Symbol: task.State.Symbol(), SymbolColor: &tint, Title: task.State.Title(), Subtitle: detail, ActionTitle: action}); row.Action {
+		if _, row := statusRow(c.Key("state"), k, statusRowOptions{Symbol: task.StateSymbol(), SymbolColor: &tint, Title: task.StateTitle(), Subtitle: detail, ActionTitle: action}); row.Action {
 			st.statusAction(s, task)
+		}
+		if task.Mandate != nil {
+			mandateRows(c, k, task.Mandate)
 		}
 		if result := task.ResultText(); result != "" {
 			k.row(ui.Row(c.Key("result")).Padding(10, 12, 10, 40)).Children(func() {
@@ -310,6 +313,20 @@ func (st *taskSheet) statusCard(c *ui.Context, s *sheet, task *model.DurableTask
 			st.w.presentTaskLimits(store.Bot(task.OwnerBotID), task)
 		}
 	})
+}
+
+// mandateRows say where a task a channel took on came from, why, and how far it goes. Their words
+// come from outside Lorca, so they stay plain text.
+func mandateRows(c *ui.Context, k *card, mandate *model.TaskMandate) {
+	if from := mandate.From(); from != "" {
+		keyValueRow(c.Key("mandate-from"), k, L("From"), from, false, nil)
+	}
+	if why := mandate.Why(); why != "" {
+		keyValueRow(c.Key("mandate-why"), k, L("Why"), why, false, nil)
+	}
+	if mandate.Scope != "" {
+		keyValueRow(c.Key("mandate-work"), k, L("Work"), mandate.Scope, false, nil)
+	}
 }
 
 // evidenceRow is a message by who wrote it and when, an output by its name and version (a click

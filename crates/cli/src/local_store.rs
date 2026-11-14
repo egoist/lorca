@@ -113,6 +113,15 @@ impl LocalStore {
                  id TEXT PRIMARY KEY NOT NULL,
                  ciphertext BLOB NOT NULL
              );
+             CREATE TABLE IF NOT EXISTS intake_decisions (
+                 id         TEXT PRIMARY KEY NOT NULL,
+                 channel_id TEXT NOT NULL,
+                 at         INTEGER NOT NULL,
+                 waiting    INTEGER NOT NULL DEFAULT 0,
+                 ciphertext BLOB NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS intake_decisions_channel ON intake_decisions(channel_id, at);
+             CREATE INDEX IF NOT EXISTS intake_decisions_waiting ON intake_decisions(waiting) WHERE waiting = 1;
              CREATE TABLE IF NOT EXISTS group_deletes (
                  id       TEXT PRIMARY KEY NOT NULL,
                  position INTEGER NOT NULL
@@ -1339,6 +1348,7 @@ impl LocalStore {
             "event_subscriptions",
             "event_inbox",
             "channel_accounts",
+            "intake_decisions",
             "group_deletes",
             "blob_deletes",
             "device_seen",
