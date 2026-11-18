@@ -454,7 +454,7 @@ async fn remote_turn_started(
     let outcome = if cancel.is_cancelled() {
         TurnOutcome::Skipped
     } else {
-        match dispatch_job(app, job) {
+        match dispatch_job(app, job).await {
             Dispatch::Sent => wait_for_result(result, REMOTE_TURN_TIMEOUT, &cancel).await,
             Dispatch::Ran | Dispatch::Deferred => TurnOutcome::Skipped,
         }
@@ -582,7 +582,9 @@ pub enum Dispatch {
 }
 
 /// Runs the job here when the bot's Runner is this Device; otherwise seals it to that Runner.
-pub fn dispatch_job(app: &Arc<App>, job: Job) -> Dispatch {
+/// The Runner counts as offline only when the relay says so now: the last presence refresh
+/// can trail a Runner that just woke, or this Device's own socket that just came back.
+pub async fn dispatch_job(app: &Arc<App>, job: Job) -> Dispatch {
     let Some(bot) = app.bot(&job.bot_id) else { return Dispatch::Deferred };
     if app.this_device_id().as_deref() == Some(bot.runner_id.as_str()) {
         spawn_local_job(app.clone(), job, None);
@@ -595,7 +597,7 @@ pub fn dispatch_job(app: &Arc<App>, job: Job) -> Dispatch {
                 if app.relay_url().is_none() {
                     app.notice(&job.chat_id, format!("{} runs on {}, but no relay is configured, so this turn cannot leave this Device.", bot.name, runner.name));
                     Dispatch::Deferred
-                } else if !app.device_is_online(&runner.id) {
+                } else if crate::sync::device_online_now(app, &runner.id).await == Some(false) {
                     app.notice(&job.chat_id, format!("{} runs on {}, which is offline. This turn waits on the relay until it reconnects.", bot.name, runner.name));
                     Dispatch::Deferred
                 } else {

@@ -664,6 +664,22 @@ async fn refresh_presence(app: &Arc<App>, url: &str, token: &str) -> Result<(), 
     Ok(())
 }
 
+/// Whether the relay lists a Device online, asked now when the last presence refresh did not
+/// list it. None when the relay cannot be asked, so the caller claims nothing about the Device.
+pub async fn device_online_now(app: &Arc<App>, id: &str) -> Option<bool> {
+    if app.device_is_online(id) {
+        return Some(true);
+    }
+    let url = app.relay_url()?;
+    let machine = app.machine_file()?.machine().ok()?;
+    let asked = async {
+        let token = token_or_register(app, &url, &machine).await.ok()?;
+        refresh_presence(app, &url, &token).await.ok()
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(10), asked).await.ok()??;
+    Some(app.device_is_online(id))
+}
+
 /// How long the relay may list a machine before the Device list shows it as unknown when no
 /// `machine` blob came from it: a Device that pairs sends its blob within seconds.
 const UNKNOWN_AFTER: i64 = 10 * 60;
@@ -1604,6 +1620,41 @@ mod tests {
         app.turns_changed();
         assert_eq!(heard(finished), ids(&["sent-job"]));
         server.abort();
+    }
+
+    /// A Runner the last presence refresh missed, because it just woke or this Device's own
+    /// socket just came back, is asked about again before a turn is called offline.
+    #[cfg(feature = "server")]
+    #[tokio::test]
+    async fn presence_is_asked_again_before_a_runner_counts_as_offline() {
+        use axum::{routing::{get, post}, Json, Router};
+        use std::sync::atomic::AtomicBool;
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        assert_eq!(device_online_now(app, "mac").await, None, "no relay to ask");
+        crate::identity::create(app, Some("Desk".into())).unwrap();
+        let online = Arc::new(AtomicBool::new(true));
+        let listed = online.clone();
+        let relay = Router::new()
+            .route("/v1/auth/challenge", post(|| async { Json(serde_json::json!({ "nonce": "a-challenge-nonce-from-the-test-relay" })) }))
+            .route("/v1/auth/verify", post(|| async { Json(serde_json::json!({ "token": "test" })) }))
+            .route("/v1/machines", get(move || {
+                let online = listed.load(Ordering::Relaxed);
+                async move { Json(serde_json::json!({ "machines": [{ "machine_pubkey": "mac", "last_seen": 1, "created_at": 1, "online": online }], "now": crate::config::now_unix() })) }
+            }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, relay).await.unwrap() });
+        app.set_relay_url(Some(url)).unwrap();
+
+        assert!(!app.device_is_online("mac"), "no refresh has listed it yet");
+        assert_eq!(device_online_now(app, "mac").await, Some(true));
+        assert!(app.device_is_online("mac"), "the answer refreshes presence here");
+        online.store(false, Ordering::Relaxed);
+        app.state.lock().unwrap().device_online.clear();
+        assert_eq!(device_online_now(app, "mac").await, Some(false));
+        server.abort();
+        assert_eq!(device_online_now(app, "mac").await, None, "a relay that does not answer says nothing");
     }
 
     #[tokio::test]
