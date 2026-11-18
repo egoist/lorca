@@ -6,6 +6,15 @@ when it offers the update.
 
 ## [Unreleased]
 
+## [1.0.13]
+
+- Bots can be deleted on the phone. Delete on a bot's own chat (long-press in the chat list, or
+  Details) now reads Delete Bot and removes the bot, its routines, and its chat from every paired
+  Device, as on the desktop. Before, it removed only the chat and the bot stayed.
+- A routine set up in a group or a channel conversation runs and reports there instead of in the
+  bot's DM. A group's details list its routines, and each routine names the chat it posts in. A
+  routine whose chat is gone, or no longer has the bot, posts in the bot's DM.
+
 ## [1.0.12]
 
 - Gemini is a built-in provider: connect it in Settings › Providers with an API key from
