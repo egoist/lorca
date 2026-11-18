@@ -154,7 +154,7 @@ async fn a_webhook_runs_its_routine_once_per_request_that_carries_its_key() {
     let (app, token) = runner(&relay).await;
     let bot_id = bot(&app);
     let triggers = lorca::routines::Triggers { receiver: Some("webhook"), ..Default::default() };
-    let routine = lorca::routines::create_routine(&app, &bot_id, "Deploys", "", "Tell me if a deploy failed.", None, true, None, None, triggers).unwrap();
+    let routine = lorca::routines::create_routine(&app, &bot_id, "Deploys", "", "Tell me if a deploy failed.", None, true, None, None, triggers, None).unwrap();
     assert_eq!(lorca::routine_events::subscribe(&app, &routine.id).await, lorca::routine_events::Subscribed::Subscribed);
     let listed = lorca::turns::call_routines_tool(&app, &bot_id, json!({ "action": "list" })).await.unwrap();
     assert!(listed.contains("Deploys · When its webhook is called · listening at its webhook"), "{listed}");
@@ -229,7 +229,7 @@ async fn a_github_watch_binds_through_the_install_and_runs_on_each_event_until_m
     let (app, token) = runner(&relay).await;
     let bot_id = bot(&app);
     let triggers = lorca::routines::Triggers { receiver: Some("github"), subject: Some("Acme/Project#42"), ..Default::default() };
-    let routine = lorca::routines::create_routine(&app, &bot_id, "Login PR", "", "Tell me what happened on the pull request.", None, true, None, None, triggers).unwrap();
+    let routine = lorca::routines::create_routine(&app, &bot_id, "Login PR", "", "Tell me what happened on the pull request.", None, true, None, None, triggers, None).unwrap();
 
     // Installed on the repository but not bound to this account yet: the relay hands the link
     // that authorizes the App; where it isn't installed, the install link.
@@ -261,7 +261,7 @@ async fn a_github_watch_binds_through_the_install_and_runs_on_each_event_until_m
     assert_eq!(authorized.headers()["location"], "https://lorca.app/github/connected?status=connected&account=acme");
     // The installation also covers acme/secret, which this user can't access: no watch there,
     // only the link to authorize again.
-    let secret = lorca::routines::create_routine(&app, &bot_id, "Secret PR", "", "x", None, true, None, None, lorca::routines::Triggers { receiver: Some("github"), subject: Some("acme/secret#42"), ..Default::default() }).unwrap();
+    let secret = lorca::routines::create_routine(&app, &bot_id, "Secret PR", "", "x", None, true, None, None, lorca::routines::Triggers { receiver: Some("github"), subject: Some("acme/secret#42"), ..Default::default() }, None).unwrap();
     assert!(matches!(lorca::routine_events::subscribe(&app, &secret.id).await, lorca::routine_events::Subscribed::NeedsSetup(url) if url.contains("/login/oauth/authorize?")));
     assert!(relay.state.db.receiver_subs("github", "acme/secret#").await.unwrap().is_empty());
     // The app asks again when the user is back; it waits on the same setup.
@@ -275,7 +275,7 @@ async fn a_github_watch_binds_through_the_install_and_runs_on_each_event_until_m
     let events = app.routine(&routine.id).unwrap().events.unwrap();
     assert_eq!((events.title.as_str(), events.source_name.as_str()), ("Add passkey sign-in", "GitHub"));
     // A closed pull request is refused.
-    let closed = lorca::routines::create_routine(&app, &bot_id, "Old PR", "", "x", None, true, None, None, lorca::routines::Triggers { receiver: Some("github"), subject: Some("acme/project#43"), ..Default::default() }).unwrap();
+    let closed = lorca::routines::create_routine(&app, &bot_id, "Old PR", "", "x", None, true, None, None, lorca::routines::Triggers { receiver: Some("github"), subject: Some("acme/project#43"), ..Default::default() }, None).unwrap();
     assert!(matches!(lorca::routine_events::subscribe(&app, &closed.id).await, lorca::routine_events::Subscribed::Refused(why) if why.contains("already merged")));
     // The bot's tool keeps no routine the receiver refused.
     lorca::routines::delete(&app, &closed.id).unwrap();
