@@ -6,6 +6,11 @@ when it offers the update.
 
 ## [Unreleased]
 
+## [1.0.14]
+
+- A message to a bot on another computer no longer says that computer is offline while it is
+  online and about to answer; the app checks with the relay before saying so.
+
 ## [1.0.13]
 
 - Bots can be deleted on the phone. Delete on a bot's own chat (long-press in the chat list, or

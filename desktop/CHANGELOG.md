@@ -6,6 +6,11 @@ and the update window shows it.
 
 ## [Unreleased]
 
+## [0.1.24]
+
+- A message to a bot on another computer no longer says that computer is offline while it is
+  online and about to answer; the app checks with the relay before saying so.
+
 ## [0.1.23]
 
 - A routine set up in a group or a channel conversation runs and reports there instead of in the
