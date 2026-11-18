@@ -1064,8 +1064,9 @@ pub struct Compaction {
 
 // MARK: - Routines
 
-/// A recurring task a bot runs on a schedule, in its direct chat: Grok Bot's routine. It lives
-/// in the roster, so every Device lists it and can pause it; the bot's Runner runs it.
+/// A recurring task a bot runs on a schedule, in its direct chat or in another chat it is in:
+/// Grok Bot's routine. It lives in the roster, so every Device lists it and can pause it; the
+/// bot's Runner runs it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Routine {
     pub id: String,
@@ -1114,6 +1115,10 @@ pub struct Routine {
     /// The Calendar account whose events place the runs of a schedule around events.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calendar: Option<crate::routine_triggers::CalendarTrigger>,
+    /// The chat its runs post in: a group the bot is a member of, or one of its channel's
+    /// conversations. None is the bot's direct chat with the user.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat_id: Option<String>,
     pub created_at: f64,
 }
 

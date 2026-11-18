@@ -56,9 +56,16 @@ func (w *appWindow) routineView(c *ui.Context, s *sheet, st *routineSheet, title
 	if routine == nil {
 		s.dismiss()
 	}
+	// A routine that posts in a group or a channel's conversation names it.
+	subtitle := L("A task %@ runs on its own in this chat. %@ set it up and can change it: ask in chat.", bot.Name, bot.Name)
+	if routine != nil {
+		if chat := store.PostsIn(routine); chat != nil {
+			subtitle = L("A task %@ runs on its own in %@. %@ set it up and can change it: ask in chat.", bot.Name, store.Title(chat), bot.Name)
+		}
+	}
 	result := sheetFrame(c, sheetOptions{
 		Title:    title,
-		Subtitle: L("A task %@ runs on its own in this chat. %@ set it up and can change it: ask in chat.", bot.Name, bot.Name),
+		Subtitle: subtitle,
 		Width:    520,
 		Confirm:  L("Done"),
 		NoCancel: true,

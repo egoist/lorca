@@ -208,7 +208,7 @@ async fn run_budgeted_job(app: &Arc<App>, job: &Job, cancel: CancellationToken) 
         Arc::new(Handoffs { app: app.clone(), bot_id: bot.id.clone(), request: match &job.handoff { Some(crate::handoffs::HandoffJob::Request { request }) => Some(request.clone()), _ => None }, origin }),
         Arc::new(CreateBot::new(app, &chat.meta.id, &bot)),
         Arc::new(EditBot::new(app, &bot)),
-        Arc::new(Routines { app: app.clone(), bot: bot.clone() }),
+        Arc::new(Routines { app: app.clone(), bot: bot.clone(), chat_id: chat.meta.id.clone() }),
         Arc::new(crate::channels::ChannelsTool { app: app.clone(), bot: bot.clone(), user_started: matches!(job.kind.as_str(), "turn" | "room_turn") }),
         Arc::new(crate::feedback::FeedbackTool { app: app.clone(), bot_id: bot.id.clone() }),
         Arc::new(crate::review_execution::StageReview { app: app.clone(), bot: bot.clone(), chat_id: chat.meta.id.clone(), trigger: trigger.clone() }),
@@ -1926,8 +1926,9 @@ fn system_prompt(app: &Arc<App>, chat: &Chat, bot: &Bot, job: &Job, store: &Memo
 /// bot's own list with each one's next run.
 fn routines_prompt(app: &App, bot: &Bot) -> String {
     let mut prompt = format!(
-        "\nRoutines: a routine is a task you run on a schedule in your direct chat with the user, with nobody typing: a \
-         morning brief, an hourly check, a weekly report. When the user wants something done regularly, set it up with \
+        "\nRoutines: a routine is a task you run on a schedule, with nobody typing: a morning brief, an hourly check, a \
+         weekly report. It posts in the chat it was set up in (your direct chat with the user, or a group), unless the \
+         user wants it elsewhere. When the user wants something done regularly, set it up with \
          the routines tool (a name, a schedule, and the task written as an instruction to yourself), then say the schedule \
          back in words. A cron schedule keeps the timezone it was made in: this Runner's, {}, unless the user wants \
          another. To watch for something, give the routine a check, a script that runs without you and starts the run \
@@ -1951,7 +1952,11 @@ fn routines_prompt(app: &App, bot: &Bot) -> String {
                 Some(_) if routine.calendar.is_some() => "on".to_string(),
                 Some(next) => format!("next {}", crate::schedule::when_label(next, now, &routine.timezone)),
             };
-            prompt.push_str(&format!("- {} · {} ({}) · {state}\n", routine.name, crate::routine_triggers::describe(&routine), routine.timezone));
+            let posts = match routine.chat_id {
+                Some(_) => format!(" · posts in {}", crate::routines::posts_in(app, &routine)),
+                None => String::new(),
+            };
+            prompt.push_str(&format!("- {} · {} ({}) · {state}{posts}\n", routine.name, crate::routine_triggers::describe(&routine), routine.timezone));
         }
     }
     prompt
@@ -3310,6 +3315,8 @@ impl Tool for EditBot {
 struct Routines {
     app: Arc<App>,
     bot: Bot,
+    /// The chat of the turn, where a new routine posts unless the bot names another.
+    chat_id: String,
 }
 
 /// The routines tool as the bot calls it, for harnesses that drive a Runner without a model:
@@ -3317,7 +3324,8 @@ struct Routines {
 #[doc(hidden)]
 pub async fn call_routines_tool(app: &Arc<App>, bot_id: &str, args: Value) -> Result<String, String> {
     let bot = app.bot(bot_id).ok_or("Unknown bot")?;
-    let result = Routines { app: app.clone(), bot }.execute("harness", args, CancellationToken::new(), Arc::new(|_| {})).await.map_err(|error| error.0)?;
+    let chat_id = app.dm_with(bot_id, None).map_err(|error| error.to_string())?.meta.id;
+    let result = Routines { app: app.clone(), bot, chat_id }.execute("harness", args, CancellationToken::new(), Arc::new(|_| {})).await.map_err(|error| error.0)?;
     Ok(result.content.iter().filter_map(|part| part.as_text()).collect::<Vec<_>>().join("\n"))
 }
 
@@ -3327,7 +3335,9 @@ impl Tool for Routines {
         "routines"
     }
     fn description(&self) -> &str {
-        "Your routines: tasks you run on a schedule in your direct chat with the user, with nobody typing. list shows them; \
+        "Your routines: tasks you run on a schedule, with nobody typing. Each posts in one chat: this one unless chat \
+         says otherwise (dm for your direct chat with the user, or the id of a group you are in), so a routine set up in a \
+         group reports to that group. list shows them; \
          create takes a name, a schedule, and a prompt (the task, written as an instruction to yourself, with everything a \
          run needs since the user is not there to answer), and a check when one fits; edit changes any of those on an \
          existing one (check \"\" removes the check); pause, resume, run (a run right now), and delete take the routine's \
@@ -3339,7 +3349,7 @@ impl Tool for Routines {
          resumes it. Set one up when the user asks for something regular, and tell them the schedule in words.\n\
          A check is JavaScript your Runner runs at each due time before you, with no model, so a quiet one runs no turn: \
          use one to watch something (an inbox, a repository, a feed, a page). It runs like a codemode script with only the \
-         read-only plugin tools, read, grep, find, ls, store() and load() (shared with your scripts in your direct chat), and \
+         read-only plugin tools, read, grep, find, ls, store() and load() (shared with your scripts in the routine's chat), and \
          models.ask(). Return what needs you, as text or JSON, and the run starts with it; return nothing (or null, false, \
          or an empty string, list, or object) and the run is skipped. Keep what it has seen with store() and return only \
          what is new. It runs once when you save it, so that first run should record what is already there; you get its \
@@ -3373,7 +3383,8 @@ impl Tool for Routines {
                 "missed_run_policy": { "type": "string", "enum": ["coalesce", "skip"], "description": "After due times your Runner missed: coalesce runs once when it is back (default), skip waits for the next time" },
                 "prompt": { "type": "string", "description": "What to do on each run, as an instruction to yourself" },
                 "check": { "type": "string", "description": "JavaScript run before each run, returning what needs you or nothing; \"\" on edit removes it" },
-                "enabled": { "type": "boolean", "description": "create: start it on (default) or paused" }
+                "enabled": { "type": "boolean", "description": "create: start it on (default) or paused" },
+                "chat": { "type": "string", "description": "Where its runs post: here (this chat, the default on create), dm (your direct chat with the user), or a chat id of a group you are in" }
             },
             "required": ["action"],
             "additionalProperties": false
@@ -3386,6 +3397,18 @@ impl Tool for Routines {
         let field = |key: &str| args[key].as_str().map(str::trim).filter(|v| !v.is_empty());
         let action = field("action").unwrap_or("");
         let now = now_secs() as i64;
+        // Where a routine posts, said only when it is not the direct chat.
+        let posts = |routine: &Routine| match routine.chat_id {
+            Some(_) => format!(" · posts in {}", crate::routines::posts_in(&self.app, routine)),
+            None => String::new(),
+        };
+        // The chat the bot named: this one, its direct chat (empty), or a group's id.
+        let chat = |default_here: bool| match field("chat") {
+            Some("here") => Some(self.chat_id.clone()),
+            Some(chat) if chat.eq_ignore_ascii_case("dm") => Some(String::new()),
+            Some(chat) => Some(chat.to_string()),
+            None => default_here.then(|| self.chat_id.clone()),
+        };
         let line = |routine: &Routine| {
             let state = match crate::routines::next_run_shown(routine) {
                 Some(next) if crate::routine_triggers::looks_first(routine) => format!("next check {}", crate::schedule::when_label(next, now, &routine.timezone)),
@@ -3397,13 +3420,13 @@ impl Tool for Routines {
             };
             // A routine on events has no times to miss: the relay holds its events.
             if routine.events.is_some() {
-                return format!("{} · {} · {state}", routine.name, crate::routine_triggers::describe(routine));
+                return format!("{} · {} · {state}{}", routine.name, crate::routine_triggers::describe(routine), posts(routine));
             }
             let missed = match routine.missed_run_policy {
                 crate::routine_health::MissedRunPolicy::Coalesce => "one run after missed times",
                 crate::routine_health::MissedRunPolicy::Skip => "skips missed times",
             };
-            format!("{} · {} ({}) · {missed} · {state}", routine.name, crate::routine_triggers::describe(routine), routine.timezone)
+            format!("{} · {} ({}) · {missed} · {state}{}", routine.name, crate::routine_triggers::describe(routine), routine.timezone, posts(routine))
         };
         // A check runs once as it is saved: a bad one shows now, its first run records what is
         // already there, and the schedule counts from it.
@@ -3479,7 +3502,7 @@ impl Tool for Routines {
                 };
                 let prompt = field("prompt").ok_or("prompt is required")?;
                 let enabled = args["enabled"].as_bool().unwrap_or(true);
-                let mut routine = crate::routines::create_routine(&self.app, &self.bot.id, name, schedule, prompt, field("check"), enabled, field("timezone"), field("missed_run_policy"), triggers).map_err(ToolError)?;
+                let mut routine = crate::routines::create_routine(&self.app, &self.bot.id, name, schedule, prompt, field("check"), enabled, field("timezone"), field("missed_run_policy"), triggers, chat(true).as_deref()).map_err(ToolError)?;
                 // A routine on events subscribes with the relay's receiver now; one it refuses (no
                 // such subject, or one already ended) is not kept.
                 let mut told = None;
@@ -3493,7 +3516,7 @@ impl Tool for Routines {
                     routine = self.app.routine(&routine.id).unwrap_or(routine);
                 }
                 let state = if routine.is_enabled { "It is on." } else { "It starts paused." };
-                let mut text = format!("Created routine {}. {state} Runs post in your direct chat with the user.", line(&routine));
+                let mut text = format!("Created routine {}. {state} Runs post in {}.", line(&routine), crate::routines::posts_in(&self.app, &routine));
                 if crate::routine_triggers::looks_first(&routine) || routine.calendar.is_some() {
                     text.push_str(&tried(routine.clone()).await);
                 }
@@ -3506,7 +3529,7 @@ impl Tool for Routines {
                 let target = find(field("routine").ok_or("routine is required: the routine's current name")?)?;
                 let check = args["check"].as_str();
                 let triggers = crate::routines::Triggers { receiver: field("receiver"), subject: field("subject"), calendar: field("calendar"), event_match: args["event_match"].as_str() };
-                let routine = crate::routines::edit_routine(&self.app, &target.id, field("name"), field("schedule"), field("prompt"), check, field("timezone"), field("missed_run_policy"), triggers).map_err(ToolError)?;
+                let routine = crate::routines::edit_routine(&self.app, &target.id, field("name"), field("schedule"), field("prompt"), check, field("timezone"), field("missed_run_policy"), triggers, chat(false).as_deref()).map_err(ToolError)?;
                 let mut text = format!("Updated routine {}.", line(&routine));
                 let reread = routine.calendar.as_ref().is_some_and(|calendar| calendar.synced_at.is_none());
                 if (check.is_some() && routine.check.is_some()) || reread {
@@ -3533,7 +3556,7 @@ impl Tool for Routines {
                 } else {
                     ""
                 };
-                Ok(ToolResult::text(format!("Routine \"{}\" runs as soon as this turn ends, in your direct chat with the user.{check}", target.name))
+                Ok(ToolResult::text(format!("Routine \"{}\" runs as soon as this turn ends, in {}.{check}", target.name, crate::routines::posts_in(&self.app, &target)))
                     .with_details(json!({ "summary": format!("Started routine \"{}\"", target.name), "routine_id": target.id })))
             }
             "delete" => {

@@ -662,6 +662,7 @@ fn materialize(app: &Arc<App>, setup: &mut Setup, answers: BTreeMap<String, Stri
                 check: None,
                 events: None,
                 calendar: None,
+                chat_id: None,
                 created_at: now,
             };
             app.insert_routine(routine).map_err(|e| e.to_string())?

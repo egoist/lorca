@@ -1343,6 +1343,8 @@ type Routine struct {
 	LastOutcome string
 	NextRunAt   time.Time
 	IsRunning   bool
+	// ChatID is the group or channel conversation its runs post in; empty is the bot's DM.
+	ChatID string
 	// Check is the script the Runner runs at each due time before the bot does.
 	Check     string
 	HasCheck  bool

@@ -221,6 +221,8 @@ export interface Routine {
   is_running: boolean;
   /** The script the Runner runs at each due time before the bot does; `next_run_at` is then the next check. */
   check?: string | null;
+  /** The group or channel conversation its runs post in; none is the bot's DM. */
+  chat_id?: string | null;
   created_at: number;
   /** When a one-time routine runs; its Runner removes it after that run. */
   once_at?: number | null;

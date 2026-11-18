@@ -194,6 +194,7 @@ func (m *mainWindow) inspectorView(c *ui.Context, chatID string) {
 				m.inspectorChannels(c, single)
 				m.inspectorUsage(c, single, chat)
 			} else {
+				m.inspectorGroupRoutines(c, chat)
 				m.inspectorSkills(c, model.GroupScope(chat.ID))
 				m.inspectorRouting(c, members)
 			}
@@ -560,45 +561,72 @@ func (m *mainWindow) inspectorFeedback(c *ui.Context, bot *model.Bot) {
 // inspectorRoutines are the bot's routines: a row per routine with a pause switch, and the details
 // in a sheet. With none, the sentence that says how to get one.
 func (m *mainWindow) inspectorRoutines(c *ui.Context, bot *model.Bot) {
-	p := colors(c)
 	routines := store.RoutinesFor(bot.ID)
 	section(c, L("Routines"), sectionCaption, nil, func(k *card) {
 		if len(routines) == 0 {
 			noteRow(c, k, L("Routines are recurring tasks this bot runs on a schedule. Ask it in chat to set one up."), nil)
 			return
 		}
-		for _, routine := range routines {
-			symbolName, tint := routine.Symbol(), p.Label3
-			switch {
-			case routine.IsRunning:
-				tint = p.Accent
-			case routine.IsEnabled:
-				tint = p.Label2
-			}
-			toggle := L("Pause %@", routine.Name)
-			if !routine.IsEnabled {
-				toggle = L("Resume %@", routine.Name)
-			}
-			// What went wrong leads, in orange while the user has to do something about it; a
-			// routine stopped at its limits says so first, since it runs again only once resumed.
-			detail := []ui.Span{{Text: routine.Detail(), Color: p.Label2}}
-			if budget := store.Budget("routine", routine.ID, bot.RunnerID); budget != nil && budget.IsStopped() {
-				detail = []ui.Span{{Text: budget.StoppedLabel(), Color: p.Orange}, {Text: " · " + routine.ScheduleText, Color: p.Label2}}
-			} else if problem := routine.Problem(); problem.NeedsUser() {
-				detail = []ui.Span{{Text: problem.Text(), Color: p.Orange}, {Text: " · " + routine.ScheduleText, Color: p.Label2}}
-			}
-			on := routine.IsEnabled
-			id, botID := routine.ID, bot.ID
-			ui.Box(c.Key(routine.ID)).Children(func() {
-				if switchRow(c, k, symbolName, tint, routine.Name, detail, &on, toggle, routine.Prompt,
-					func(on bool) { store.SetRoutineEnabled(id, on) }) {
-					if current := store.Bot(botID); current != nil {
-						m.presentRoutine(id, current, m.prefill)
-					}
-				}
-			})
-		}
+		m.routineRows(c, k, routines, false)
 	})
+}
+
+// inspectorGroupRoutines are the routines whose runs post in the group, each led by its bot's name.
+// Left out while there are none.
+func (m *mainWindow) inspectorGroupRoutines(c *ui.Context, chat *model.Chat) {
+	routines := store.RoutinesIn(chat.ID)
+	if len(routines) == 0 {
+		return
+	}
+	section(c, L("Routines"), sectionCaption, nil, func(k *card) {
+		m.routineRows(c, k, routines, true)
+	})
+}
+
+// routineRows are a row per routine with its pause switch; a click opens its sheet. inGroup leads
+// each detail with the routine's bot; otherwise a routine that posts in another chat names it.
+func (m *mainWindow) routineRows(c *ui.Context, k *card, routines []model.Routine, inGroup bool) {
+	p := colors(c)
+	for _, routine := range routines {
+		bot := store.Bot(routine.BotID)
+		if bot == nil {
+			continue
+		}
+		symbolName, tint := routine.Symbol(), p.Label3
+		switch {
+		case routine.IsRunning:
+			tint = p.Accent
+		case routine.IsEnabled:
+			tint = p.Label2
+		}
+		toggle := L("Pause %@", routine.Name)
+		if !routine.IsEnabled {
+			toggle = L("Resume %@", routine.Name)
+		}
+		// What went wrong leads, in orange while the user has to do something about it; a
+		// routine stopped at its limits says so first, since it runs again only once resumed.
+		detail := []ui.Span{{Text: routine.Detail(), Color: p.Label2}}
+		if budget := store.Budget("routine", routine.ID, bot.RunnerID); budget != nil && budget.IsStopped() {
+			detail = []ui.Span{{Text: budget.StoppedLabel(), Color: p.Orange}, {Text: " · " + routine.ScheduleText, Color: p.Label2}}
+		} else if problem := routine.Problem(); problem.NeedsUser() {
+			detail = []ui.Span{{Text: problem.Text(), Color: p.Orange}, {Text: " · " + routine.ScheduleText, Color: p.Label2}}
+		}
+		if inGroup {
+			detail = append([]ui.Span{{Text: bot.Name + " · ", Color: p.Label2}}, detail...)
+		} else if chat := store.PostsIn(&routine); chat != nil {
+			detail = append(detail, ui.Span{Text: " · " + L("In %@", store.Title(chat)), Color: p.Label2})
+		}
+		on := routine.IsEnabled
+		id, botID := routine.ID, bot.ID
+		ui.Box(c.Key(routine.ID)).Children(func() {
+			if switchRow(c, k, symbolName, tint, routine.Name, detail, &on, toggle, routine.Prompt,
+				func(on bool) { store.SetRoutineEnabled(id, on) }) {
+				if current := store.Bot(botID); current != nil {
+					m.presentRoutine(id, current, m.prefill)
+				}
+			}
+		})
+	}
 }
 
 // inspectorChannels is where the bot listens: a row per channel with its pause switch, the details

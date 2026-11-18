@@ -1,11 +1,12 @@
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import { useShallow } from "zustand/react/shallow";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { MenuView, type MenuComponentRef } from "@expo/ui/community/menu";
 import { ActivityIndicator, Platform, PlatformColor, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import { Pressable } from "../../src/ui/Pressable";
 import { chatTitle, engine } from "../../src/core/engine";
 import { agentTitle, pullRequestLabel, BROWSER_PLUGIN_ID, isMuted, PROJECT_KINDS, projectSymbol, skillScopeOf, providerKinds, providerLabel, providerModels, PROVIDER_KINDS, taskSymbol, thinkingLabel, thinkingLevels, withCustomModels, type Bot, type Routine } from "../../src/core/model";
-import { deviceIsOnline, useBotMap, useBudget, useChannels, useChat, useDurableTasks, useOpenReviews, useOutputs, useProject, useRoutines, useSkills, useStoppedTurn, useStore, useWorkingBotIds } from "../../src/core/store";
+import { deviceIsOnline, useBotMap, useBudget, useChannels, useChat, useDurableTasks, useOpenReviews, useOutputs, useProject, useRoutines, useRoutinesIn, useSkills, useStoppedTurn, useStore, useWorkingBotIds } from "../../src/core/store";
 import { channelProblem, listenSummary, serviceSymbol } from "../../src/ui/channels";
 import { t, tc, useLanguage } from "../../src/i18n";
 import { AvatarCluster, BotAvatar } from "../../src/ui/Avatar";
@@ -54,6 +55,12 @@ export default function ChatInfoScreen() {
   const [title, setTitle] = useState(chat?.title ?? "");
   const [botName, setBotName] = useState(bot?.name ?? "");
   const routines = useRoutines(chat?.kind === "dm" ? chat.bot_ids[0] : undefined);
+  const groupRoutines = useRoutinesIn(isGroup ? chat?.id : undefined);
+  // The group or conversation each of the bot's routines posts in, when not this DM.
+  const postsIn = useStore(useShallow((s) => routines.map((r) => {
+    const target = r.chat_id && r.chat_id !== chat?.id ? s.chats.find((c) => c.id === r.chat_id) : undefined;
+    return target ? chatTitle(target) : "";
+  })));
   const channels = useChannels(chat?.kind === "dm" ? chat.bot_ids[0] : undefined);
   const outputs = useOutputs(chat?.id);
   const tasks = useDurableTasks(chat?.id);
@@ -93,7 +100,26 @@ export default function ChatInfoScreen() {
   if (!chat) return null;
 
   /// A routine stopped at its limits, which runs again only once the user resumes it in Limits.
-  const stoppedRoutine = (routine: Routine) => budgets.find((b) => b.kind === "routine" && b.id === routine.id && b.runner_id === bot?.runner_id && isStopped(b));
+  const stoppedRoutine = (routine: Routine) => budgets.find((b) => b.kind === "routine" && b.id === routine.id && b.runner_id === bots.get(routine.bot_id)?.runner_id && isStopped(b));
+  /// A routine's row with its pause switch; `lead` comes before its detail and `tail` after it.
+  const routineRow = (routine: Routine, lead: string, tail: string) => (
+    <Row
+      key={routine.id}
+      title={routine.name}
+      subtitle={lead + (stoppedRoutine(routine) ? `${stoppedLabel(stoppedRoutine(routine)!)} · ${routineSchedule(routine)}` : routineDetail(routine)) + tail}
+      icon={routineSymbol(routine)}
+      leading={routineNeedsUser(routine) ? <Symbol name="exclamationmark.circle.fill" size={20} color={orange} /> : undefined}
+      accessory={
+        <Switch
+          value={routine.is_enabled}
+          onValueChange={(v) => engine.setRoutineEnabled(routine.id, v)}
+          trackColor={Platform.OS === "android" ? { false: p.fill, true: p.secondaryFill } : undefined}
+          thumbColor={Platform.OS === "android" ? p.tint : undefined}
+        />
+      }
+      onPress={() => router.push({ pathname: "/chat-info/routine/[id]", params: { id: routine.id, bot: routine.bot_id } })}
+    />
+  );
   /// A routine stopped at its limits or with something the user has to fix leads with an orange mark.
   const routineNeedsUser = (routine: Routine) => {
     const problem = routineProblem(routine);
@@ -409,24 +435,14 @@ export default function ChatInfoScreen() {
 
       {bot && (
         <Section title={t("Routines")} footer={routines.length === 0 ? t("Routines are recurring tasks this bot runs on a schedule. Ask it in chat to set one up.") : t("Runs post here. Ask {name} in chat to change one.", { name: bot.name })}>
-          {routines.map((routine) => (
-            <Row
-              key={routine.id}
-              title={routine.name}
-              subtitle={stoppedRoutine(routine) ? `${stoppedLabel(stoppedRoutine(routine)!)} · ${routineSchedule(routine)}` : routineDetail(routine)}
-              icon={routineSymbol(routine)}
-              leading={routineNeedsUser(routine) ? <Symbol name="exclamationmark.circle.fill" size={20} color={orange} /> : undefined}
-              accessory={
-                <Switch
-                  value={routine.is_enabled}
-                  onValueChange={(v) => engine.setRoutineEnabled(routine.id, v)}
-                  trackColor={Platform.OS === "android" ? { false: p.fill, true: p.secondaryFill } : undefined}
-                  thumbColor={Platform.OS === "android" ? p.tint : undefined}
-                />
-              }
-              onPress={() => router.push({ pathname: "/chat-info/routine/[id]", params: { id: routine.id, bot: routine.bot_id } })}
-            />
-          ))}
+          {routines.map((routine, i) => routineRow(routine, "", postsIn[i] ? ` · ${t("In {chat}", { chat: postsIn[i] })}` : ""))}
+        </Section>
+      )}
+
+      {/* The routines that post in this group, each led by its bot; left out while there are none. */}
+      {isGroup && groupRoutines.length > 0 && (
+        <Section title={t("Routines")} footer={t("Runs post here. Ask the bot in chat to change one.")}>
+          {groupRoutines.map((routine) => routineRow(routine, `${bots.get(routine.bot_id)?.name ?? t("Bot")} · `, ""))}
         </Section>
       )}
 

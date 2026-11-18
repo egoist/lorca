@@ -925,9 +925,27 @@ func (s *Store) Routine(id string) *Routine {
 
 // RoutinesFor is a bot's routines, oldest first, with the running state from the turns in flight.
 func (s *Store) RoutinesFor(botID string) []Routine {
+	return s.routinesWhere(func(routine *Routine) bool { return routine.BotID == botID })
+}
+
+// RoutinesIn are the routines whose runs post in a group or channel conversation, oldest first.
+func (s *Store) RoutinesIn(chatID string) []Routine {
+	return s.routinesWhere(func(routine *Routine) bool { return chatID != "" && routine.ChatID == chatID })
+}
+
+// PostsIn is the chat a routine's runs post in, when it is not its bot's DM: nil for the DM, or
+// for a chat this Device no longer has.
+func (s *Store) PostsIn(routine *Routine) *Chat {
+	if routine.ChatID == "" {
+		return nil
+	}
+	return s.Chat(routine.ChatID)
+}
+
+func (s *Store) routinesWhere(keep func(*Routine) bool) []Routine {
 	var out []Routine
 	for _, routine := range s.Routines {
-		if routine.BotID != botID {
+		if !keep(routine) {
 			continue
 		}
 		copy := *routine

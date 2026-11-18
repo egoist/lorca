@@ -2529,6 +2529,7 @@ mod tests {
             check: None,
             events: None,
             calendar: None,
+            chat_id: None,
             created_at: 1.0,
         }
     }

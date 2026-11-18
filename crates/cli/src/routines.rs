@@ -1,4 +1,5 @@
-//! Routines: recurring tasks a bot runs on a schedule in its direct chat, after Grok Bot. The
+//! Routines: recurring tasks a bot runs on a schedule in its direct chat, or in a group or
+//! channel conversation it is in, after Grok Bot. The
 //! roster carries them, so every Device lists them and can pause one; the bot's Runner runs
 //! them, looking for due ones every half minute, and any Device can ask for a run now. A
 //! routine with a check runs the check first, a script and no model, and the bot runs only on
@@ -45,7 +46,7 @@ pub fn create(app: &Arc<App>, bot_id: &str, name: &str, schedule_text: &str, pro
 /// `None`).
 #[allow(clippy::too_many_arguments)]
 pub fn create_with_policy(app: &Arc<App>, bot_id: &str, name: &str, schedule_text: &str, prompt: &str, check: Option<&str>, enabled: bool, timezone: Option<&str>, missed_run_policy: Option<&str>) -> Result<Routine, String> {
-    create_routine(app, bot_id, name, schedule_text, prompt, check, enabled, timezone, missed_run_policy, Triggers::default())
+    create_routine(app, bot_id, name, schedule_text, prompt, check, enabled, timezone, missed_run_policy, Triggers::default(), None)
 }
 
 /// What places a routine's runs besides its schedule, as the bot or the local API gives it.
@@ -77,6 +78,7 @@ pub fn create_routine(
     timezone: Option<&str>,
     missed_run_policy: Option<&str>,
     triggers: Triggers,
+    chat_id: Option<&str>,
 ) -> Result<Routine, String> {
     let name = clean_name(name)?;
     let prompt = prompt.trim();
@@ -94,6 +96,7 @@ pub fn create_routine(
     };
     let missed_run_policy = missed_run_policy.map(crate::routine_health::MissedRunPolicy::parse).transpose()?.unwrap_or_default();
     let bot = app.bot(bot_id).ok_or("Unknown bot")?;
+    let chat_id = chat_id.map(|id| target_chat(app, bot_id, id)).transpose()?.flatten();
     let existing = app.routines_of(bot_id);
     if existing.len() >= MAX_PER_BOT {
         return Err(format!("A bot keeps at most {MAX_PER_BOT} routines. Delete one first."));
@@ -122,6 +125,7 @@ pub fn create_routine(
         check,
         events,
         calendar,
+        chat_id,
         created_at: now,
     };
     let routine = app.insert_routine(routine).map_err(|e| e.to_string())?;
@@ -276,7 +280,7 @@ pub fn edit(app: &Arc<App>, id: &str, name: Option<&str>, schedule_text: Option<
 /// `edit` with a new timezone or missed-run policy as well. A new zone counts from now.
 #[allow(clippy::too_many_arguments)]
 pub fn edit_with_policy(app: &Arc<App>, id: &str, name: Option<&str>, schedule_text: Option<&str>, prompt: Option<&str>, check: Option<&str>, timezone: Option<&str>, missed_run_policy: Option<&str>) -> Result<Routine, String> {
-    edit_routine(app, id, name, schedule_text, prompt, check, timezone, missed_run_policy, Triggers::default())
+    edit_routine(app, id, name, schedule_text, prompt, check, timezone, missed_run_policy, Triggers::default(), None)
 }
 
 /// `edit_with_policy` with a new pull request to watch, or a new calendar or event words.
@@ -291,8 +295,10 @@ pub fn edit_routine(
     timezone: Option<&str>,
     missed_run_policy: Option<&str>,
     triggers: Triggers,
+    chat_id: Option<&str>,
 ) -> Result<Routine, String> {
     let current = app.routine(id).ok_or("Unknown routine")?;
+    let chat_id = chat_id.map(|chat| target_chat(app, &current.bot_id, chat)).transpose()?;
     let name = name.map(clean_name).transpose()?;
     if let Some(name) = &name {
         if app.routines_of(&current.bot_id).iter().any(|r| r.id != id && r.name.eq_ignore_ascii_case(name)) {
@@ -305,8 +311,8 @@ pub fn edit_routine(
     let timezone = timezone.map(schedule::timezone).transpose()?.map(|zone| zone.to_string());
     let missed_run_policy = missed_run_policy.map(crate::routine_health::MissedRunPolicy::parse).transpose()?;
     let triggered = triggers.receiver.is_some() || triggers.subject.is_some() || triggers.calendar.is_some() || triggers.event_match.is_some();
-    if name.is_none() && schedule.is_none() && prompt.is_none() && check.is_none() && timezone.is_none() && missed_run_policy.is_none() && !triggered {
-        return Err("Pass a new name, schedule, prompt, check, timezone, missed-run policy, calendar, or event words.".into());
+    if name.is_none() && schedule.is_none() && prompt.is_none() && check.is_none() && timezone.is_none() && missed_run_policy.is_none() && !triggered && chat_id.is_none() {
+        return Err("Pass a new name, schedule, prompt, check, timezone, missed-run policy, calendar, event words, or chat.".into());
     }
     // The routine as it would stand, checked whole.
     let bot = app.bot(&current.bot_id).ok_or("Unknown bot")?;
@@ -353,10 +359,50 @@ pub fn edit_routine(
             routine.health = None;
             routine.enabled_at = now_secs();
         }
+        if let Some(chat_id) = chat_id {
+            routine.chat_id = chat_id;
+        }
         routine.events = events;
         routine.calendar = calendar;
     })
     .map_err(|e| e.to_string())
+}
+
+/// The chat a routine of `bot_id` is to post in, from the id the bot or an app gave: `None` for
+/// the bot's direct chat (its id, or an empty one), else a group the bot is a member of or one
+/// of its channel's conversations.
+fn target_chat(app: &App, bot_id: &str, chat_id: &str) -> Result<Option<String>, String> {
+    let chat_id = chat_id.trim();
+    if chat_id.is_empty() {
+        return Ok(None);
+    }
+    let chat = app.chat(chat_id).ok_or_else(|| format!("No chat {chat_id:?}."))?;
+    if !chat.meta.bot_ids.iter().any(|id| id == bot_id) {
+        return Err("A routine posts only in a chat its bot is in.".into());
+    }
+    let is_dm = chat.meta.kind == "dm" && chat.meta.channel.is_none();
+    Ok((!is_dm).then(|| chat.meta.id))
+}
+
+/// The chat a routine's runs and checks happen in: the one it names while it exists and still
+/// has the bot, else the bot's direct chat.
+pub fn chat_of(app: &App, routine: &Routine) -> anyhow::Result<Chat> {
+    if let Some(chat) = routine.chat_id.as_deref().and_then(|id| app.chat(id)).filter(|chat| chat.meta.bot_ids.contains(&routine.bot_id)) {
+        return Ok(chat);
+    }
+    app.dm_with(&routine.bot_id, None)
+}
+
+/// Where a routine's runs post, in words for the bot: its direct chat with the user, or the
+/// chat's name.
+pub fn posts_in(app: &App, routine: &Routine) -> String {
+    match chat_of(app, routine) {
+        Ok(chat) if chat.meta.kind == "dm" && chat.meta.channel.is_none() => "your direct chat with the user".to_string(),
+        // A conversation's title comes from outside Lorca, so it goes by its id.
+        Ok(chat) if chat.meta.channel.is_some() => format!("your channel's conversation {}", chat.meta.id),
+        Ok(chat) => format!("the group \"{}\" ({})", app.chat_title(&chat.meta), chat.meta.id),
+        Err(_) => "your direct chat with the user".to_string(),
+    }
 }
 
 /// A check as a routine keeps it, or `None` for an empty one, which removes it. A Runner reads
@@ -497,12 +543,12 @@ pub fn signed_out_text(routine: &Routine) -> String {
     format!("{} is paused after three failed sign-ins in a row. Reconnect, then resume it.", routine.name)
 }
 
-/// The job that runs a routine: a `routine` turn in the bot's direct chat.
+/// The job that runs a routine: a `routine` turn in its chat.
 fn job_for(app: &Arc<App>, routine: &Routine) -> Result<Job, String> {
-    let dm = app.dm_with(&routine.bot_id, None).map_err(|e| e.to_string())?;
+    let chat = chat_of(app, routine).map_err(|e| e.to_string())?;
     Ok(Job {
         id: format!("job-{}", uuid::Uuid::new_v4()),
-        chat_id: dm.meta.id,
+        chat_id: chat.meta.id,
         bot_id: routine.bot_id.clone(),
         kind: "routine".into(),
         task_id: None,
@@ -876,26 +922,26 @@ async fn run_budgeted_check(app: &Arc<App>, routine: &Routine, cancel: &Cancella
         return CheckRun { found: None, error: None, result: String::new() };
     }
     let Some(bot) = app.bot(&routine.bot_id) else { return failed("The routine's bot is gone.".into()) };
-    let dm = match app.dm_with(&bot.id, None) {
-        Ok(dm) => dm,
+    let chat = match chat_of(app, routine) {
+        Ok(chat) => chat,
         Err(error) => return failed(error.to_string()),
     };
     // A calendar reads through its plugin alone, by the same rules as a check.
     if routine.calendar.is_some() {
-        let catalog = crate::plugins::mcp::bot_catalog(app, &bot, &dm.meta.id, Vec::new());
-        let runner = CheckRunner { app: app.clone(), catalog: catalog.clone(), bot, chat_id: dm.meta.id.clone(), budget: crate::budgets::current() };
+        let catalog = crate::plugins::mcp::bot_catalog(app, &bot, &chat.meta.id, Vec::new());
+        let runner = CheckRunner { app: app.clone(), catalog: catalog.clone(), bot, chat_id: chat.meta.id.clone(), budget: crate::budgets::current() };
         return crate::routine_triggers::read_calendar(app, routine, &catalog, &runner, cancel).await;
     }
     let Some(code) = routine.check.as_deref() else { return CheckRun { found: None, error: None, result: String::new() } };
     let files: Vec<Arc<dyn Tool>> =
         lorca_agent::tools::coding_tools(bot.working_directory(&app.config.home)).into_iter().filter(|tool| CHECK_FILE_TOOLS.contains(&tool.name())).collect();
-    let catalog = crate::plugins::mcp::bot_catalog(app, &bot, &dm.meta.id, files);
-    let store = Arc::new(crate::scripts::ScriptStore { app: app.clone(), chat_id: dm.meta.id.clone(), bot_id: bot.id.clone() });
+    let catalog = crate::plugins::mcp::bot_catalog(app, &bot, &chat.meta.id, files);
+    let store = Arc::new(crate::scripts::ScriptStore { app: app.clone(), chat_id: chat.meta.id.clone(), bot_id: bot.id.clone() });
     let functions: Vec<Arc<dyn HostFunction>> =
-        crate::scripts::ModelsAsk::new(app, &dm.meta.id, &bot.provider).map(|ask| Arc::new(ask) as Arc<dyn HostFunction>).into_iter().collect();
+        crate::scripts::ModelsAsk::new(app, &chat.meta.id, &bot.provider).map(|ask| Arc::new(ask) as Arc<dyn HostFunction>).into_iter().collect();
     let options = CodemodeOptions { mcp_types: !crate::plugins::mcp::plugin_briefs(app).is_empty(), timeout: CHECK_TIMEOUT, ..CodemodeOptions::default() };
     let codemode = CodemodeTool::new(catalog.clone(), options).with_store(store).with_functions(functions);
-    let runner = CheckRunner { app: app.clone(), catalog, bot, chat_id: dm.meta.id.clone(), budget: crate::budgets::current() };
+    let runner = CheckRunner { app: app.clone(), catalog, bot, chat_id: chat.meta.id.clone(), budget: crate::budgets::current() };
     match codemode.run_script(&format!("check-{}", routine.id), code, cancel.clone(), &runner).await {
         Err(error) => failed(error.0),
         Ok(run) => {
@@ -1154,6 +1200,54 @@ mod tests {
         assert_eq!(notices.len(), 2, "one run, one marker: {notices:?}");
     }
 
+    /// A routine set up in a group posts its runs there; it can name only a chat its bot is in,
+    /// and goes back to the bot's direct chat once the bot leaves that group.
+    #[cfg(feature = "runner")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_routine_posts_in_its_group() {
+        let scratch = scratch_app();
+        let app = &scratch.0;
+        let group = |bot_ids: &[&str]| {
+            app.create_chat(ChatMeta {
+                id: String::new(), kind: "group".into(), title: Some("Trip".into()), bot_ids: bot_ids.iter().map(|id| id.to_string()).collect(), owner_bot_id: None,
+                description: None, is_pinned: false, section_id: None, is_hidden: false, mute: None, created_at: 0.0, channel: None,
+            })
+            .unwrap()
+        };
+        let mut other = app.bot("b1").unwrap();
+        other.id = "b2".into();
+        app.state.lock().unwrap().bots.push(other);
+        let trip = group(&["b1", "b2"]);
+        let elsewhere = group(&["b2"]);
+        let dm = app.dm_with("b1", None).unwrap();
+        let triggers = Triggers::default();
+        let make = |name: &str, chat: &str| create_routine(app, "b1", name, "every 1h", "Check the tickets.", None, true, None, None, triggers, Some(chat));
+        assert!(make("Nope", &elsewhere.meta.id).unwrap_err().contains("its bot is in"));
+        assert!(make("Nope", "chat-missing").unwrap_err().contains("No chat"));
+        assert_eq!(make("Direct", &dm.meta.id).unwrap().chat_id, None, "the direct chat is the default");
+        let tickets = make("Tickets", &trip.meta.id).unwrap();
+        assert_eq!(tickets.chat_id.as_deref(), Some(trip.meta.id.as_str()));
+        assert_eq!(posts_in(app, &tickets), format!("the group \"Trip\" ({})", trip.meta.id));
+
+        run_now(app, &tickets.id).unwrap();
+        for _ in 0..100 {
+            if app.routine(&tickets.id).unwrap().last_outcome.is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        let notices = |chat_id: &str| -> Vec<String> { app.messages(chat_id).iter().filter_map(|m| match &m.body { Body::Notice { text, .. } => Some(text.clone()), _ => None }).collect() };
+        assert_eq!(notices(&trip.meta.id).first().map(String::as_str), Some("Routine · Tickets"), "the run opens in the group");
+        assert!(notices(&dm.meta.id).is_empty(), "nothing in the direct chat");
+
+        // Moved back to the direct chat by an app, then by the bot leaving the group.
+        let back = edit_routine(app, &tickets.id, None, None, None, None, None, None, Triggers::default(), Some("")).unwrap();
+        assert_eq!(back.chat_id, None);
+        edit_routine(app, &tickets.id, None, None, None, None, None, None, Triggers::default(), Some(&trip.meta.id)).unwrap();
+        app.state.lock().unwrap().chats.iter_mut().find(|chat| chat.meta.id == trip.meta.id).unwrap().meta.bot_ids.retain(|id| id != "b1");
+        assert_eq!(chat_of(app, &app.routine(&tickets.id).unwrap()).unwrap().meta.id, dm.meta.id);
+    }
+
     /// A due routine of a user who has been away for a week is paused with a notice, not run.
     #[cfg(feature = "runner")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1218,6 +1312,7 @@ mod tests {
             check: check.map(str::to_string),
             events: None,
             calendar: None,
+            chat_id: None,
             created_at: 0.0,
         }
     }
@@ -1694,15 +1789,15 @@ mod tests {
         let scratch = scratch_app();
         let app = &scratch.0;
         let on = |receiver: Option<&'static str>, subject: Option<&'static str>| Triggers { receiver, subject, ..Default::default() };
-        assert!(create_routine(app, "b1", "Bad", "every 1h", "x", None, true, None, None, on(Some("github"), Some("acme/project#42"))).unwrap_err().contains("no schedule"));
-        assert!(create_routine(app, "b1", "Bad", "", "x", None, true, None, None, on(None, Some("acme/project#42"))).unwrap_err().contains("receiver"));
-        assert!(create_routine(app, "b1", "Bad", "", "x", Some("return 1"), true, None, None, on(Some("github"), Some("acme/project#42"))).unwrap_err().contains("no check"));
-        let watch = create_routine(app, "b1", "Login PR", "", "Tell me what happened.", None, true, None, None, on(Some("GitHub"), Some("acme/project#42"))).unwrap();
+        assert!(create_routine(app, "b1", "Bad", "every 1h", "x", None, true, None, None, on(Some("github"), Some("acme/project#42")), None).unwrap_err().contains("no schedule"));
+        assert!(create_routine(app, "b1", "Bad", "", "x", None, true, None, None, on(None, Some("acme/project#42")), None).unwrap_err().contains("receiver"));
+        assert!(create_routine(app, "b1", "Bad", "", "x", Some("return 1"), true, None, None, on(Some("github"), Some("acme/project#42")), None).unwrap_err().contains("no check"));
+        let watch = create_routine(app, "b1", "Login PR", "", "Tell me what happened.", None, true, None, None, on(Some("GitHub"), Some("acme/project#42")), None).unwrap();
         let events = watch.events.clone().unwrap();
         assert_eq!((watch.schedule.as_str(), events.receiver.as_str(), events.status), ("on events", "github", crate::routine_events::Listening::Pending));
         assert!(!events.subscription_id.is_empty() && watch.next_run_at().is_none());
         assert_eq!(app.routine_out(&watch)["schedule_text"], "Watches acme/project#42");
-        assert!(edit_routine(app, &watch.id, None, Some("every 1h"), None, None, None, None, Triggers::default()).unwrap_err().contains("no schedule"));
+        assert!(edit_routine(app, &watch.id, None, Some("every 1h"), None, None, None, None, Triggers::default(), None).unwrap_err().contains("no schedule"));
         // Another subject's event is filtered; this one's runs once, however often it comes.
         assert_eq!(deliver(app, &events.subscription_id, "d-0", "github", serde_json::json!({ "subject": "acme/project#7", "summary": "Merged", "ends": true }))["status"], "filtered");
         let pushed = serde_json::json!({ "subject": "acme/project#42", "kind": "commits", "summary": "New commits pushed", "title": "Add passkey sign-in", "url": "https://github.com/acme/project/pull/42" });
@@ -1728,7 +1823,7 @@ mod tests {
         assert_eq!(notices(app).iter().filter(|text| text.starts_with("Event ·")).count(), 2, "one run per event");
 
         // A webhook's routine has no subject: every request its receiver delivers runs it.
-        let hook = create_routine(app, "b1", "Deploys", "", "Tell me if a deploy failed.", None, true, None, None, on(Some("webhook"), None)).unwrap();
+        let hook = create_routine(app, "b1", "Deploys", "", "Tell me if a deploy failed.", None, true, None, None, on(Some("webhook"), None), None).unwrap();
         let hook_events = hook.events.clone().unwrap();
         assert_eq!(app.routine_out(&hook)["schedule_text"], "When its webhook is called");
         assert_eq!(deliver(app, &hook_events.subscription_id, "r-1", "webhook", serde_json::json!({ "kind": "request", "summary": "Webhook request", "data": { "deploy": "failed" } }))["status"], "queued");
@@ -1764,11 +1859,11 @@ mod tests {
         let tools = serde_json::json!([{ "name": "list_events", "description": "List events", "inputSchema": { "type": "object" }, "annotations": { "readOnlyHint": true } }]);
         let url = fake_mcp(tools, answer.clone(), calls.clone()).await;
         let triggers = Triggers { event_match: Some("customer call"), ..Default::default() };
-        assert!(create_routine(app, "b1", "Prep", "15m before events", "Prepare me.", None, true, None, None, triggers).unwrap_err().contains("not connected"));
+        assert!(create_routine(app, "b1", "Prep", "15m before events", "Prepare me.", None, true, None, None, triggers, None).unwrap_err().contains("not connected"));
         let manifest = crate::plugins::Manifest::parse(&serde_json::json!({ "id": "google-calendar", "name": "Google Calendar", "named_accounts": true, "servers": { "calendar": { "type": "http", "url": url } } })).unwrap();
         crate::plugins::accounts::install(app, manifest, "inline", Some("Work")).unwrap();
-        assert!(create_routine(app, "b1", "Prep", "every 1h", "x", None, true, None, None, triggers).unwrap_err().contains("around events"));
-        let prep = create_routine(app, "b1", "Prep", "15m before events", "Prepare me for the call.", None, true, None, None, triggers).unwrap();
+        assert!(create_routine(app, "b1", "Prep", "every 1h", "x", None, true, None, None, triggers, None).unwrap_err().contains("around events"));
+        let prep = create_routine(app, "b1", "Prep", "15m before events", "Prepare me for the call.", None, true, None, None, triggers, None).unwrap();
         assert_eq!(prep.calendar.as_ref().unwrap().account, "Google Calendar · Work");
         assert_eq!(app.routine_out(&prep)["schedule_text"], "15 minutes before events matching “customer call”");
         assert_eq!(prep.next_run_at(), None, "nothing read yet");

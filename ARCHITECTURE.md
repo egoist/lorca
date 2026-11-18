@@ -51,7 +51,7 @@ Device   1──* Bot          (only a Runner: os is macos, linux, or windows)
 Identity 1──* Chat
 Chat     *──* Bot          (kind dm: exactly 1 bot, fixed · kind group: 1–6 bots, members change)
 Chat     1──* Message
-Bot      1──* Routine      (a scheduled task, run in the bot's DM on its Runner)
+Bot      1──* Routine      (a scheduled task, run on its Runner in the bot's DM or a group it is in)
 Bot      1──* Channel      (a Telegram or Slack account it listens on; each thread is a Chat)
 Device   1──* Plugin       (an MCP server installed on a Runner or in its mcp.json, per bot Access)
 Bot      1──* Job          (a turn on the bot's Runner)

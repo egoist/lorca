@@ -374,6 +374,7 @@ type WireRoutine struct {
 	NextRunAt    *float64 `json:"next_run_at"`
 	IsRunning    *bool    `json:"is_running"`
 	Check        *string  `json:"check"`
+	ChatID       *string  `json:"chat_id"`
 	CreatedAt    float64  `json:"created_at"`
 
 	Timezone        *string            `json:"timezone"`
@@ -1093,6 +1094,7 @@ func ToRoutine(wire WireRoutine) *Routine {
 		IsRunning:    flag(wire.IsRunning),
 		Check:        str(wire.Check),
 		HasCheck:     wire.Check != nil,
+		ChatID:       str(wire.ChatID),
 		CreatedAt:    seconds(wire.CreatedAt),
 		// The CLI names the zone; "Local" reads as this computer's.
 		Timezone:        cmp.Or(str(wire.Timezone), "Local"),

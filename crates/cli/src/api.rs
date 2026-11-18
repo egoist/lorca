@@ -717,15 +717,18 @@ pub async fn dispatch(app: &Arc<App>, method: &str, params: Value) -> Result<Val
                 params["timezone"].as_str(),
                 params["missed_run_policy"].as_str(),
                 triggers,
+                params["chat_id"].as_str(),
             )?;
             Ok(json!({ "routine": app.routine_out(&routine) }))
         }
         "routines.update" => {
             let id = string(&params, "id")?;
             let mut routine = app.routine(&id).ok_or("Unknown routine")?;
-            if ["name", "schedule", "prompt", "timezone", "missed_run_policy", "calendar", "event_match"].iter().any(|field| params.get(field).is_some()) {
+            if ["name", "schedule", "prompt", "timezone", "missed_run_policy", "calendar", "event_match", "chat_id"].iter().any(|field| params.get(field).is_some()) {
                 let triggers = routines::Triggers { calendar: params["calendar"].as_str(), event_match: params["event_match"].as_str(), ..Default::default() };
-                routine = routines::edit_routine(app, &id, opt_string(&params, "name").as_deref(), opt_string(&params, "schedule").as_deref(), params["prompt"].as_str(), None, params["timezone"].as_str(), params["missed_run_policy"].as_str(), triggers)?;
+                // A null chat_id moves the routine back to the bot's direct chat.
+                let chat_id = params.get("chat_id").map(|chat| chat.as_str().unwrap_or(""));
+                routine = routines::edit_routine(app, &id, opt_string(&params, "name").as_deref(), opt_string(&params, "schedule").as_deref(), params["prompt"].as_str(), None, params["timezone"].as_str(), params["missed_run_policy"].as_str(), triggers, chat_id)?;
             }
             if let Some(enabled) = params["enabled"].as_bool() {
                 routine = routines::set_enabled(app, &id, enabled)?;

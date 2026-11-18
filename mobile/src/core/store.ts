@@ -557,7 +557,16 @@ export function useWorkingBotIds(): Set<string> {
 /// A bot's routines, oldest first. One whose run is among the turns in flight is running,
 /// wherever the run was started.
 export function useRoutines(botId: string | undefined): Routine[] {
-  const routines = useStore(useShallow((s) => s.routines.filter((r) => r.bot_id === botId).sort((a, b) => a.created_at - b.created_at)));
+  return useRoutinesWhere((r) => r.bot_id === botId);
+}
+
+/// The routines whose runs post in a group or channel conversation, oldest first.
+export function useRoutinesIn(chatId: string | undefined): Routine[] {
+  return useRoutinesWhere((r) => !!chatId && r.chat_id === chatId);
+}
+
+function useRoutinesWhere(keep: (routine: Routine) => boolean): Routine[] {
+  const routines = useStore(useShallow((s) => s.routines.filter(keep).sort((a, b) => a.created_at - b.created_at)));
   const running = useStore(useShallow((s) => Object.values(s.running).flatMap((r) => (r.routineId ? [r.routineId] : []))));
   return useMemo(() => routines.map((r) => (r.is_running || !running.includes(r.id) ? r : { ...r, is_running: true })), [routines, running]);
 }

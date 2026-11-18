@@ -10,7 +10,7 @@ import * as Clipboard from "expo-clipboard";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import { Platform, PlatformColor, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import { engine } from "../../../src/core/engine";
+import { chatTitle, engine } from "../../../src/core/engine";
 import { deviceName, isStandaloneRunner, type RoutineEvents } from "../../../src/core/model";
 import { useBotMap, useBudget, useRoutines, useStore } from "../../../src/core/store";
 import { t, useLanguage } from "../../../src/i18n";
@@ -33,6 +33,8 @@ export default function RoutineScreen() {
   // The bot's list carries the running state the core's turns add.
   const routine = useRoutines(botId).find((r) => r.id === id);
   const runner = useStore((s) => s.devices.find((d) => d.id === bot?.runner_id));
+  // The group or channel conversation its runs post in, when not the bot's DM.
+  const postsIn = useStore((s) => (routine?.chat_id ? s.chats.find((c) => c.id === routine.chat_id) : undefined));
   const limits = useBudget("routine", routine?.id, bot?.runner_id);
   const orange = Platform.OS === "ios" ? PlatformColor("systemOrange") : accentColor("orange", p.dark);
   // The webhook key shows only after a tap on its row; a row's Copy says Copied for a moment.
@@ -144,6 +146,7 @@ export default function RoutineScreen() {
         <Section title={t("Schedule")} footer={routine.once_at || events ? undefined : missed.note}>
           <Row title={routineSchedule(routine)} titleLines={2} detail={timezoneLabel(routine)} />
           {events ? <EventRows events={events} bot={bot.name} onSetup={() => void openSetup(events.receiver, events.subject)} /> : null}
+          {postsIn ? <Row title={t("Posts in")} detail={chatTitle(postsIn)} /> : null}
           {/* The calendar names its account. */}
           {routine.calendar?.account ? <Row title={t("Calendar")} detail={routine.calendar.account} /> : null}
           {events ? null : <Row title={looksFirst(routine) ? t("Next check") : t("Next run")} subtitle={routine.calendar?.next_event?.title} detail={nextRunText(routine) ?? "—"} />}
