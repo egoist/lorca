@@ -28,6 +28,7 @@ import {
   patchRoutine,
   patchChannel,
   channelById,
+  removeBot,
   removeChat,
   removeMessage,
   removeRoutine,
@@ -750,7 +751,15 @@ class Engine {
     void core.request("sections.collapse", { id, collapsed });
   }
 
+  /// Deleting a bot's own DM deletes the bot, as on the desktop.
   deleteChat(chatId: string) {
+    const chat = chatById(chatId);
+    if (chat && deletesBot(chat)) {
+      const botId = chat.bot_ids[0];
+      removeBot(botId);
+      void core.request("bots.delete", { id: botId });
+      return;
+    }
     removeChat(chatId);
     void core.request("chats.delete", { chat_id: chatId });
   }
@@ -1237,6 +1246,11 @@ class Engine {
 export const engine = new Engine();
 
 // MARK: - Helpers
+
+/// A bot owns its DM, so deleting that chat deletes the bot. A channel's conversation is only its transcript.
+export function deletesBot(chat: ChatMeta): boolean {
+  return chat.kind === "dm" && !chat.channel && !!botById(chat.bot_ids[0] ?? "");
+}
 
 export function chatTitle(chat: ChatMeta): string {
   if ((chat.kind === "group" || chat.channel) && chat.title?.trim()) return chat.title.trim();

@@ -403,6 +403,17 @@ export function removeChat(chatId: string) {
   }));
 }
 
+/// A deleted bot takes its DMs and routines with it and leaves the groups it was in.
+export function removeBot(botId: string) {
+  const dms = useStore.getState().chats.filter((c) => c.kind === "dm" && c.bot_ids.includes(botId));
+  for (const chat of dms) removeChat(chat.id);
+  useStore.setState((s) => ({
+    bots: s.bots.filter((bot) => bot.id !== botId),
+    routines: s.routines.filter((routine) => routine.bot_id !== botId),
+    chats: s.chats.map((c) => (c.bot_ids.includes(botId) ? { ...c, bot_ids: c.bot_ids.filter((id) => id !== botId) } : c)),
+  }));
+}
+
 export function setChatUsage(chatId: string, usage: ChatUsage) {
   useStore.setState((s) => ({ chats: s.chats.map((c) => (c.id === chatId ? { ...c, usage } : c)) }));
 }

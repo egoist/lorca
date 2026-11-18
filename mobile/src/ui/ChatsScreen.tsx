@@ -6,7 +6,7 @@ import Swipeable, { type SwipeableMethods } from "react-native-gesture-handler/R
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Platform, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { Pressable } from "./Pressable";
-import { chatTitle, engine } from "../core/engine";
+import { chatTitle, deletesBot, engine } from "../core/engine";
 import { isMuted, type Bot, type Chat, type Section } from "../core/model";
 import { markRead, mutate, useBotMap, useStore, useWorkingBotIds } from "../core/store";
 import { t, tc, useLanguage } from "../i18n";
@@ -89,10 +89,11 @@ export function ChatsScreen({ sidebar = false, bar = true }: { sidebar?: boolean
 
   const confirmDelete = useCallback((chat: Chat) => {
     const { sidebar, openChatId } = latest.current;
-    alert(t("Delete “{name}”?", { name: chatTitle(chat) }), t("The chat and its messages are removed from every paired Device."), [
+    const bot = deletesBot(chat);
+    alert(t("Delete “{name}”?", { name: chatTitle(chat) }), bot ? t("The bot, its routines, and its chat are removed from every paired Device.") : t("The chat and its messages are removed from every paired Device."), [
       { text: t("Cancel"), style: "cancel" },
       {
-        text: t("Delete"),
+        text: bot ? t("Delete Bot") : t("Delete"),
         style: "destructive",
         onPress: () => {
           // The pane beside the sidebar goes back to empty with its chat.
@@ -450,7 +451,7 @@ const MenuChatRow = memo(function MenuChatRow({ chat, bots, working, responding,
     { id: "pin", title: chat.is_pinned ? t("Unpin") : t("Pin"), image: ios ? (chat.is_pinned ? "pin.slash" : "pin") : AndroidIcons.pin, state: !ios && chat.is_pinned ? "on" : "off" },
     ...sidebarActions(chat, sections),
     ...(chat.unread_count > 0 ? [{ id: "read", title: t("Mark as Read"), image: ios ? "checkmark.circle" : AndroidIcons.read } satisfies MenuAction] : []),
-    { id: "delete", title: t("Delete"), image: ios ? "trash" : AndroidIcons.delete, attributes: { destructive: true } },
+    { id: "delete", title: deletesBot(chat) ? t("Delete Bot") : t("Delete"), image: ios ? "trash" : AndroidIcons.delete, attributes: { destructive: true } },
   ];
 
   return (
@@ -564,7 +565,7 @@ const PeekChatRow = memo(function PeekChatRow({ chat, bots, working, responding,
           </Link.MenuAction>
         ) : null}
         <Link.MenuAction icon="trash" destructive onPress={() => onDelete(chat)}>
-          {t("Delete")}
+          {deletesBot(chat) ? t("Delete Bot") : t("Delete")}
         </Link.MenuAction>
       </Link.Menu>
     </Link>

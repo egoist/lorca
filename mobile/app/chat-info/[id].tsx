@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { MenuView, type MenuComponentRef } from "@expo/ui/community/menu";
 import { ActivityIndicator, Platform, PlatformColor, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import { Pressable } from "../../src/ui/Pressable";
-import { chatTitle, engine } from "../../src/core/engine";
+import { chatTitle, deletesBot, engine } from "../../src/core/engine";
 import { agentTitle, pullRequestLabel, BROWSER_PLUGIN_ID, isMuted, PROJECT_KINDS, projectSymbol, skillScopeOf, providerKinds, providerLabel, providerModels, PROVIDER_KINDS, taskSymbol, thinkingLabel, thinkingLevels, withCustomModels, type Bot, type Routine } from "../../src/core/model";
 import { deviceIsOnline, useBotMap, useBudget, useChannels, useChat, useDurableTasks, useOpenReviews, useOutputs, useProject, useRoutines, useRoutinesIn, useSkills, useStoppedTurn, useStore, useWorkingBotIds } from "../../src/core/store";
 import { channelProblem, listenSummary, serviceSymbol } from "../../src/ui/channels";
@@ -175,10 +175,11 @@ export default function ChatInfoScreen() {
   }
 
   function confirmDelete() {
-    alert(t("Delete “{name}”?", { name: chatTitle(chat!) }), t("The chat and its messages are removed from every paired Device."), [
+    const bot = deletesBot(chat!);
+    alert(t("Delete “{name}”?", { name: chatTitle(chat!) }), bot ? t("The bot, its routines, and its chat are removed from every paired Device.") : t("The chat and its messages are removed from every paired Device."), [
       { text: t("Cancel"), style: "cancel" },
       {
-        text: t("Delete"),
+        text: bot ? t("Delete Bot") : t("Delete"),
         style: "destructive",
         onPress: () => {
           engine.deleteChat(chat!.id);
@@ -633,7 +634,7 @@ export default function ChatInfoScreen() {
       </Section>
 
       <Section>
-        <Row title={t("Delete Chat")} icon="trash" destructive onPress={confirmDelete} />
+        <Row title={deletesBot(chat) ? t("Delete Bot") : t("Delete Chat")} icon="trash" destructive onPress={confirmDelete} />
       </Section>
     </ScrollView>
     </>
