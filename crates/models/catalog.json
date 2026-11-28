@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated": "2026-11-13T11:40:16Z",
+  "updated": "2026-11-28T06:57:24Z",
   "review": {
     "deepseek": "deepseek-flash",
     "anthropic": "claude-haiku-4-5",
@@ -278,7 +278,7 @@
       "max_output": 384000,
       "reasoning": true,
       "images": true,
-      "rates": { "input": 0.3, "output": 1.2, "cache_read": 0.006, "cache_write": 0.0 },
+      "rates": { "input": 0.12, "output": 0.48, "cache_read": 0.0024, "cache_write": 0.0 },
       "thinking": "effort",
       "levels": ["off", "low", "high", "max"],
       "wire": "chat-completions"
@@ -528,7 +528,7 @@
       "id": "kimi-k3",
       "name": "Kimi K3",
       "context_window": 1048576,
-      "max_output": 131072,
+      "max_output": 1048576,
       "reasoning": true,
       "images": true,
       "rates": { "input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.0 },
@@ -544,7 +544,7 @@
       "max_output": 131072,
       "reasoning": true,
       "images": false,
-      "rates": { "input": 1.4, "output": 4.4, "cache_read": 0.26, "cache_write": 0.0 },
+      "rates": { "input": 0.56, "output": 1.76, "cache_read": 0.104, "cache_write": 0.0 },
       "thinking": "effort",
       "levels": ["low", "high", "max"],
       "wire": "chat-completions"
@@ -855,7 +855,7 @@
       "id": "kimi-k3.1-pro",
       "name": "Kimi K3.1 Pro",
       "context_window": 1048576,
-      "max_output": 131072,
+      "max_output": 1048576,
       "reasoning": true,
       "images": true,
       "rates": { "input": 2.0, "output": 10.0, "cache_read": 0.2, "cache_write": 2.0 },
@@ -868,7 +868,7 @@
       "id": "kimi-k3",
       "name": "Kimi K3",
       "context_window": 1048576,
-      "max_output": 131072,
+      "max_output": 1048576,
       "reasoning": true,
       "images": true,
       "rates": { "input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.0 },
